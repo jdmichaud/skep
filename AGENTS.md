@@ -6,6 +6,10 @@
   found in `PATH`. Do not use `zig fmt`: the two produce different output.
 - Run it before every commit: `zigfmt .`, then check that
   `zigfmt --check .` exits with 0. Never commit unformatted code.
+- The style is pinned in `zigfmt.zon`. Do not change it as part of an
+  unrelated commit.
+- The pre-commit hook in `.githooks/` enforces this. Enable it once per
+  clone with `git config core.hooksPath .githooks`.
 
 ## Commits
 
