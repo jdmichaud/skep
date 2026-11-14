@@ -42,7 +42,7 @@ fn addHeaderChecks(
     .{ .name = "header_cpp", .file = "test/header.cpp", .flags = &.{ "-std=c++11" } },
   };
   for (sources) |source| {
-    const module = b.createModule(.{ .target = target, .optimize = optimize });
+    const module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
     module.addIncludePath(b.path("include"));
     module.addCSourceFile(.{
       .file = b.path(source.file),

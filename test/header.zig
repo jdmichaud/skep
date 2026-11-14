@@ -7,16 +7,18 @@ const build_options = @import("build_options");
 
 test "skep.h translates to Zig" {
   const functions = .{
-    "skep_version",             "skep_new",         "skep_free",            "skep_set_option",
-    "skep_start",               "skep_stop",        "skep_get_fd",          "skep_process",
-    "skep_next_event",          "skep_event_free",  "skep_event_get_type",  "skep_get_network",
-    "skep_permit_join",         "skep_get_devices", "skep_read_attributes", "skep_write_attributes",
-    "skep_configure_reporting", "skep_bind",        "skep_unbind",          "skep_send_command",
+    "skep_version",         "skep_new",              "skep_free",                "skep_set_option",  "skep_get_serial_defaults",
+    "skep_start",           "skep_stop",             "skep_input",               "skep_output",      "skep_output_done",
+    "skep_next_deadline",   "skep_advance",          "skep_next_event",          "skep_event_free",  "skep_event_get_type",
+    "skep_export_state",    "skep_import_state",     "skep_get_network",         "skep_permit_join", "skep_get_devices",
+    "skep_read_attributes", "skep_write_attributes", "skep_configure_reporting", "skep_bind",        "skep_unbind",
+    "skep_send_command",
   };
   inline for (functions) |name| {
     if (!@hasDecl(c, name)) @compileError("skep.h lost " ++ name);
   }
   try std.testing.expectEqual(1, c.SKEP_EVENT_STARTED);
+  try std.testing.expectEqual(11, c.SKEP_EVENT_STATE_CHANGED);
   try std.testing.expectEqual(0x29, c.SKEP_TYPE_INT16);
   const target: c.struct_skep_target = .{
     .device = 1,

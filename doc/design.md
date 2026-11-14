@@ -23,18 +23,17 @@ drivers without changes to the rest of the stack.
        +------+------+
               |  Unix socket, line-delimited JSON (skep-protocol(7))
               v
-        skepd (daemon)
-              |  C API, <skep.h>
+        skepd (daemon)  <---- serial port ---->  dongle
+              |              (skepd does all I/O)
+              |  C API, <skep.h>: bytes, time, state, requests, events
               v
-        libskep (Zigbee logic)
+        libskep (Zigbee logic, no I/O)
               |  driver interface
        +------+---------------+----------------+
        v                      v                v
   ezsp driver          sim driver        later: zstack, deconz, ...
-       |  serial (ASH)                         |
-       v                                       v
-  Silicon Labs EmberZNet dongles          TI Z-Stack, ConBee, ...
-  (ZBDongle-E, ...)                       dongles
+  (ASH, EZSP: for Silicon Labs           (for TI Z-Stack, ConBee, ...
+  EmberZNet dongles)                     dongles)
 ```
 
 Names: the project is skep (a woven straw beehive). The library is
@@ -98,25 +97,46 @@ the daemon `skepd` and the command-line tool `skep`.
 The API is drafted in [include/skep.h](../include/skep.h), to be
 reviewed before the library is implemented.
 
+- libskep does no I/O. It never opens, reads or writes a device or a
+  file, never reads the clock and never blocks (the "sans-I/O" design of
+  protocol libraries such as ngtcp2 or quiche). The caller:
+  - opens the dongle, with the serial settings the driver suggests
+    (`skep_get_serial_defaults()`), and reconnects when it disappears;
+  - passes the bytes it reads to `skep_input()` and writes the bytes from
+    `skep_output()`;
+  - tells libskep the time, from a monotonic clock in milliseconds, and
+    calls `skep_advance()` by the deadline from `skep_next_deadline()`;
+  - stores libskep's state (see below).
+- Why: the timers are part of the protocol and stay in libskep, but
+  waiting is not. Without I/O, libskep has no operating-system code and is
+  portable; its tests drive it with bytes and time and run instantly and
+  deterministically, timeouts and retransmissions included; and the
+  transport is the caller's choice (serial port, a coordinator reached
+  over TCP, a replayed capture). The cost is an I/O loop in every
+  application, 60 to 100 lines, of which skepd is the reference and
+  `skep.h` shows a minimal one (compiled by the header checks).
+- Time only enters through `skep_input()`, `skep_output_done()` and
+  `skep_advance()`. Other calls only queue work, whose timers start when
+  its bytes are written, so a request made after a long idle time does not
+  start its timeout from a stale clock.
+- State: what must survive a restart or a new dongle (network parameters
+  and keys, device registry) is exported and imported as opaque bytes
+  (`skep_export_state()`, `skep_import_state()`). `SKEP_EVENT_STATE_CHANGED`
+  says when to save it. libskep reads states written by any older version.
+- No threads inside libskep and no callbacks into caller code. Results
+  are events, drained with `skep_next_event()`. Diagnostics are events
+  too (`SKEP_EVENT_LOG`); libskep never writes to stdout or stderr.
 - Opaque handles (`skep_ctx`, `skep_event`), created and destroyed in
   pairs. The ownership of every returned pointer is documented.
 - Functions return an `int`: 0 on success, a negative errno value on
   failure (`-EINVAL`, `-ETIMEDOUT`, `-ENETDOWN`, ...), as libsystemd,
   libinput and liburing do. `strerror(-r)` describes an error; there are
-  no skep-specific error codes to learn.
-- No threads inside libskep and no callbacks into caller code. The caller
-  waits on the file descriptor from `skep_get_fd()` with `poll()` or any
-  event loop, calls `skep_process()`, then drains events with
-  `skep_next_event()`. The descriptor is an internal epoll instance that
-  also covers libskep's timers, so the caller manages no timeouts, and it
-  never changes, even when the dongle is reopened. This makes libskep
-  Linux only, like libinput.
-- libskep never blocks and never writes to stdout or stderr. Diagnostics
-  are events (`SKEP_EVENT_LOG`) that the application logs as it sees fit.
-- The application chooses the driver and its options (device path, baud
-  rate, flow control) with `skep_set_option()` before `skep_start()`.
-  Options are strings so that they map directly to a configuration file.
-  Nothing else in `skep.h` depends on the dongle.
+  no skep-specific error codes to learn. A device's answer to a request
+  is not an error code: its ZCL status is reported separately.
+- The application chooses the driver and the parameters of a new network
+  with `skep_set_option()` before `skep_start()`. Options are strings so
+  that they map directly to a configuration file. Nothing else in
+  `skep.h` depends on the dongle.
 - Devices are identified by their IEEE address, which never changes.
 - Requests to devices (read, write, configure reporting, bind, commands)
   are asynchronous. Each returns a request id and ends with exactly one
@@ -135,7 +155,11 @@ reviewed before the library is implemented.
 
 ## skepd
 
-- The only process that opens the dongle.
+- The only process that opens the dongle, and the one doing all of
+  libskep's I/O: it opens the serial port (with the driver's serial
+  defaults unless `skepd.conf` overrides them), runs the poll loop, keeps
+  time, reopens the dongle when it disappears, and saves libskep's state
+  whenever it changes.
 - Runs in the foreground and never daemonizes itself. Under systemd it
   uses `Type=notify` and reports readiness with sd_notify.
 - Logs to stderr; journald adds timestamps. The log level is configurable.
@@ -160,11 +184,11 @@ reviewed before the library is implemented.
 | What | User service | System service |
 |---|---|---|
 | Configuration | `$XDG_CONFIG_HOME/skep/skepd.conf` | `$CONFIGURATION_DIRECTORY/skepd.conf` (`/etc/skep`) |
-| Network backup, device registry | `$XDG_DATA_HOME/skep/` | `$STATE_DIRECTORY/` (`/var/lib/skep`) |
+| State exported by libskep (network, keys, devices), friendly names | `$XDG_DATA_HOME/skep/` | `$STATE_DIRECTORY/` (`/var/lib/skep`) |
 | Socket | `$XDG_RUNTIME_DIR/skep/skepd.sock` | `$RUNTIME_DIRECTORY/skepd.sock` (`/run/skep`) |
 
-Files holding keys are created with mode 0600. The socket is not
-accessible to other users.
+skepd creates files holding keys, such as the state, with mode 0600 and
+replaces them atomically. The socket is not accessible to other users.
 
 ## Documentation
 
@@ -198,6 +222,9 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
 
 - Unit tests for every codec, using byte sequences captured from real
   dongles where possible.
+- libskep is tested by feeding it bytes and time: timeouts,
+  retransmissions and sleepy devices are tested without waiting, and
+  every run is the same.
 - The `sim` driver lets libskep and skepd be tested without hardware.
 - Fuzz tests for every parser of external input: serial link, Zigbee
   frames, IPC requests, configuration.
@@ -208,14 +235,16 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
 
 - Everything received from the serial line or the radio is untrusted.
   Malformed input is rejected without crashing.
-- The network key and backups are readable by their owner only.
+- The network key and the exported state are readable by their owner
+  only. libskep hands the state to the caller; storing it safely is
+  skepd's job.
 - Devices can join only during an explicit, time-limited permit window.
 
 ## Milestones
 
 1. This document, then a draft `skep.h` for review.
 2. `ezsp` driver: reset the ASH link and read the EZSP version from the
-   dongle.
+   dongle, through a minimal I/O loop.
 3. The driver interface, implemented by both `ezsp` and `sim`. Network:
    form or resume, permit joining, join events. From here on every
    feature is exercised by skepd through `<skep.h>`.
@@ -236,6 +265,8 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   [hardware.md](hardware.md)); product strings or probing the protocol
   may be.
 - The JSON schema of skep-protocol.
+- Format of the exported state: compact binary, or text that a human can
+  inspect (it holds the network key either way).
 - Values from devices: `SKEP_EVENT_ATTRIBUTES` carries raw ZCL values.
   Should libskep also apply the device tables' corrections and units (the
   Smart Plug E2's voltage in volts, for instance), or leave that to

@@ -12,10 +12,13 @@
  *   -EINVAL or -ETIMEDOUT. strerror(-r) describes the error.
  * - Objects are created and destroyed in pairs (skep_new/skep_free,
  *   skep_next_event/skep_event_free). Destroy functions accept NULL.
- * - libskep starts no threads and never calls back into the caller. All
- *   work happens inside skep_process(), and its results are queued as
- *   events. libskep never blocks and never writes to stdout or stderr;
- *   diagnostics are delivered as SKEP_EVENT_LOG events.
+ * - libskep does no I/O. It never opens, reads or writes a device or a
+ *   file, never reads the clock, never blocks, starts no threads and never
+ *   calls back into the caller. The caller carries bytes between the dongle
+ *   and libskep, tells it the time, and stores its state. Results are
+ *   queued as events. Diagnostics are SKEP_EVENT_LOG events, never output.
+ * - Time is a monotonic clock in milliseconds, for instance
+ *   CLOCK_MONOTONIC, always from the same clock.
  * - A context may be used from one thread at a time. Separate contexts
  *   are independent.
  * - Devices are identified by their IEEE address (EUI-64), which never
@@ -48,40 +51,32 @@ uint32_t skep_version(void);
 
 /* Context ---------------------------------------------------------------- */
 
-/* A connection to one dongle and the Zigbee network it coordinates. */
+/* The Zigbee logic for one dongle and the network it coordinates. */
 typedef struct skep_ctx skep_ctx;
 
 /*
- * Create a context. Configure it with skep_set_option(), then call
- * skep_start().
+ * Create a context. Configure it with skep_set_option() and, if a state
+ * was saved, skep_import_state(); then call skep_start().
  *
  * Errors: -ENOMEM.
  */
 int skep_new(skep_ctx **ctx);
 
-/* Stop everything immediately, close the dongle and free the context. */
+/* Free the context. The dongle is the caller's: libskep does not close it. */
 void skep_free(skep_ctx *ctx);
 
 /*
  * Set an option. Options can only be set before skep_start(). Values are
  * strings so that they can come straight from a configuration file.
  *
- * Common options:
  *   driver           Dongle driver: "ezsp" (Silicon Labs EmberZNet) or
- *                    "sim" (simulated network, for tests). Required.
- *   device           Path of the serial device, for instance
- *                    /dev/serial/by-id/usb-... . Required by "ezsp".
- *   baudrate         Serial speed. Default: the driver's usual speed.
- *   flow-control     "none", "software" or "hardware". Default: the
- *                    driver's usual setting.
- *   state-dir        Directory where libskep keeps the network backup and
- *                    the device registry. Files holding keys are created
- *                    with mode 0600. Default: nothing is persisted.
+ *                    "sim" (a simulated network that needs no dongle, for
+ *                    tests). Required.
  *   log-level        "error", "warning", "info" or "debug".
  *                    Default: "warning".
  *
- * Used only when a new network is formed (no network on the dongle and
- * none in state-dir):
+ * Used only when a new network is formed (no network on the dongle and no
+ * imported state):
  *   channel          11 to 26, or "auto" to pick a quiet one. Default: "auto".
  *   pan-id           16-bit PAN ID in hexadecimal. Default: random.
  *   extended-pan-id  64-bit extended PAN ID in hexadecimal. Default: random.
@@ -92,47 +87,113 @@ void skep_free(skep_ctx *ctx);
  */
 int skep_set_option(skep_ctx *ctx, const char *name, const char *value);
 
+enum skep_flow_control {
+  SKEP_FLOW_CONTROL_NONE = 0,
+  SKEP_FLOW_CONTROL_SOFTWARE = 1, /* XON/XOFF */
+  SKEP_FLOW_CONTROL_HARDWARE = 2, /* RTS/CTS */
+};
+
 /*
- * Open the dongle and bring the network up: resume the network stored on
- * the dongle, restore the one in state-dir, or form a new one.
+ * Serial settings the driver's dongles usually need, for the caller to
+ * open the device with (8 data bits, no parity, 1 stop bit, raw mode).
+ * The caller may use other settings for a dongle that needs them.
  *
- * This only starts the work. Success is reported by SKEP_EVENT_STARTED,
- * failure by SKEP_EVENT_STOPPED.
+ * Errors: -EINVAL (no driver set), -ENOTSUP (the driver does not talk to
+ * a serial device, like "sim").
+ */
+int skep_get_serial_defaults(const skep_ctx *ctx, unsigned *baudrate,
+                             enum skep_flow_control *flow_control);
+
+/*
+ * Bring the network up, once the caller has opened the dongle: resume the
+ * network stored on the dongle; if it has none, restore the network from
+ * the imported state; if there is no state either, form a new network.
+ *
+ * This only starts the work: the first bytes for the dongle are now in
+ * skep_output(). Success is reported by SKEP_EVENT_STARTED, failure by
+ * SKEP_EVENT_STOPPED.
  *
  * Errors: -EINVAL (missing or inconsistent options), -EBUSY (already
- * started), and errors from opening the device, such as -ENOENT or
- * -EACCES.
+ * started).
  */
 int skep_start(skep_ctx *ctx);
 
 /*
- * Stop cleanly: finish pending writes to state-dir and close the dongle.
- * SKEP_EVENT_STOPPED is reported when done. The network itself stays on
- * the dongle and is resumed by the next skep_start().
+ * Stop, and drop pending output and requests. Also call it when the
+ * connection to the dongle is lost (read or write error, device gone),
+ * then skep_start() once the dongle is open again. SKEP_EVENT_STOPPED
+ * follows. The network stays on the dongle and is resumed by the next
+ * skep_start().
  */
 int skep_stop(skep_ctx *ctx);
 
-/* Event loop ------------------------------------------------------------- */
+/* Bytes and time ------------------------------------------------------- */
 
 /*
- * File descriptor to wait on with poll(), epoll or any event loop. When it
- * is readable, call skep_process(). It also becomes readable when one of
- * libskep's timers expires, so no timeout needs to be managed by the
- * caller. The descriptor is valid from skep_new() to skep_free() and never
- * changes, even when the dongle is reopened.
+ * The caller runs the loop. A minimal one, error handling left out:
  *
- * Linux only: the descriptor is an epoll instance.
+ *   skep_start(ctx);
+ *   for (;;) {
+ *     const uint8_t *out;
+ *     size_t n = skep_output(ctx, &out);
+ *     if (n > 0) {
+ *       ssize_t w = write(fd, out, n);
+ *       if (w > 0) skep_output_done(ctx, w, now());
+ *     }
+ *     uint64_t deadline;
+ *     int timeout = skep_next_deadline(ctx, &deadline) ? ms_until(deadline) : -1;
+ *     struct pollfd p = { fd, POLLIN | (skep_output(ctx, &out) ? POLLOUT : 0), 0 };
+ *     poll(&p, 1, timeout);
+ *     if (p.revents & POLLIN) {
+ *       uint8_t in[256];
+ *       ssize_t r = read(fd, in, sizeof in);
+ *       if (r > 0) skep_input(ctx, in, r, now());
+ *     }
+ *     skep_advance(ctx, now());
+ *     for (skep_event *e; (e = skep_next_event(ctx)); skep_event_free(e))
+ *       handle(e);
+ *   }
+ *
+ * Time only enters through skep_input(), skep_output_done() and
+ * skep_advance(). Other calls queue work, whose timers start when its
+ * bytes are written.
  */
-int skep_get_fd(skep_ctx *ctx);
 
 /*
- * Do the work that is due: read from and write to the dongle, run expired
- * timers, and queue the resulting events. Never blocks.
+ * Hand over bytes read from the dongle, at time now.
  *
- * Errors: -ENOMEM. Failures of the dongle are reported as events, not as
- * return values.
+ * Errors: -ENOMEM. Bad frames from the dongle are not errors: libskep
+ * recovers and reports what it could not recover from as events.
  */
-int skep_process(skep_ctx *ctx);
+int skep_input(skep_ctx *ctx, const uint8_t *data, size_t len, uint64_t now);
+
+/*
+ * Bytes waiting to be written to the dongle. Stores a pointer to them in
+ * *data and returns their number, 0 if there are none. The bytes stay
+ * valid until the next call on ctx.
+ */
+size_t skep_output(skep_ctx *ctx, const uint8_t **data);
+
+/*
+ * Tell libskep that the first len bytes from skep_output() were written,
+ * at time now. A partial write is fine: the rest stays in skep_output().
+ */
+void skep_output_done(skep_ctx *ctx, size_t len, uint64_t now);
+
+/*
+ * When libskep next needs skep_advance() to be called, even if no byte
+ * arrives. Returns 1 and stores the time in *deadline, or returns 0 if no
+ * timer is pending. The deadline may change after any call on ctx.
+ */
+int skep_next_deadline(const skep_ctx *ctx, uint64_t *deadline);
+
+/*
+ * Run the timers that are due at time now. Calling it early or often is
+ * harmless.
+ *
+ * Errors: -ENOMEM.
+ */
+int skep_advance(skep_ctx *ctx, uint64_t now);
 
 /* Events ----------------------------------------------------------------- */
 
@@ -143,8 +204,9 @@ enum skep_event_type {
   SKEP_EVENT_STARTED = 1,
   /*
    * The context stopped, after skep_stop() or because of an error that
-   * libskep could not recover from. skep_event_get_error() tells which.
-   * skep_start() may be called again.
+   * libskep could not recover from, such as a dongle that stopped
+   * answering. skep_event_get_error() tells which. skep_start() may be
+   * called again.
    */
   SKEP_EVENT_STOPPED = 2,
   /* The join window opened or closed. See skep_event_get_duration(). */
@@ -173,6 +235,11 @@ enum skep_event_type {
   SKEP_EVENT_REQUEST_DONE = 9,
   /* A diagnostic message, see skep_event_get_log(). */
   SKEP_EVENT_LOG = 10,
+  /*
+   * The state worth saving changed: network formed, device joined, left
+   * or set up, and so on. Export it with skep_export_state() and store it.
+   */
+  SKEP_EVENT_STATE_CHANGED = 11,
 };
 
 /*
@@ -193,17 +260,20 @@ uint64_t skep_event_get_device(const skep_event *event);
 
 /*
  * SKEP_EVENT_STOPPED: 0 after skep_stop(), otherwise a negative errno
- * value telling why libskep stopped.
- * SKEP_EVENT_REQUEST_DONE: 0 if the request succeeded, otherwise a
- * negative errno value: -ETIMEDOUT (no answer), -EHOSTUNREACH (device not
- * reachable), -EREMOTEIO (the device answered with a ZCL error status,
- * see skep_event_get_zcl_status()), and others.
+ * value telling why libskep stopped, for instance -ETIMEDOUT when the
+ * dongle stopped answering or -EPROTO when it broke the protocol.
+ * SKEP_EVENT_REQUEST_DONE: whether the request was delivered and answered:
+ * 0 if it was, otherwise for instance -ETIMEDOUT (no answer) or
+ * -EHOSTUNREACH (device not reachable). What the device thought of the
+ * request is its ZCL status.
  */
 int skep_event_get_error(const skep_event *event);
 
 /*
- * SKEP_EVENT_REQUEST_DONE: ZCL status returned by the device, 0 (SUCCESS)
- * if it reported no error.
+ * SKEP_EVENT_REQUEST_DONE: ZCL status the device answered with, 0
+ * (SUCCESS) if it reported no error, for instance 0x86
+ * (UNSUPPORTED_ATTRIBUTE) or 0x81 (UNSUP_COMMAND). Only meaningful when
+ * skep_event_get_error() is 0.
  */
 uint8_t skep_event_get_zcl_status(const skep_event *event);
 
@@ -315,6 +385,35 @@ int skep_event_get_attribute(const skep_event *event, size_t index, struct skep_
  */
 uint8_t skep_event_get_command(const skep_event *event);
 const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
+
+/* State ------------------------------------------------------------------ */
+
+/*
+ * What libskep needs to survive a restart or a new dongle: the network
+ * parameters and keys, and the device registry. libskep never stores it
+ * itself; the caller does, and must keep it private (it holds the network
+ * key, so mode 0600 for a file).
+ *
+ * The state is opaque bytes. A libskep version reads the state written by
+ * any older version.
+ */
+
+/*
+ * Copy the current state into buf (size bytes). Stores the length of the
+ * state in *len; if buf is too small, nothing is copied and -ENOBUFS is
+ * returned, so a first call with size 0 tells how much room is needed.
+ *
+ * Errors: -ENOBUFS, -ENODATA (no network yet: nothing worth saving).
+ */
+int skep_export_state(skep_ctx *ctx, uint8_t *buf, size_t size, size_t *len);
+
+/*
+ * Load a state saved by skep_export_state(). Only before skep_start().
+ *
+ * Errors: -EBUSY (already started), -EINVAL (not a valid state),
+ * -ENOTSUP (written by a newer libskep).
+ */
+int skep_import_state(skep_ctx *ctx, const uint8_t *data, size_t len);
 
 /* Network ---------------------------------------------------------------- */
 
