@@ -95,24 +95,43 @@ the daemon `skepd` and the command-line tool `skep`.
 
 ## C API
 
-- Opaque handles (`skep_ctx` and others), created and destroyed in pairs.
-  The ownership of every returned pointer is documented.
-- Functions return an `int`: 0 on success, a negative `skep_err` value on
-  failure. `skep_strerror()` describes an error.
+The API is drafted in [include/skep.h](../include/skep.h), to be
+reviewed before the library is implemented.
+
+- Opaque handles (`skep_ctx`, `skep_event`), created and destroyed in
+  pairs. The ownership of every returned pointer is documented.
+- Functions return an `int`: 0 on success, a negative errno value on
+  failure (`-EINVAL`, `-ETIMEDOUT`, `-ENETDOWN`, ...), as libsystemd,
+  libinput and liburing do. `strerror(-r)` describes an error; there are
+  no skep-specific error codes to learn.
 - No threads inside libskep and no callbacks into caller code. The caller
-  waits on a file descriptor from `skep_get_fd()` with `poll()` or any
+  waits on the file descriptor from `skep_get_fd()` with `poll()` or any
   event loop, calls `skep_process()`, then drains events with
-  `skep_next_event()`.
+  `skep_next_event()`. The descriptor is an internal epoll instance that
+  also covers libskep's timers, so the caller manages no timeouts, and it
+  never changes, even when the dongle is reopened. This makes libskep
+  Linux only, like libinput.
+- libskep never blocks and never writes to stdout or stderr. Diagnostics
+  are events (`SKEP_EVENT_LOG`) that the application logs as it sees fit.
 - The application chooses the driver and its options (device path, baud
-  rate, flow control) when it creates a context. Nothing else in `skep.h`
-  depends on the dongle.
+  rate, flow control) with `skep_set_option()` before `skep_start()`.
+  Options are strings so that they map directly to a configuration file.
+  Nothing else in `skep.h` depends on the dongle.
+- Devices are identified by their IEEE address, which never changes.
+- Requests to devices (read, write, configure reporting, bind, commands)
+  are asynchronous. Each returns a request id and ends with exactly one
+  `SKEP_EVENT_REQUEST_DONE` event.
+- libskep interviews and sets up new devices itself, using the device
+  tables, and reports `SKEP_EVENT_DEVICE_READY` when done.
 - A context is used by one thread at a time; separate contexts are
   independent.
 - Semantic versioning. The soname major number is the ABI version.
-  `skep_version()` and `SKEP_VERSION_*` macros report the version. The
-  header and `libskep.pc` are installed. Both a static and a shared
-  library are built.
-- A draft `skep.h` is reviewed before the library is implemented.
+  `skep_version()` and the `SKEP_VERSION_*` macros report the version; a
+  test checks that the macros match `build.zig.zon`. The header and
+  `libskep.pc` are installed. Both a static and a shared library are
+  built.
+- The build checks that `skep.h` compiles as strict C99 and as C++, and
+  that it translates to Zig.
 
 ## skepd
 
@@ -207,9 +226,6 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
 
 ## Open questions
 
-- Event loop integration: a single pollable descriptor (an internal epoll
-  and timerfd, Linux only), or a descriptor plus a timeout from
-  `skep_get_timeout()` (portable)?
 - Configuration file format.
 - Source format of the man pages (mdoc, scdoc, pandoc Markdown).
 - Which EZSP protocol version to implement first: probe our dongle's
@@ -220,6 +236,12 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   [hardware.md](hardware.md)); product strings or probing the protocol
   may be.
 - The JSON schema of skep-protocol.
+- Values from devices: `SKEP_EVENT_ATTRIBUTES` carries raw ZCL values.
+  Should libskep also apply the device tables' corrections and units (the
+  Smart Plug E2's voltage in volts, for instance), or leave that to
+  applications?
+- Convenience functions for common commands (On/Off, Level Control,
+  Color Control), or only the generic `skep_send_command()`?
 
 ## References
 

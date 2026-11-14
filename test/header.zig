@@ -1,0 +1,35 @@
+//! skepd uses libskep through skep.h, translated by the build: check that the translation works
+//! and keeps the declarations.
+
+const std = @import("std");
+const c = @import("skep_h");
+const build_options = @import("build_options");
+
+test "skep.h translates to Zig" {
+  const functions = .{
+    "skep_version",             "skep_new",         "skep_free",            "skep_set_option",
+    "skep_start",               "skep_stop",        "skep_get_fd",          "skep_process",
+    "skep_next_event",          "skep_event_free",  "skep_event_get_type",  "skep_get_network",
+    "skep_permit_join",         "skep_get_devices", "skep_read_attributes", "skep_write_attributes",
+    "skep_configure_reporting", "skep_bind",        "skep_unbind",          "skep_send_command",
+  };
+  inline for (functions) |name| {
+    if (!@hasDecl(c, name)) @compileError("skep.h lost " ++ name);
+  }
+  try std.testing.expectEqual(1, c.SKEP_EVENT_STARTED);
+  try std.testing.expectEqual(0x29, c.SKEP_TYPE_INT16);
+  const target: c.struct_skep_target = .{
+    .device = 1,
+    .endpoint = 1,
+    .cluster = 6,
+    .manufacturer_code = 0,
+  };
+  try std.testing.expectEqual(6, target.cluster);
+}
+
+test "skep.h version matches build.zig.zon" {
+  const version = try std.SemanticVersion.parse(build_options.version);
+  try std.testing.expectEqual(version.major, c.SKEP_VERSION_MAJOR);
+  try std.testing.expectEqual(version.minor, c.SKEP_VERSION_MINOR);
+  try std.testing.expectEqual(version.patch, c.SKEP_VERSION_PATCH);
+}
