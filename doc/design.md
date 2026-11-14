@@ -6,10 +6,10 @@ decision changes, update this document in the same commit as the change.
 ## Goal
 
 A small, native Zigbee stack for Linux that is driven from the terminal
-and follows Unix conventions. The first goal is to pair and use a
-temperature and humidity sensor and a colour light bulb (see
-[hardware.md](hardware.md)). skep replaces Zigbee2MQTT for our use; it
-does not try to match its device coverage.
+and follows Unix conventions. Version 1 pairs and uses a temperature and
+humidity sensor, a colour light bulb and a smart plug with energy metering
+(see [hardware.md](hardware.md)). skep replaces Zigbee2MQTT for our use;
+it does not try to match its device coverage.
 
 skep is not tied to a particular dongle. The ZBDongle-E is the one we
 develop with, so its driver comes first; other dongles are added as
@@ -164,9 +164,10 @@ In scope:
 - events for attribute reports, joins and leaves;
 - a device registry with friendly names, and a network backup.
 
-Device-specific knowledge (which clusters to bind and report,
-manufacturer-specific attributes) is kept in small data tables, not in
-per-device code.
+Device-specific knowledge (which clusters to bind and report, reporting
+intervals, manufacturer-specific attributes, and corrections for values a
+device reports wrongly, such as scale factors) is kept in small data
+tables, not in per-device code.
 
 Not in version 1: MQTT (possible later as a separate bridge speaking
 skep-protocol), OTA firmware updates, groups and scenes, Touchlink, Green

@@ -100,3 +100,40 @@ attribute details come from the Zigbee2MQTT device definitions
     light to a controller.
 - Known issue, single report: ZL1 bulbs used with Zigbee2MQTT and an EZSP
   dongle collected hidden Touchlink group bindings over a few weeks.
+
+## ThirdReality Smart Plug E2, Type F (3RSPE01044BZ)
+
+- Mains powered Zigbee router with energy metering, for Type F (Schuko)
+  sockets. Also has Bluetooth. Sold by Vesternet as SKU 3RDZP1SPA1-EU.
+  Not to be confused with the Smart Plug E3 (3RSPE02065Z), a different
+  model.
+- Standard clusters, all on endpoint 1:
+  - On/Off (0x0006): OnOff (0x0000); StartUpOnOff (0x4003) for the
+    power-on behaviour;
+  - Electrical Measurement (0x0B04): RMSVoltage (0x0505), RMSCurrent
+    (0x0508), ActivePower (0x050B), PowerFactor (0x0510), ACFrequency
+    (0x0300);
+  - Metering (0x0702): CurrentSummationDelivered (0x0000), Multiplier
+    (0x0301), Divisor (0x0302).
+- Scale factors: Zigbee2MQTT reads the plug's multiplier and divisor
+  attributes but then replaces them with fixed values, so the reported
+  ones are presumably wrong:
+  - voltage in V = RMSVoltage / 10;
+  - current in A = RMSCurrent / 1000;
+  - power in W = ActivePower / 10;
+  - energy in kWh = CurrentSummationDelivered / 3 600 000.
+- Setup done by Zigbee2MQTT: bind On/Off, Electrical Measurement and
+  Metering to the coordinator, then configure reporting:
+  - OnOff: every 0–3600 s;
+  - ActivePower: every 5–3600 s, or on a change of 10 (1 W);
+  - RMSCurrent: every 5–3600 s, or on a change of 50 (0.05 A);
+  - RMSVoltage: every 5–3600 s, or on a change of 5 (0.5 V).
+- Manufacturer-specific cluster 0xFF03, manufacturer code 0x1233
+  (ThirdReality's assigned code, unlike the 0x1407 used by the sensor and
+  the ZL4 bulb), all attributes writable:
+  - 0x0000: reset the energy total, uint8, write 1;
+  - 0x0001: countdown before turning off, uint16, seconds;
+  - 0x0002: countdown before turning on, uint16, seconds;
+  - 0x0010: LED brightness, uint8, 0–100 %;
+  - 0x0020: `allowBind`, uint8.
+- Supports OTA firmware updates (not in version 1).
