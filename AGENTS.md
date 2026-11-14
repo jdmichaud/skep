@@ -21,8 +21,18 @@
   at most 72 characters), a blank line, then a body explaining what changed
   and why. Do not explain how; the code shows that.
 
+## Documentation
+
+- Read `doc/design.md` before changing the architecture or the C API. When
+  a decision changes, update it in the same commit.
+- `doc/hardware.md` holds what we know about the dongle and devices, and
+  `doc/development.md` the development setup and the reference sources.
+- Do not copy or port code from Zigbee2MQTT (GPL-3.0). Code from the MIT
+  licensed zigbee-herdsman projects may be ported with its copyright
+  notice.
+
 ## README
 
 - Keep `README.md` as small as possible: what skep is, how to build and
-  install it, and where to find more. Detailed documentation belongs in the
-  man pages.
+  install it, and where to find more. User documentation belongs in the
+  man pages, developer documentation in `doc/`.
