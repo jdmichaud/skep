@@ -19,7 +19,8 @@ The source tree is shared from the host over sshfs.
 The dongle is handed to the guest with USB passthrough rather than over
 the network (ser2net): passthrough gives the guest a real serial device
 with the same timing and control lines as on the host. Add an xHCI
-controller and the device to the QEMU command line:
+controller and the device to the QEMU command line. The ids below are
+those of our ZBDongle-E; use `lsusb` to find another dongle's.
 
 ```
 -device qemu-xhci,id=xhci

@@ -11,6 +11,10 @@ temperature and humidity sensor and a colour light bulb (see
 [hardware.md](hardware.md)). skep replaces Zigbee2MQTT for our use; it
 does not try to match its device coverage.
 
+skep is not tied to a particular dongle. The ZBDongle-E is the one we
+develop with, so its driver comes first; other dongles are added as
+drivers without changes to the rest of the stack.
+
 ## Components
 
 ```
@@ -26,10 +30,11 @@ does not try to match its device coverage.
               |  driver interface
        +------+---------------+----------------+
        v                      v                v
-  ezsp driver          sim driver        later: Z-Stack, ...
-       |  serial (ASH)
-       v
-  Silicon Labs NCP dongle
+  ezsp driver          sim driver        later: zstack, deconz, ...
+       |  serial (ASH)                         |
+       v                                       v
+  Silicon Labs EmberZNet dongles          TI Z-Stack, ConBee, ...
+  (ZBDongle-E, ...)                       dongles
 ```
 
 Names: the project is skep (a woven straw beehive). The library is
@@ -77,8 +82,12 @@ the daemon `skepd` and the command-line tool `skep`.
 - First drivers: `ezsp` (Silicon Labs EmberZNet NCP over ASH, used by the
   ZBDongle-E) and `sim` (a simulated network for tests). Having two
   drivers from day one keeps the interface honest.
-- The `ezsp` driver supports the EZSP protocol version of the firmware we
-  run, not a range of versions.
+- The `ezsp` driver negotiates the protocol version with the dongle at
+  start-up. It starts with the version of our development dongle's
+  firmware, and keeps version-specific frame layouts apart so that other
+  EmberZNet dongles and firmware versions can be added.
+- Nothing outside a driver may depend on a particular dongle, chip or
+  firmware.
 - Out of scope: radio co-processors (RCP), which need a full Zigbee stack
   on the host.
 
@@ -92,6 +101,9 @@ the daemon `skepd` and the command-line tool `skep`.
   waits on a file descriptor from `skep_get_fd()` with `poll()` or any
   event loop, calls `skep_process()`, then drains events with
   `skep_next_event()`.
+- The application chooses the driver and its options (device path, baud
+  rate, flow control) when it creates a context. Nothing else in `skep.h`
+  depends on the dongle.
 - A context is used by one thread at a time; separate contexts are
   independent.
 - Semantic versioning. The soname major number is the ABI version.
@@ -162,8 +174,8 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
 
 ## Testing
 
-- Unit tests for every codec, using byte sequences captured from the real
-  dongle where possible.
+- Unit tests for every codec, using byte sequences captured from real
+  dongles where possible.
 - The `sim` driver lets libskep and skepd be tested without hardware.
 - Fuzz tests for every parser of external input: serial link, Zigbee
   frames, IPC requests, configuration.
@@ -182,8 +194,9 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
 1. This document, then a draft `skep.h` for review.
 2. `ezsp` driver: reset the ASH link and read the EZSP version from the
    dongle.
-3. Network: form or resume, permit joining, join events. From here on
-   every feature is exercised by skepd through `<skep.h>`.
+3. The driver interface, implemented by both `ezsp` and `sim`. Network:
+   form or resume, permit joining, join events. From here on every
+   feature is exercised by skepd through `<skep.h>`.
 4. Device interview, binding and reporting: sensor readings arrive.
 5. Light control: the bulb obeys.
 6. skep-protocol and the skep command-line tool.
@@ -196,8 +209,13 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   `skep_get_timeout()` (portable)?
 - Configuration file format.
 - Source format of the man pages (mdoc, scdoc, pandoc Markdown).
-- EZSP protocol version: probe the dongle firmware first, and flash a
-  newer one if it is older than EmberZNet 7.4.
+- Which EZSP protocol version to implement first: probe our dongle's
+  firmware, then decide whether to use it as is or to flash a current
+  EmberZNet release.
+- Dongle detection: should libskep offer to find dongles and pick the
+  driver? USB ids are not reliable for this (see
+  [hardware.md](hardware.md)); product strings or probing the protocol
+  may be.
 - The JSON schema of skep-protocol.
 
 ## References

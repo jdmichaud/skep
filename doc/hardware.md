@@ -1,10 +1,12 @@
 # Hardware
 
-Notes on the hardware skep is developed with. Cluster and attribute
-details come from the Zigbee2MQTT device definitions
+Notes on the hardware skep is developed and tested with. This is not a
+list of what skep supports: other dongles and devices are added through
+drivers and device tables (see [design.md](design.md)). Cluster and
+attribute details come from the Zigbee2MQTT device definitions
 (zigbee-herdsman-converters 26.125.0) unless stated otherwise.
 
-## Coordinator: Sonoff Zigbee 3.0 USB Dongle Plus V2 (ZBDongle-E)
+## Development coordinator: Sonoff Zigbee 3.0 USB Dongle Plus V2 (ZBDongle-E)
 
 - Radio: Silicon Labs EFR32MG21. Firmware: EmberZNet network
   co-processor; the host talks EZSP over the ASH serial link protocol.
