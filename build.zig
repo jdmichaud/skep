@@ -3,8 +3,9 @@ const manifest = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
   const target = b.standardTargetOptions(.{});
-  // `zig build --release` means ReleaseSafe: runtime safety checks stay on in releases.
-  const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseSafe });
+  // Release builds (`-Drelease` or `--release`) are always ReleaseSafe: runtime safety checks stay
+  // on. This also removes `-Doptimize`, so a build is either debug or ReleaseSafe.
+  const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .safe });
 
   const build_options = b.addOptions();
   build_options.addOption([]const u8, "version", manifest.version);
@@ -28,7 +29,7 @@ fn addHeaderChecks(
   b: *std.Build,
   test_step: *std.Build.Step,
   target: std.Build.ResolvedTarget,
-  optimize: std.builtin.OptimizeMode,
+  optimize: std.lang.Optimize,
   build_options: *std.Build.Step.Options,
 ) void {
   const warnings: []const []const u8 = &.{ "-Wall", "-Wextra", "-Wpedantic", "-Werror" };
