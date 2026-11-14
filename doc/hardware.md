@@ -8,15 +8,27 @@ attribute details come from the Zigbee2MQTT device definitions
 
 ## Development coordinator: Sonoff Zigbee 3.0 USB Dongle Plus V2 (ZBDongle-E)
 
-- Radio: Silicon Labs EFR32MG21. Firmware: EmberZNet network
+- Radio: Silicon Labs EFR32MG21 according to the label and the product
+  name; not yet confirmed by talking to it. Firmware: EmberZNet network
   co-processor; the host talks EZSP over the ASH serial link protocol.
-- USB serial bridge: our unit enumerates as `10c4:ea60` (Silicon Labs
-  CP210x, kernel driver `cp210x`), although Sonoff documents a CH9102F
-  (`1a86:55d4`) for this model. The USB id does not identify the dongle;
-  the product string does: "Sonoff Zigbee 3.0 USB Dongle Plus V2".
+- USB serial bridge: our unit enumerates as `10c4:ea60` and is bound by
+  the kernel's `cp210x` driver, so the bridge is a Silicon Labs CP210x
+  (most likely a CP2102N), although Sonoff documents a CH9102F
+  (`1a86:55d4`) for this model, probably a change between production
+  batches. `10c4:ea60` is the generic CP210x id, also used by the
+  ZBDongle-P and many unrelated adapters, so it does not identify the
+  dongle. The strings programmed into the bridge do:
+
+  ```
+  Manufacturer: Itead
+  Product: Sonoff Zigbee 3.0 USB Dongle Plus V2
+  SerialNumber: b8aeef8b3a1fef11b64250d0639e525b
+  ```
+
+  Neither the id nor the strings prove which radio sits behind the
+  bridge; only talking to it does.
 - Stable device path:
   `/dev/serial/by-id/usb-Itead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_V2_<serial>-if00-port0`.
-  Our unit's serial is `b8aeef8b3a1fef11b64250d0639e525b`.
 - Serial settings: 115200 baud is the usual setting for this dongle. Flow
   control is to be confirmed when probing.
 - Firmware version: not yet known for our unit. Early ZBDongle-E units
