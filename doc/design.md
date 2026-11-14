@@ -46,10 +46,12 @@ the daemon `skepd` and the command-line tool `skep`.
 - Zig, pinned to 0.17.0 (`minimum_zig_version` in `build.zig.zon`).
   Upgrading Zig is a deliberate change of its own.
 - Why Zig: exporting a C ABI is native to the language, and skepd consumes
-  libskep through `@cImport` of `skep.h`, exactly like an outside user
-  would. The work is mostly byte-level protocol code and a single-threaded
-  poll loop. One build system produces the libraries, header, pkg-config
-  file, man pages, systemd units and static musl binaries.
+  libskep through `skep.h`, exactly like an outside user would: the build
+  translates the header with a translate-c step (`b.addTranslateC`; Zig
+  0.17 no longer has `@cImport`) and skepd imports the result. The work
+  is mostly byte-level protocol code and a single-threaded poll loop. One
+  build system produces the libraries, header, pkg-config file, man
+  pages, systemd units and static musl binaries.
 - Why not Rust: using our own C API from Rust needs a `-sys` crate and
   `unsafe` wrappers around our own code, and a Rust static library cannot
   be linked into a Rust binary without duplicate standard library symbols,
