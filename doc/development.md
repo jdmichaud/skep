@@ -9,7 +9,20 @@
   `git config core.hooksPath .githooks`.
 - On network file systems (sshfs, NFS), keep build outputs on a local
   disk: sshfs is slow and does not support symlinks. Pass
-  `--cache-dir <local dir>` and `--prefix <local dir>` to `zig build`.
+  `--cache-dir <local dir>` and `--prefix <local dir>` to `zig build`, or
+  set `ZIG_LOCAL_CACHE_DIR`.
+
+## Building and testing
+
+- `zig build test` runs the unit tests and checks `include/skep.h`: it
+  must compile as strict C99 and as C++, translate to Zig, and carry the
+  version from `build.zig.zon`.
+- `zig build test -Drelease` does the same in ReleaseSafe, the mode of
+  release builds. The build offers no other optimize mode.
+- `zig build test --fuzz=1M -Drelease` runs the fuzz tests for a million
+  iterations; without a limit it runs until stopped. Fuzz in ReleaseSafe:
+  with Zig 0.17, fuzzing a debug build fails with "corrupted coverage
+  file ... pcs_len was zero".
 
 ## Developing in a virtual machine
 
