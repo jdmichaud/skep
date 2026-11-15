@@ -469,10 +469,16 @@ const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
 /* State ------------------------------------------------------------------ */
 
 /*
- * What libskep needs to survive a restart or a new dongle: the network
- * parameters and keys, and the device registry. libskep never stores it
- * itself; the caller does, and must keep it private (it holds the network
- * key, so mode 0600 for a file).
+ * What libskep needs to survive a restart or a move to a new dongle:
+ * - the network: channel, PAN ID, extended PAN ID, network key and its
+ *   sequence number, and the coordinator's IEEE address;
+ * - the security counters: the outgoing network frame counter, the trust
+ *   center link key and its frame counter, and the link keys of devices
+ *   that have their own, with their counters;
+ * - the devices: addresses, node descriptors, endpoints, clusters,
+ *   manufacturer and model.
+ * libskep never stores it itself; the caller does, and must keep it
+ * private (it holds keys, so mode 0600 for a file).
  *
  * The state is opaque bytes. A libskep version reads the state written by
  * any older version.

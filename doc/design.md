@@ -142,10 +142,19 @@ reviewed before the library is implemented.
   sensor sleeps. A newer write or reporting configuration for the same
   attributes replaces a waiting one, so that a device that has been
   asleep is not sent outdated settings first.
-- State: what must survive a restart or a new dongle (network parameters
-  and keys, device registry) is exported and imported as opaque bytes
-  (`skep_export_state()`, `skep_import_state()`). `SKEP_EVENT_STATE_CHANGED`
-  says when to save it. libskep reads states written by any older version.
+- State: what must survive a restart or a new dongle (network parameters,
+  keys and security counters, device registry) is exported and imported
+  as opaque bytes (`skep_export_state()`, `skep_import_state()`).
+  `SKEP_EVENT_STATE_CHANGED` says when to save it. libskep reads states
+  written by any older version.
+  - The keys alone are not enough to move a network to a new dongle.
+    Devices drop frames whose counter is not above the last one they saw
+    from the sender (replay protection), so the state holds the frame
+    counters of the network key and of every link key. Devices also know
+    the coordinator by its IEEE address, so the state holds it too, and
+    the driver gives it to the new dongle where the firmware allows
+    (EmberZNet keeps a "restored EUI64" token for this purpose, which
+    zigbee-herdsman uses).
 - No threads inside libskep and no callbacks into caller code. Results
   are events, drained with `skep_next_event()`. Diagnostics are events
   too (`SKEP_EVENT_LOG`); libskep never writes to stdout or stderr, with
