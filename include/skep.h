@@ -282,7 +282,7 @@ typedef struct skep_event skep_event;
  * (and free) events of a type they do not know.
  */
 enum skep_event_type {
-  /* The network is up. */
+  /* The network is up. skep_event_get_network_origin() tells how. */
   SKEP_EVENT_STARTED = 1,
   /*
    * The context stopped, after skep_stop(), after skep_link_lost(), or
@@ -380,6 +380,18 @@ uint8_t skep_event_get_status(const skep_event *event);
 
 /* SKEP_EVENT_REQUEST_DONE: the request id. */
 uint32_t skep_event_get_request(const skep_event *event);
+
+enum skep_network_origin {
+  /* The network on the dongle, as it was. */
+  SKEP_NETWORK_RESUMED = 1,
+  /* The imported network, written onto the dongle: a new dongle. */
+  SKEP_NETWORK_RESTORED = 2,
+  /* A new network: devices must be paired. */
+  SKEP_NETWORK_FORMED = 3,
+};
+
+/* SKEP_EVENT_STARTED: how the network was brought up. */
+enum skep_network_origin skep_event_get_network_origin(const skep_event *event);
 
 /*
  * SKEP_EVENT_PERMIT_JOIN: seconds the join window stays open, 0 when it
