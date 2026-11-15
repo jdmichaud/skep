@@ -76,6 +76,8 @@ the daemon `skepd` and the command-line tool `skep`.
   - read the network state, form a network (channel, PAN ID, extended
     PAN ID, network key), resume an existing network;
   - permit joining for a number of seconds;
+  - set the manufacturer code in the coordinator's node descriptor (see
+    below);
   - send an APS frame by unicast, multicast (group) or broadcast;
   - send a ZDO request and receive its response (interview, binding,
     leave). Not built on APS frames by libskep, because dongles differ:
@@ -88,6 +90,12 @@ the daemon `skepd` and the command-line tool `skep`.
   the `driver` option (`ezsp`, `sim`). They never open the dongle or
   configure the serial port: the caller does, with the settings the driver
   suggests (`skep_get_serial_defaults()`), and passes the bytes.
+- Some devices check the coordinator's manufacturer code, which they
+  read from its node descriptor while joining: Aqara (Lumi) devices miss
+  features unless it is Lumi's (0x115F). zigbee-herdsman therefore
+  switches the code while a device whose IEEE address starts with a Lumi
+  prefix joins (Zigbee2MQTT issue 9274). libskep does the same, with the
+  prefixes and codes in the device tables, through a driver operation.
 - Drivers may need the serial control lines: some CC2652 dongles only
   leave their bootloader after a pulse on RTS (zigbee-herdsman's Z-Stack
   driver sends one). As libskep does no I/O, it asks the caller with an

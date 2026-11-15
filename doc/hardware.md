@@ -85,6 +85,10 @@ attribute details come from the Zigbee2MQTT device definitions
   - 0x0523: read by Zigbee2MQTT during setup, meaning unknown.
   - More attributes (on/off fade durations) are defined in
     `src/lib/lumi.ts` of zigbee-herdsman-converters.
+- Coordinator manufacturer code: zigbee-herdsman presents Lumi's code
+  (0x115F) to devices whose IEEE address starts with 0x54ef44 or
+  0x04cf8c while they join, because some Aqara devices otherwise miss
+  features. Whether the T2 needs this is to be checked on the hardware.
 - Reporting: Zigbee2MQTT configures none for this bulb (its `lumiLight`
   extend leaves the generic light's `configureReporting` off), so the bulb
   may not report changes of on/off, level or colour by itself. To check on
