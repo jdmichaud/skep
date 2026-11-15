@@ -211,9 +211,10 @@ int skep_stop(skep_ctx *ctx);
  *       handle(e);
  *   }
  *
- * Time only enters through skep_input(), skep_output_done() and
- * skep_advance(). Other calls queue work, whose timers start when its
- * bytes are written.
+ * The current time only enters through skep_input(), skep_output_done()
+ * and skep_advance(). Requests take a deadline instead (see Requests), so
+ * libskep never needs to know when a request was made. The protocol's
+ * own timers start when bytes are written.
  */
 
 /*
@@ -584,6 +585,13 @@ int skep_remove_device(skep_ctx *ctx, uint64_t device);
  * Requests to sleepy end devices are delivered when the device next
  * wakes up, which can take minutes.
  *
+ * Each request takes a deadline: the time, on the clock given to
+ * skep_advance(), by which it must be done. A request still pending at
+ * its deadline ends with -ETIMEDOUT; SKEP_NO_DEADLINE lets it wait as
+ * long as it takes. The protocol's own timeouts still apply once the
+ * request is sent, so a request can fail earlier, for instance with
+ * -EHOSTUNREACH.
+ *
  * struct skep_target, struct skep_attribute and struct skep_reporting end
  * with reserved fields, so that later versions can add fields without
  * changing their size, which arrays of them depend on. Zero the whole
@@ -593,6 +601,8 @@ int skep_remove_device(skep_ctx *ctx, uint64_t device);
  * -EINVAL (including a reserved field that is not 0), -ENOBUFS (too many
  * requests pending).
  */
+
+#define SKEP_NO_DEADLINE UINT64_MAX
 
 struct skep_target {
   uint64_t device; /* IEEE address */
@@ -610,7 +620,7 @@ struct skep_target {
  * value.
  */
 int skep_read_attributes(skep_ctx *ctx, const struct skep_target *target, const uint16_t *ids,
-                         size_t count, uint32_t *request);
+                         size_t count, uint64_t deadline, uint32_t *request);
 
 /*
  * Write attributes. The status field of each attribute is ignored.
@@ -618,7 +628,7 @@ int skep_read_attributes(skep_ctx *ctx, const struct skep_target *target, const 
  * the same order, each with its status and no value.
  */
 int skep_write_attributes(skep_ctx *ctx, const struct skep_target *target,
-                          const struct skep_attribute *attributes, size_t count,
+                          const struct skep_attribute *attributes, size_t count, uint64_t deadline,
                           uint32_t *request);
 
 /* How and when a device reports an attribute. */
@@ -640,21 +650,23 @@ struct skep_reporting {
  */
 int skep_configure_reporting(skep_ctx *ctx, const struct skep_target *target,
                              const struct skep_reporting *reporting, size_t count,
-                             uint32_t *request);
+                             uint64_t deadline, uint32_t *request);
 
 /*
  * Bind the cluster of the target endpoint to the coordinator, so that the
  * device sends its reports and commands to us, or remove that binding.
  */
-int skep_bind(skep_ctx *ctx, const struct skep_target *target, uint32_t *request);
-int skep_unbind(skep_ctx *ctx, const struct skep_target *target, uint32_t *request);
+int skep_bind(skep_ctx *ctx, const struct skep_target *target, uint64_t deadline,
+              uint32_t *request);
+int skep_unbind(skep_ctx *ctx, const struct skep_target *target, uint64_t deadline,
+                uint32_t *request);
 
 /*
  * Send a cluster-specific command with a payload in ZCL encoding, for
  * instance On/Off "on" (cluster 0x0006, command 0x01, no payload).
  */
 int skep_send_command(skep_ctx *ctx, const struct skep_target *target, uint8_t command,
-                      const uint8_t *payload, size_t len, uint32_t *request);
+                      const uint8_t *payload, size_t len, uint64_t deadline, uint32_t *request);
 
 #ifdef __cplusplus
 }

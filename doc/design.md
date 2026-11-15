@@ -127,10 +127,15 @@ reviewed before the library is implemented.
   over TCP, a replayed capture). The cost is an I/O loop in every
   application, 60 to 100 lines, of which skepd is the reference and
   `skep.h` shows a minimal one (compiled by the header checks).
-- Time only enters through `skep_input()`, `skep_output_done()` and
-  `skep_advance()`. Other calls only queue work, whose timers start when
-  its bytes are written, so a request made after a long idle time does not
-  start its timeout from a stale clock.
+- The current time only enters through `skep_input()`,
+  `skep_output_done()` and `skep_advance()`. Requests take a deadline
+  instead, an absolute time on the same clock, after which they end with
+  `-ETIMEDOUT`. So libskep never needs to know when a request was made
+  (the time it last saw may be stale after a long idle period), and how
+  long a request may wait is the application's choice: seconds for a
+  light switched from a user interface, hours for a setting meant for a
+  sensor that wakes up rarely. The protocol's own timers start when bytes
+  are written.
 - State: what must survive a restart or a new dongle (network parameters
   and keys, device registry) is exported and imported as opaque bytes
   (`skep_export_state()`, `skep_import_state()`). `SKEP_EVENT_STATE_CHANGED`
