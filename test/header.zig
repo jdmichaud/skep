@@ -12,7 +12,7 @@ test "skep.h translates to Zig" {
     "skep_next_deadline",   "skep_advance",          "skep_next_event",          "skep_event_free",  "skep_event_get_type",
     "skep_export_state",    "skep_import_state",     "skep_get_network",         "skep_permit_join", "skep_get_devices",
     "skep_read_attributes", "skep_write_attributes", "skep_configure_reporting", "skep_bind",        "skep_unbind",
-    "skep_send_command",
+    "skep_send_command",    "skep_cancel",
   };
   inline for (functions) |name| {
     if (!@hasDecl(c, name)) @compileError("skep.h lost " ++ name);

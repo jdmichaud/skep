@@ -671,6 +671,15 @@ int skep_unbind(skep_ctx *ctx, const struct skep_target *target, uint64_t deadli
 int skep_send_command(skep_ctx *ctx, const struct skep_target *target, uint8_t command,
                       const uint8_t *payload, size_t len, uint64_t deadline, uint32_t *request);
 
+/*
+ * Give up a pending request. It ends at once with SKEP_EVENT_REQUEST_DONE
+ * and -ECANCELED. A request already sent may still take effect on the
+ * device: cancelling only stops libskep from sending or waiting for it.
+ *
+ * Errors: -ENOENT (no such request pending).
+ */
+int skep_cancel(skep_ctx *ctx, uint32_t request);
+
 #ifdef __cplusplus
 }
 #endif
