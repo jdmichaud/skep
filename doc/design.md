@@ -211,6 +211,10 @@ reviewed before the library is implemented.
     not long enough for the whole setup. libskep records how far each
     device's setup has got, in the state so that a restart does not lose
     it, and carries on when it next hears from the device.
+  - A device that rejects a step fails its setup
+    (`SKEP_EVENT_DEVICE_SETUP_FAILED`, with the step's error and status).
+    libskep does not retry, since the device would most likely reject
+    the step again; `skep_setup_device()` starts the setup over.
   - Each device records the version of the device table entry it was set
     up with. When the entry changes, for instance with a new libskep that
     corrects a reporting interval, the setup is redone.

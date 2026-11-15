@@ -324,6 +324,14 @@ enum skep_event_type {
    * or set up, and so on. Export it with skep_export_state() and store it.
    */
   SKEP_EVENT_STATE_CHANGED = 11,
+  /*
+   * Setting up a device failed: the device rejected a step, which
+   * skep_event_get_error() and skep_event_get_status() describe as for
+   * SKEP_EVENT_REQUEST_DONE. A device that stays silent has not failed:
+   * its setup waits. libskep does not retry by itself, since the device
+   * would most likely reject the step again; skep_setup_device() does.
+   */
+  SKEP_EVENT_DEVICE_SETUP_FAILED = 12,
 };
 
 /*
@@ -350,17 +358,17 @@ uint64_t skep_event_get_device(const skep_event *event);
  * stopped, for instance -ETIMEDOUT when the dongle stopped answering,
  * -EPROTO when it broke the protocol, or -EEXIST when skep_start() found
  * another network on the dongle.
- * SKEP_EVENT_REQUEST_DONE: whether the request was delivered and answered:
- * 0 if it was, otherwise for instance -ETIMEDOUT (no answer) or
- * -EHOSTUNREACH (device not reachable). What the device thought of the
- * request is its status.
+ * SKEP_EVENT_REQUEST_DONE and SKEP_EVENT_DEVICE_SETUP_FAILED: whether the
+ * request was delivered and answered: 0 if it was, otherwise for instance
+ * -ETIMEDOUT (no answer) or -EHOSTUNREACH (device not reachable). What
+ * the device thought of the request is its status.
  */
 int skep_event_get_error(const skep_event *event);
 
 /*
- * SKEP_EVENT_REQUEST_DONE: the status the device answered with, 0 for
- * success. Only meaningful when skep_event_get_error() is 0. Which status
- * it is depends on the request:
+ * SKEP_EVENT_REQUEST_DONE and SKEP_EVENT_DEVICE_SETUP_FAILED: the status
+ * the device answered with, 0 for success. Only meaningful when
+ * skep_event_get_error() is 0. Which status it is depends on the request:
  *
  *   skep_read_attributes(), skep_write_attributes(),
  *   skep_configure_reporting()
@@ -628,6 +636,15 @@ enum skep_cluster_side {
 int skep_device_get_clusters(skep_ctx *ctx, uint64_t device, uint8_t endpoint,
                              enum skep_cluster_side side, uint16_t *clusters, size_t capacity,
                              size_t *count);
+
+/*
+ * Set the device up again from the start, after a failed setup or when
+ * the device lost its configuration. SKEP_EVENT_DEVICE_READY or
+ * SKEP_EVENT_DEVICE_SETUP_FAILED follows.
+ *
+ * Errors: -ENODEV, -ENETDOWN.
+ */
+int skep_setup_device(skep_ctx *ctx, uint64_t device);
 
 /*
  * Ask the device to leave the network and forget it. A request like those
