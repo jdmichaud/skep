@@ -159,6 +159,11 @@ reviewed before the library is implemented.
   `SKEP_EVENT_REQUEST_DONE` event.
 - libskep interviews and sets up new devices itself, using the device
   tables, and reports `SKEP_EVENT_DEVICE_READY` when done.
+- libskep also answers devices on the coordinator's behalf, without the
+  application: a ZCL Default Response where the frame asks for one, reads
+  of the coordinator's own clusters (Basic), and "no image available" to
+  OTA queries, since firmware updates are not in version 1. ZDO requests
+  to the coordinator are answered by the dongle's firmware.
 - No global state: everything libskep knows is in a context, which the
   application holds as an opaque handle. The application decides when a
   context is created and freed; only libskep reads or changes what is
