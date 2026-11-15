@@ -250,6 +250,23 @@ reviewed before the library is implemented.
     spare applications the ZCL, but its vocabulary would become the
     stable API, and it is a large design. It can be added later, in a
     minor version, on top of the same model.
+- Command arguments are typed values (`struct skep_value`) in both
+  directions, not payloads in ZCL encoding, because encoding them is
+  device knowledge too. Level Control and Color Control commands end
+  with optional fields that Zigbee2MQTT sends by default and leaves out
+  for devices that reject them, and devices leave out such fields in the
+  commands they send. libskep needs the fields of commands anyway, to
+  translate vendor protocols; for the standard commands they come from
+  zigbee-herdsman's cluster definitions. An incoming command that libskep
+  does not know is only available as its payload, since command payloads
+  do not say the types of their fields.
+- Arrays and structures stay in their ZCL encoding in `struct
+  skep_value`. They are rare (32 of the 2,546 typed fields in
+  zigbee-herdsman's cluster definitions, none on our devices), nested
+  values would bring ownership rules and depth limits to the C API, and
+  libskep can avoid them in virtual attributes. A function that decodes
+  them element by element can be added in a minor version if a device
+  needs it.
 - libskep interviews and sets up new devices itself, using the device
   tables, and reports `SKEP_EVENT_DEVICE_READY` when done.
   - A sleepy sensor stays awake for a few seconds after joining, often

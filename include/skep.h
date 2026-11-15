@@ -535,10 +535,21 @@ size_t skep_event_get_attribute_count(const skep_event *event);
 int skep_event_get_attribute(const skep_event *event, size_t index, struct skep_attribute *attribute);
 
 /*
- * SKEP_EVENT_COMMAND: the command id and its payload, in ZCL encoding.
- * The payload is valid until the event is freed.
+ * SKEP_EVENT_COMMAND: the command id, and its arguments, decoded for the
+ * commands libskep knows. Devices may leave out optional fields at the
+ * end, so there may be fewer arguments than the command has fields.
+ * The payload holds the arguments in their ZCL encoding, for any command:
+ * it is all there is for a command libskep does not know, since command
+ * payloads do not say the types of their fields. It is valid until the
+ * event is freed.
+ *
+ * Errors of skep_event_get_argument_count and skep_event_get_argument:
+ * -ENOTSUP (a command libskep does not know), -EINVAL (index out of
+ * range).
  */
 uint8_t skep_event_get_command(const skep_event *event);
+int skep_event_get_argument_count(const skep_event *event, size_t *count);
+int skep_event_get_argument(const skep_event *event, size_t index, struct skep_value *value);
 const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
 
 /* State ------------------------------------------------------------------ */
@@ -792,11 +803,20 @@ int skep_unbind(skep_ctx *ctx, const struct skep_target *target, uint64_t deadli
                 uint32_t *request);
 
 /*
- * Send a cluster-specific command with a payload in ZCL encoding, for
- * instance On/Off "on" (cluster 0x0006, command 0x01, no payload).
+ * Send a cluster-specific command with its arguments, for instance On/Off
+ * "on" (cluster 0x0006, command 0x01, no arguments) or Level Control
+ * "move to level" (cluster 0x0008, command 0x00: a uint8 level and a
+ * uint16 transition time). libskep encodes the arguments in order, as
+ * their types say. For the commands it knows, it checks the arguments
+ * against the command's fields and encodes them the way the device
+ * expects: optional fields at the end may be left out, and libskep leaves
+ * out those a device is known to reject.
+ *
+ * Errors: -EINVAL (arguments that do not match a command libskep knows).
  */
 int skep_send_command(skep_ctx *ctx, const struct skep_target *target, uint8_t command,
-                      const uint8_t *payload, size_t len, uint64_t deadline, uint32_t *request);
+                      const struct skep_value *arguments, size_t count, uint64_t deadline,
+                      uint32_t *request);
 
 /*
  * Give up a pending request. It ends at once with SKEP_EVENT_REQUEST_DONE
