@@ -17,6 +17,9 @@
  *   calls back into the caller. The caller carries bytes between the dongle
  *   and libskep, tells it the time, and stores its state. Results are
  *   queued as events. Diagnostics are SKEP_EVENT_LOG events, never output.
+ * - A failed internal check (an out-of-bounds index, an overflow) is a bug
+ *   in libskep. Like a failed assert(), it aborts the program with a
+ *   message on stderr, the only output libskep ever writes.
  * - Time is a monotonic clock in milliseconds, for instance
  *   CLOCK_MONOTONIC, always from the same clock.
  * - All of libskep's state is in its contexts: there is no global state.

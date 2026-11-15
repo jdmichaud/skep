@@ -127,7 +127,10 @@ reviewed before the library is implemented.
   says when to save it. libskep reads states written by any older version.
 - No threads inside libskep and no callbacks into caller code. Results
   are events, drained with `skep_next_event()`. Diagnostics are events
-  too (`SKEP_EVENT_LOG`); libskep never writes to stdout or stderr.
+  too (`SKEP_EVENT_LOG`); libskep never writes to stdout or stderr, with
+  one exception: a failed safety check (see "Language and build") aborts
+  the program with a message, like a failed `assert()`. Such a failure is
+  a bug in libskep; carrying on with corrupted state would be worse.
 - Opaque handles (`skep_ctx`, `skep_event`), created and destroyed in
   pairs. The ownership of every returned pointer is documented.
 - Functions return an `int`: 0 on success, a negative errno value on
