@@ -82,7 +82,10 @@ attribute details come from the Zigbee2MQTT device definitions
   - 0x0520: effect speed, uint8, 0–100 %;
   - 0x0528: transition curve curvature, float;
   - 0x052C: initial brightness of a transition, uint8;
-  - 0x0523: read by Zigbee2MQTT during setup, meaning unknown.
+  - 0x0523: colours of the RGB effect, octet string: 0x00, the number
+    of colours (1 to 8), then each colour as CIE x and y, each scaled to
+    0–65535 and sent high byte first, unlike ZCL integers
+    (`lumiRGBEffectColors` in `src/lib/lumi.ts`).
   - More attributes (on/off fade durations) are defined in
     `src/lib/lumi.ts` of zigbee-herdsman-converters.
 - Coordinator manufacturer code: zigbee-herdsman presents Lumi's code
