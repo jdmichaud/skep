@@ -73,6 +73,7 @@ the daemon `skepd` and the command-line tool `skep`.
   deCONZ, ...) are interchangeable behind the interface.
 - Initial driver operations:
   - reset the dongle's stack and the link to it;
+  - read the coordinator's IEEE address and the firmware version;
   - read the network state, form a network (channel, PAN ID, extended
     PAN ID, network key), resume an existing network;
   - permit joining for a number of seconds;
@@ -86,6 +87,11 @@ the daemon `skepd` and the command-line tool `skep`.
   - report events: incoming APS frame, device joined, left or announced,
     send confirmation, stack status change;
   - back up and restore the network parameters and keys.
+- These operations were checked against zigbee-herdsman's `Adapter`
+  class (v11.2.0), the interface behind its drivers for Silicon Labs, TI,
+  deCONZ, ZBOSS and ZiGate dongles. Its other operations are left out of
+  version 1: install codes, opening the join window through one router
+  only, and inter-PAN frames (Touchlink).
 - Drivers are internal to libskep and selected at run time by name, with
   the `driver` option (`ezsp`, `sim`). They never open the dongle or
   configure the serial port: the caller does, with the settings the driver
