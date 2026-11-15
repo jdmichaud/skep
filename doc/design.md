@@ -155,6 +155,12 @@ reviewed before the library is implemented.
     the driver gives it to the new dongle where the firmware allows
     (EmberZNet keeps a "restored EUI64" token for this purpose, which
     zigbee-herdsman uses).
+  - The counters advance inside the dongle with every frame it sends, so
+    an exported state is only as current as its last refresh from the
+    dongle (`skep_refresh_state()`). When to refresh is policy, not
+    protocol, so it is the application's choice: libskep has no clock
+    to schedule it with, and zigpy and zigbee-herdsman likewise back up
+    from the application layer, once a day.
 - No threads inside libskep and no callbacks into caller code. Results
   are events, drained with `skep_next_event()`. Diagnostics are events
   too (`SKEP_EVENT_LOG`); libskep never writes to stdout or stderr, with
@@ -244,7 +250,9 @@ reviewed before the library is implemented.
   libskep's I/O: it opens the serial port (with the driver's serial
   defaults unless `skepd.conf` overrides them), runs the poll loop, keeps
   time, reopens the dongle when it disappears, and saves libskep's state
-  whenever it changes.
+  whenever it changes. It refreshes the state from the dongle every hour
+  (`skep_refresh_state()`), which is cheap, so that a dongle that dies
+  takes at most an hour of frame counters with it.
 - Runs in the foreground and never daemonizes itself. Under systemd it
   uses `Type=notify` and reports readiness with sd_notify.
 - Logs to stderr; journald adds timestamps. The log level is configurable.

@@ -351,7 +351,7 @@ int skep_event_get_error(const skep_event *event);
  *       (TABLE_FULL).
  *   skep_remove_device()
  *       The ZDO status of the Leave response.
- *   skep_permit_join()
+ *   skep_permit_join(), skep_refresh_state()
  *       Always 0: no device answers.
  */
 uint8_t skep_event_get_status(const skep_event *event);
@@ -492,6 +492,18 @@ const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
  * Errors: -ENOBUFS, -ENODATA (no network yet: nothing worth saving).
  */
 int skep_export_state(skep_ctx *ctx, uint8_t *buf, size_t size, size_t *len);
+
+/*
+ * Read the security counters from the dongle, which advances them with
+ * every frame it sends, so that the next export is current. A request
+ * like those under Requests: it ends with SKEP_EVENT_REQUEST_DONE, after
+ * SKEP_EVENT_STATE_CHANGED if the counters moved. libskep does not
+ * refresh them by itself: the application decides when, for instance
+ * every hour and right before moving the network to another dongle.
+ *
+ * Errors: -ENETDOWN.
+ */
+int skep_refresh_state(skep_ctx *ctx, uint32_t *request);
 
 /*
  * Load a state saved by skep_export_state(). Only before skep_start().
