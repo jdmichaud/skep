@@ -19,8 +19,11 @@
  *   queued as events. Diagnostics are SKEP_EVENT_LOG events, never output.
  * - Time is a monotonic clock in milliseconds, for instance
  *   CLOCK_MONOTONIC, always from the same clock.
- * - A context may be used from one thread at a time. Separate contexts
- *   are independent.
+ * - All of libskep's state is in its contexts: there is no global state.
+ *   Separate contexts are independent, so a program can drive several
+ *   dongles, one context each, and use different contexts from different
+ *   threads at the same time. A context may be used from one thread at a
+ *   time.
  * - Devices are identified by their IEEE address (EUI-64), which never
  *   changes, rather than by their network address, which may.
  * - Values are passed in host byte order.
@@ -62,7 +65,10 @@ typedef struct skep_ctx skep_ctx;
  */
 int skep_new(skep_ctx **ctx);
 
-/* Free the context. The dongle is the caller's: libskep does not close it. */
+/*
+ * Free the context. The dongle is the caller's: libskep does not close it.
+ * Events already taken from the context stay valid.
+ */
 void skep_free(skep_ctx *ctx);
 
 /*
@@ -244,7 +250,9 @@ enum skep_event_type {
 
 /*
  * Take the next event from the queue. Returns NULL when the queue is
- * empty. The caller frees the event with skep_event_free().
+ * empty. The event holds its own copy of everything it reports, and stays
+ * valid until the caller frees it with skep_event_free(), even after
+ * skep_free().
  */
 skep_event *skep_next_event(skep_ctx *ctx);
 
