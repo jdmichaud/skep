@@ -180,13 +180,23 @@ int skep_get_serial_defaults(const skep_ctx *ctx, unsigned *baudrate,
 int skep_start(skep_ctx *ctx);
 
 /*
- * Stop, and drop pending output and requests. Also call it when the
- * connection to the dongle is lost (read or write error, device gone),
- * then skep_start() once the dongle is open again. SKEP_EVENT_STOPPED
- * follows. The network stays on the dongle and is resumed by the next
- * skep_start().
+ * Stop cleanly: end pending requests with -ECANCELED, refresh the state
+ * from the dongle (see skep_refresh_state()), then report
+ * SKEP_EVENT_STOPPED. Keep running the loop until then, and save the
+ * state after SKEP_EVENT_STATE_CHANGED as usual. The network stays on the
+ * dongle and is resumed by the next skep_start().
+ *
+ * Errors: -ENETDOWN (not started).
  */
 int skep_stop(skep_ctx *ctx);
+
+/*
+ * Tell libskep that the dongle is gone: a read or write error, or the
+ * device was unplugged. Drops pending output, ends pending requests with
+ * -ECANCELED and reports SKEP_EVENT_STOPPED with -ENOTCONN, at once and
+ * without I/O. Call skep_start() once the dongle is open again.
+ */
+void skep_link_lost(skep_ctx *ctx);
 
 /* Bytes and time ------------------------------------------------------- */
 
@@ -269,10 +279,10 @@ enum skep_event_type {
   /* The network is up. */
   SKEP_EVENT_STARTED = 1,
   /*
-   * The context stopped, after skep_stop() or because of an error that
-   * libskep could not recover from, such as a dongle that stopped
-   * answering. skep_event_get_error() tells which. skep_start() may be
-   * called again.
+   * The context stopped, after skep_stop(), after skep_link_lost(), or
+   * because of an error that libskep could not recover from, such as a
+   * dongle that stopped answering. skep_event_get_error() tells which.
+   * skep_start() may be called again.
    */
   SKEP_EVENT_STOPPED = 2,
   /* The join window opened or closed. See skep_event_get_duration(). */
@@ -327,9 +337,10 @@ enum skep_event_type skep_event_get_type(const skep_event *event);
 uint64_t skep_event_get_device(const skep_event *event);
 
 /*
- * SKEP_EVENT_STOPPED: 0 after skep_stop(), otherwise a negative errno
- * value telling why libskep stopped, for instance -ETIMEDOUT when the
- * dongle stopped answering or -EPROTO when it broke the protocol.
+ * SKEP_EVENT_STOPPED: 0 after skep_stop(), -ENOTCONN after
+ * skep_link_lost(), otherwise a negative errno value telling why libskep
+ * stopped, for instance -ETIMEDOUT when the dongle stopped answering or
+ * -EPROTO when it broke the protocol.
  * SKEP_EVENT_REQUEST_DONE: whether the request was delivered and answered:
  * 0 if it was, otherwise for instance -ETIMEDOUT (no answer) or
  * -EHOSTUNREACH (device not reachable). What the device thought of the

@@ -160,7 +160,10 @@ reviewed before the library is implemented.
     dongle (`skep_refresh_state()`). When to refresh is policy, not
     protocol, so it is the application's choice: libskep has no clock
     to schedule it with, and zigpy and zigbee-herdsman likewise back up
-    from the application layer, once a day.
+    from the application layer, once a day. A clean stop
+    (`skep_stop()`) refreshes the state too, so that a planned move to
+    another dongle carries exact counters. A lost link
+    (`skep_link_lost()`) cannot.
   - A state saved before the old dongle died lags behind the counters
     the devices last saw. On restore, libskep adds a margin to the saved
     counters (`frame-counter-margin`, 100,000 by default). Other stacks
@@ -264,8 +267,9 @@ reviewed before the library is implemented.
 - Runs in the foreground and never daemonizes itself. Under systemd it
   uses `Type=notify` and reports readiness with sd_notify.
 - Logs to stderr; journald adds timestamps. The log level is configurable.
-- SIGTERM and SIGINT shut it down cleanly; SIGHUP reloads the
-  configuration.
+- SIGTERM and SIGINT shut it down cleanly: skepd calls `skep_stop()`,
+  which refreshes the state, and saves the state before exiting. SIGHUP
+  reloads the configuration.
 - Serves clients on a Unix stream socket with line-delimited JSON
   requests, responses and events, documented in skep-protocol(7).
 - Uses libskep only through `<skep.h>`.
