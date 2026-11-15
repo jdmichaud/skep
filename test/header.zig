@@ -29,6 +29,21 @@ test "skep.h translates to Zig" {
   try std.testing.expectEqual(6, target.cluster);
 }
 
+test "struct skep_allocator translates to Zig" {
+  const functions = struct {
+    fn alloc(_: ?*anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
+      return null;
+    }
+
+    fn free(_: ?*anyopaque, _: ?*anyopaque, _: usize, _: usize) callconv(.c) void {}
+  };
+  var allocator = std.mem.zeroes(c.struct_skep_allocator);
+  allocator.alloc = functions.alloc;
+  allocator.free = functions.free;
+  try std.testing.expectEqual(null, allocator.realloc);
+  try std.testing.expectEqual(4, allocator.reserved.len);
+}
+
 test "skep.h version matches build.zig.zon" {
   const version = try std.SemanticVersion.parse(build_options.version);
   try std.testing.expectEqual(version.major, c.SKEP_VERSION_MAJOR);

@@ -24,6 +24,8 @@
  *   dongles, one context each, and use different contexts from different
  *   threads at the same time. A context may be used from one thread at a
  *   time.
+ * - Memory comes from the allocator given to skep_new(), malloc() unless
+ *   the caller provides one.
  * - Devices are identified by their IEEE address (EUI-64), which never
  *   changes, rather than by their network address, which may.
  * - Values are passed in host byte order.
@@ -58,12 +60,52 @@ uint32_t skep_version(void);
 typedef struct skep_ctx skep_ctx;
 
 /*
+ * Where a context gets its memory. Everything libskep allocates for a
+ * context, its events included, comes from the allocator given to
+ * skep_new(); libskep has no allocator of its own.
+ *
+ * Every function gets ctx as its first argument. Sizes are in bytes and
+ * never 0; alignment is a power of two. libskep always passes back the
+ * size and alignment a block has, so the allocator need not record them.
+ *
+ * Zero the whole struct before setting the fields you use, for instance
+ * with a designated initializer:
+ *
+ *   struct skep_allocator a = { .ctx = arena, .alloc = arena_alloc,
+ *                               .free = arena_free };
+ */
+struct skep_allocator {
+  void *ctx;
+  /* Return a block of size bytes aligned to alignment, or NULL. Required. */
+  void *(*alloc)(void *ctx, size_t size, size_t alignment);
+  /*
+   * Resize the block at ptr from size to new_size bytes, moving it if
+   * needed, and return its address. Return NULL if it cannot be done; the
+   * block must then be left as it was. Optional: without it, libskep
+   * allocates a new block, copies and frees the old one.
+   */
+  void *(*realloc)(void *ctx, void *ptr, size_t size, size_t new_size, size_t alignment);
+  /* Free the block at ptr. Required. */
+  void (*free)(void *ctx, void *ptr, size_t size, size_t alignment);
+  /* For later versions; must be NULL. */
+  void *reserved[4];
+};
+
+/*
  * Create a context. Configure it with skep_set_option() and, if a state
  * was saved, skep_import_state(); then call skep_start().
  *
- * Errors: -ENOMEM.
+ * allocator is copied; NULL selects malloc() and free() from the C
+ * library. What allocator->ctx refers to must stay usable until the
+ * context and every event taken from it are freed. libskep calls the
+ * allocator from the thread that calls into libskep, so an allocator used
+ * from several threads, for instance by contexts in different threads or
+ * by events freed in another thread, must be thread-safe.
+ *
+ * Errors: -ENOMEM, -EINVAL (alloc or free missing, or a reserved field
+ * set).
  */
-int skep_new(skep_ctx **ctx);
+int skep_new(const struct skep_allocator *allocator, skep_ctx **ctx);
 
 /*
  * Free the context. The dongle is the caller's: libskep does not close it.

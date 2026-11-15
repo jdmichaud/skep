@@ -4,10 +4,12 @@
 #include "skep.h"
 
 #include <poll.h>
+#include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
 
 int skep_header_check(void);
+int skep_header_new(skep_ctx **ctx);
 void skep_header_loop(skep_ctx *ctx, int fd);
 
 int skep_header_check(void) {
@@ -16,6 +18,26 @@ int skep_header_check(void) {
   value.type = SKEP_TYPE_UINT8;
   value.v.u = 1;
   return target.endpoint + value.type + SKEP_EVENT_STARTED;
+}
+
+/* An allocator as a C program would write one. */
+static void *check_alloc(void *ctx, size_t size, size_t alignment) {
+  void *ptr;
+  (void)ctx;
+  if (alignment < sizeof(void *)) alignment = sizeof(void *);
+  return posix_memalign(&ptr, alignment, size) == 0 ? ptr : NULL;
+}
+
+static void check_free(void *ctx, void *ptr, size_t size, size_t alignment) {
+  (void)ctx;
+  (void)size;
+  (void)alignment;
+  free(ptr);
+}
+
+int skep_header_new(skep_ctx **ctx) {
+  struct skep_allocator allocator = { .alloc = check_alloc, .free = check_free };
+  return skep_new(&allocator, ctx);
 }
 
 static uint64_t now(void) {

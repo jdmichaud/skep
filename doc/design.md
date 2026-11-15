@@ -153,10 +153,32 @@ reviewed before the library is implemented.
   - Zig's `std.log`, whose configuration is global to the program and
     which writes to stderr. Log messages are events of the context they
     come from, filtered by that context's `log-level`;
-  - an allocator of libskep's own kept in a global variable.
+  - an allocator of libskep's own: all memory comes from the context's
+    allocator (below).
 - Events hold copies of what they report and outlive the context they
   came from: an application can free a context and still handle the
   events it took from it.
+- Memory: the application passes an allocator (`struct skep_allocator`)
+  to `skep_new()`, or NULL for `malloc()`. Everything the context
+  allocates, events included, comes from it. Inside libskep, functions
+  that allocate take an `std.mem.Allocator`, as in any Zig code; the
+  context's allocator, wrapped once at creation, is the only one.
+  - Why: tests make each allocation fail in turn through the C API
+    (`std.testing.checkAllAllocationFailures`) to check every `-ENOMEM`
+    path; the C library's allocator is only a default, not a dependency;
+    applications can use an arena or cap a context's memory.
+  - Shape: set per context, like Lua's `lua_newstate()` (SQLite and libuv
+    configure theirs globally). Every function takes a context pointer
+    and gets back the size of the block (Chris Wellons' checklist for C
+    allocator interfaces), and an alignment, which Zig's allocators need
+    and `lua_Alloc` lacks. `alloc` and `free` are required; `realloc` is
+    optional; reserved slots leave room for more. It maps onto
+    `std.mem.Allocator` without loss: `alloc` and `free` directly,
+    `realloc` as `remap`, and resizing in place is refused.
+  - Not chosen: allocating everything up front, sized by options, as
+    TigerBeetle does. It would take allocation failures out of protocol
+    handling, but it caps the number of devices and puts events in fixed
+    slots of the context, so they could not outlive it.
 - Semantic versioning. The soname major number is the ABI version.
   `skep_version()` and the `SKEP_VERSION_*` macros report the version; a
   test checks that the macros match `build.zig.zon`. The header and
