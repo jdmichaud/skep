@@ -5,7 +5,15 @@
   // trust implications.
   .fingerprint = 0x54c31a713eb672f8,
   .minimum_zig_version = "0.17.0",
-  .dependencies = .{},
+  .dependencies = .{
+    // The formatter behind `zig build fmt` and `zig build fmt-check`. A build tool, not a library:
+    // lazy, and only asked for when skep is the project being built (see build.zig).
+    .zigfmt = .{
+      .url = "git+https://github.com/jdmichaud/zigfmt#3d53680e872b49dc83fb27bbe2d765ec5520343b",
+      .hash = "zigfmt-0.2.0-pUVlTQuQBACvCtszc0bxOlQ8H5bB6tneSPWn-MUgRUMk",
+      .lazy = true,
+    },
+  },
   .paths = .{
     "build.zig",
     "build.zig.zon",

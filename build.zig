@@ -1,7 +1,7 @@
 const std = @import("std");
 const manifest = @import("build.zig.zon");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
   const target = b.standardTargetOptions(.{});
   // Release builds (`-Drelease` or `--release`) are always ReleaseSafe: runtime safety checks stay
   // on. This also removes `-Doptimize`, so a build is either debug or ReleaseSafe.
@@ -21,6 +21,33 @@ pub fn build(b: *std.Build) void {
   const unit_tests = b.addTest(.{ .root_module = skep });
   test_step.dependOn(&b.addRunArtifact(unit_tests).step);
   addHeaderChecks(b, test_step, target, optimize, build_options);
+  if (b.isRoot()) {
+    try addFormatSteps(b);
+  }
+}
+
+/// `zig build fmt` formats the Zig code and `zig build fmt-check` checks it, with the zigfmt pinned
+/// in build.zig.zon, so that everyone formats with the same version. Only when skep is the project
+/// being built: projects that depend on skep never fetch zigfmt.
+fn addFormatSteps(b: *std.Build) !void {
+  const zigfmt = try b.dependencyLazy("zigfmt", .{
+    .target = b.graph.host,
+    .optimize = .ReleaseSafe,
+  });
+  const steps = [_]struct { name: []const u8, description: []const u8, args: []const []const u8 }{
+    .{ .name = "fmt", .description = "Format the Zig code", .args = &.{ "." } },
+    .{
+      .name = "fmt-check",
+      .description = "Check that the Zig code is formatted",
+      .args = &.{ "--check", "." },
+    },
+  };
+  for (steps) |step| {
+    const run = b.addRunArtifact(zigfmt.artifact("zigfmt"));
+    run.setCwd(b.path("."));
+    run.addArgs(step.args);
+    b.step(step.name, step.description).dependOn(&run.step);
+  }
 }
 
 /// The headers must compile on their own as strict C99 and as C++, and translate to Zig, which is

@@ -63,6 +63,10 @@ the daemon `skepd` and the command-line tool `skep`.
   `std.heap.DebugAllocator` to catch leaks and misuse, and every parser
   of external input has a fuzz test.
 - No dependencies outside the Zig standard library unless agreed first.
+  The one agreed so far is a build tool, not a library: zigfmt, the
+  formatter, pinned in `build.zig.zon`. It is a lazy dependency, asked
+  for only when skep is the project being built, so projects that use
+  libskep never fetch it.
 
 ## Dongle drivers
 
