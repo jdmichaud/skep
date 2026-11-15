@@ -51,10 +51,12 @@ the daemon `skepd` and the command-line tool `skep`.
   is mostly byte-level protocol code and a single-threaded poll loop. One
   build system produces the libraries, header, pkg-config file, man
   pages, systemd units and static musl binaries.
-- Why not Rust: using our own C API from Rust needs a `-sys` crate and
-  `unsafe` wrappers around our own code, and a Rust static library cannot
-  be linked into a Rust binary without duplicate standard library symbols,
-  which forces dynamic linking.
+- Why not Rust: using our own C API from Rust means bindgen declarations
+  and `unsafe` calls into our own code, and Rust's safety stops at that
+  boundary, which skepd crosses on every call. Linking is not the
+  obstacle: skepd could link libskep as an rlib and call its exported C
+  functions without duplicating the standard library. The choice rests
+  on the points above, not on Rust being unable to do it.
 - Zig gives fewer safety guarantees than Rust, and we parse input that
   anything in radio range can send. To compensate: release builds use
   `ReleaseSafe` (bounds and overflow checks stay on), tests use
