@@ -165,8 +165,8 @@ reviewed before the library is implemented.
   Options are strings so that they map directly to a configuration file. Nothing else in
   `skep.h` depends on the dongle.
 - Devices are identified by their IEEE address, which never changes.
-- Requests to devices (read, write, configure reporting, bind, commands)
-  are asynchronous. Each returns a request id and ends with exactly one
+- Requests (read, write, configure reporting, bind, commands, but also
+  opening the join window and removing a device) are asynchronous. Each returns a request id and ends with exactly one
   `SKEP_EVENT_REQUEST_DONE` event, which carries the whole result: an
   errno value for delivery, the device's status, and for requests about
   attributes, the status (and value, for reads) of each attribute in the

@@ -349,6 +349,10 @@ int skep_event_get_error(const skep_event *event);
  *   skep_bind(), skep_unbind()
  *       The ZDO status of the Bind or Unbind response, for instance 0x8c
  *       (TABLE_FULL).
+ *   skep_remove_device()
+ *       The ZDO status of the Leave response.
+ *   skep_permit_join()
+ *       Always 0: no device answers.
  */
 uint8_t skep_event_get_status(const skep_event *event);
 
@@ -502,11 +506,14 @@ int skep_get_network(skep_ctx *ctx, uint8_t *channel, uint16_t *pan_id, uint64_t
 
 /*
  * Let new devices join for the given number of seconds (at most 254), or
- * close the window with 0. SKEP_EVENT_PERMIT_JOIN reports the change.
+ * close the window with 0. A request like those under Requests: it ends
+ * with SKEP_EVENT_REQUEST_DONE once the dongle has opened or closed the
+ * window and told the routers, and SKEP_EVENT_PERMIT_JOIN reports the
+ * change.
  *
  * Errors: -ENETDOWN, -EINVAL (more than 254 seconds).
  */
-int skep_permit_join(skep_ctx *ctx, unsigned seconds);
+int skep_permit_join(skep_ctx *ctx, unsigned seconds, uint32_t *request);
 
 /* Devices ---------------------------------------------------------------- */
 
@@ -569,12 +576,14 @@ int skep_device_get_clusters(skep_ctx *ctx, uint64_t device, uint8_t endpoint,
                              size_t *count);
 
 /*
- * Ask the device to leave the network and forget it.
- * SKEP_EVENT_DEVICE_LEFT follows.
+ * Ask the device to leave the network and forget it. A request like those
+ * under Requests, waiting for a sleepy device to wake up. When it ends,
+ * the device is forgotten even if it did not answer, since a device that
+ * is broken or gone never will, and SKEP_EVENT_DEVICE_LEFT follows.
  *
  * Errors: -ENODEV, -ENETDOWN.
  */
-int skep_remove_device(skep_ctx *ctx, uint64_t device);
+int skep_remove_device(skep_ctx *ctx, uint64_t device, uint64_t deadline, uint32_t *request);
 
 /* Requests --------------------------------------------------------------- */
 
