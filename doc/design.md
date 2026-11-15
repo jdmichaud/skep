@@ -332,6 +332,10 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   applications?
 - Convenience functions for common commands (On/Off, Level Control,
   Color Control), or only the generic `skep_send_command()`?
+- Wall-clock time: some devices read the current time from the
+  coordinator (Time cluster). libskep only knows a monotonic clock, so the
+  application would have to pass the wall-clock time as well. None of the
+  version 1 devices is known to need it.
 
 ## References
 
