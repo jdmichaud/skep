@@ -23,6 +23,12 @@
   iterations; without a limit it runs until stopped. Fuzz in ReleaseSafe:
   with Zig 0.17, fuzzing a debug build fails with "corrupted coverage
   file ... pcs_len was zero".
+- CI (GitHub Actions, `.github/workflows/ci.yml`) runs the tests in both
+  modes and a million fuzz iterations on every push and pull request,
+  with the Zig version of `minimum_zig_version`. It does not check the
+  formatting, since zigfmt is not available to it: the pre-commit hook
+  and `release.sh` do. On a tag, it also publishes the release (see
+  below).
 
 ## Releasing
 

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Without a version, setup-zig installs the minimum_zig_version of
+      # build.zig.zon, so Zig stays pinned in one place.
+      - uses: mlugg/setup-zig@v2
+      - run: zig build test
+      - run: zig build test -Drelease
+      # Fuzzing needs ReleaseSafe with Zig 0.17 (see doc/development.md).
+      - run: zig build test -Drelease --fuzz=1M
+      # Formatting is not checked here: zigfmt is not available to CI.
+      # The pre-commit hook and release.sh check it.
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Take the release notes from CHANGELOG.md
+        run: |
+          awk -v tag="$GITHUB_REF_NAME" '
+            index($0, "## [" tag "]") == 1 { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if ! grep -q . RELEASE_NOTES.md; then
+            echo "CHANGELOG.md has no notes for $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
