@@ -133,6 +133,10 @@ attribute details come from the Zigbee2MQTT device definitions
   - ActivePower: every 5–3600 s, or on a change of 10 (1 W);
   - RMSCurrent: every 5–3600 s, or on a change of 50 (0.05 A);
   - RMSVoltage: every 5–3600 s, or on a change of 5 (0.5 V).
+- No reporting is configured for the energy total
+  (CurrentSummationDelivered), and Zigbee2MQTT does not poll it either.
+  To check on the hardware whether the plug reports it by itself; if not,
+  skep has to read it periodically.
 - Manufacturer-specific cluster 0xFF03, manufacturer code 0x1233
   (ThirdReality's assigned code, unlike the 0x1407 used by the sensor and
   the ZL4 bulb), all attributes writable:
