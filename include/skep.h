@@ -256,6 +256,10 @@ int skep_advance(skep_ctx *ctx, uint64_t now);
 
 typedef struct skep_event skep_event;
 
+/*
+ * Newer versions of libskep add event types. Applications must ignore
+ * (and free) events of a type they do not know.
+ */
 enum skep_event_type {
   /* The network is up. */
   SKEP_EVENT_STARTED = 1,

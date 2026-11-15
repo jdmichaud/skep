@@ -200,7 +200,10 @@ reviewed before the library is implemented.
     TigerBeetle does. It would take allocation failures out of protocol
     handling, but it caps the number of devices and puts events in fixed
     slots of the context, so they could not outlive it.
-- Semantic versioning. The soname major number is the ABI version.
+- Semantic versioning. The soname major number is the ABI version. Minor
+  versions may add functions, options and event types; applications must
+  ignore event types they do not know, so that a new event is not an ABI
+  break.
   `skep_version()` and the `SKEP_VERSION_*` macros report the version; a
   test checks that the macros match `build.zig.zon`. The header and
   `libskep.pc` are installed. Both a static and a shared library are
