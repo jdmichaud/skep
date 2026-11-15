@@ -129,7 +129,8 @@ void skep_free(skep_ctx *ctx);
  *
  * Used only when a new network is formed (no network on the dongle and no
  * imported state):
- *   channel          11 to 26, or "auto" to pick a quiet one. Default: "auto".
+ *   channel          11 to 26. Default: 15, which lies between Wi-Fi
+ *                    channels 1 and 6.
  *   pan-id           16-bit PAN ID in hexadecimal. Default: random.
  *   extended-pan-id  64-bit extended PAN ID in hexadecimal. Default: random.
  *   network-key      128-bit network key in hexadecimal. Default: random.
