@@ -274,7 +274,10 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
 - The network key and the exported state are readable by their owner
   only. libskep hands the state to the caller; storing it safely is
   skepd's job.
-- Devices can join only during an explicit, time-limited permit window.
+- New devices can join only during an explicit, time-limited permit
+  window. Devices already in the network may rejoin at any time, for
+  instance a sensor whose parent router was switched off: closing the
+  window must not cut them off.
 
 ## Milestones
 
