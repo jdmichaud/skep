@@ -14,9 +14,9 @@
 
 ## Building and testing
 
-- `zig build test` runs the unit tests and checks `include/skep.h`: it
-  must compile as strict C99 and as C++, translate to Zig, and carry the
-  version from `build.zig.zon`.
+- `zig build test` runs the unit tests and checks the headers in
+  `include/`: they must compile as strict C99 and as C++, translate to
+  Zig, and `skep.h` must carry the version from `build.zig.zon`.
 - `zig build test -Drelease` does the same in ReleaseSafe, the mode of
   release builds. The build offers no other optimize mode.
 - `zig build test --fuzz=1M -Drelease` runs the fuzz tests for a million

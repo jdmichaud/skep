@@ -23,8 +23,8 @@ pub fn build(b: *std.Build) void {
   addHeaderChecks(b, test_step, target, optimize, build_options);
 }
 
-/// skep.h must compile on its own as strict C99 and as C++, and translate to Zig, which is how
-/// skepd uses it.
+/// The headers must compile on their own as strict C99 and as C++, and translate to Zig, which is
+/// how skepd uses them.
 fn addHeaderChecks(
   b: *std.Build,
   test_step: *std.Build.Step,

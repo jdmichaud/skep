@@ -241,7 +241,7 @@ reviewed before the library is implemented.
     no change to the API or to applications. Passing vendor protocols
     through would leave their decoding to every application.
   - Cost: applications need to know the ZCL (cluster ids, units such as
-    0.01 °C). Virtual attribute ids are documented for each device and
+    0.01 °C). Virtual attribute ids are named in `<skep/zcl.h>` and
     cannot change once released. What applications see is not always
     what went over the air, so libskep's debug log shows frames as
     received.
@@ -267,6 +267,24 @@ reviewed before the library is implemented.
   libskep can avoid them in virtual attributes. A function that decodes
   them element by element can be added in a minor version if a device
   needs it.
+- `<skep/zcl.h>`, included by `skep.h`, names the clusters, attributes
+  and commands libskep knows, with each attribute's type and unit and
+  each command's arguments next to its name, as
+  `<linux/input-event-codes.h>` does for the generic evdev API. It names
+  virtual attributes too, which makes visible that their ids are part of
+  the API.
+  - Enums, one for each cluster's attributes and one for its commands,
+    since a command id means something different in each cluster.
+    Unlike macros, enum names survive in debuggers and in the
+    translation to Zig.
+  - A header of its own, so that `skep.h` stays about the API.
+  - Why names rather than a function for each command: the ids are fixed
+    by the ZCL specification, so names cost nothing in the ABI and can be
+    added in any minor version, while every function would stay in the
+    ABI for good, and no small set of functions covers the commands
+    (On/Off, Level Control and Color Control alone have over 30). With
+    typed arguments, functions would only save typing: the encoding a
+    device needs is done by `skep_send_command()` either way.
 - libskep interviews and sets up new devices itself, using the device
   tables, and reports `SKEP_EVENT_DEVICE_READY` when done.
   - A sleepy sensor stays awake for a few seconds after joining, often
@@ -339,11 +357,11 @@ reviewed before the library is implemented.
   break. Structs that applications fill in end with reserved fields that
   must be 0, so that fields can be added without changing their size.
   `skep_version()` and the `SKEP_VERSION_*` macros report the version; a
-  test checks that the macros match `build.zig.zon`. The header and
-  `libskep.pc` are installed. Both a static and a shared library are
-  built.
-- The build checks that `skep.h` compiles as strict C99 and as C++, and
-  that it translates to Zig.
+  test checks that the macros match `build.zig.zon`. The headers
+  (`skep.h`, `skep/zcl.h`) and `libskep.pc` are installed. Both a static
+  and a shared library are built.
+- The build checks that the headers compile on their own as strict C99
+  and as C++, and that they translate to Zig.
 
 ## skepd
 
@@ -475,8 +493,6 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   both read and write: networks could then move between skep, ZHA and
   Zigbee2MQTT. It does not hold what libskep knows about devices, which
   would have to extend it or be stored next to it.
-- Convenience functions for common commands (On/Off, Level Control,
-  Color Control), or only the generic `skep_send_command()`?
 - Wall-clock time: some devices read the current time from the
   coordinator (Time cluster). libskep only knows a monotonic clock, so the
   application would have to pass the wall-clock time as well. None of the

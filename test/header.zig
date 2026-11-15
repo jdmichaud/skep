@@ -21,6 +21,9 @@ test "skep.h translates to Zig" {
   try std.testing.expectEqual(1, c.SKEP_EVENT_STARTED);
   try std.testing.expectEqual(12, c.SKEP_EVENT_DEVICE_SETUP_FAILED);
   try std.testing.expectEqual(0x29, c.SKEP_TYPE_INT16);
+  try std.testing.expectEqual(0x0b04, c.SKEP_CLUSTER_ELECTRICAL);
+  try std.testing.expectEqual(0x0a, c.SKEP_CMD_COLOR_MOVE_TO_COLOR_TEMPERATURE);
+  try std.testing.expectEqual(0x4003, c.SKEP_ATTR_ON_OFF_START_UP_ON_OFF);
   var target = std.mem.zeroes(c.struct_skep_target);
   target.device = 1;
   target.endpoint = 1;

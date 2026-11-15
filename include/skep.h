@@ -40,6 +40,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "skep/zcl.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -628,7 +630,7 @@ int skep_permit_join(skep_ctx *ctx, unsigned seconds, uint32_t *request);
  *   known to report them wrongly, for instance with a wrong scale factor;
  * - vendor protocols that bypass the ZCL, such as Tuya's datapoints, are
  *   translated into standard clusters and attributes, or into virtual
- *   attributes of the vendor's cluster, documented for each device.
+ *   attributes of the vendor's cluster, named in skep/zcl.h.
  *   Reads, writes, reports and commands about them are translated to and
  *   from the device's own protocol;
  * - the endpoints and clusters of a device are libskep's view of it: they
@@ -803,11 +805,12 @@ int skep_unbind(skep_ctx *ctx, const struct skep_target *target, uint64_t deadli
                 uint32_t *request);
 
 /*
- * Send a cluster-specific command with its arguments, for instance On/Off
- * "on" (cluster 0x0006, command 0x01, no arguments) or Level Control
- * "move to level" (cluster 0x0008, command 0x00: a uint8 level and a
- * uint16 transition time). libskep encodes the arguments in order, as
- * their types say. For the commands it knows, it checks the arguments
+ * Send a cluster-specific command with its arguments, for instance
+ * SKEP_CMD_ON_OFF_ON (no arguments) or SKEP_CMD_LEVEL_MOVE_TO_LEVEL (a
+ * uint8 level and a uint16 transition time), with the target's cluster
+ * set to SKEP_CLUSTER_ON_OFF or SKEP_CLUSTER_LEVEL. skep/zcl.h lists the
+ * commands and their arguments. libskep encodes the arguments in order,
+ * as their types say. For the commands it knows, it checks the arguments
  * against the command's fields and encodes them the way the device
  * expects: optional fields at the end may be left out, and libskep leaves
  * out those a device is known to reject.

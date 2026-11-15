@@ -9,15 +9,30 @@
 #include <unistd.h>
 
 int skep_header_check(void);
+int skep_header_send(skep_ctx *ctx, uint64_t bulb);
 int skep_header_new(skep_ctx **ctx);
 void skep_header_loop(skep_ctx *ctx, int fd);
 
 int skep_header_check(void) {
-  struct skep_target target = { .device = 0x0011223344556677u, .endpoint = 1, .cluster = 0x0006 };
+  struct skep_target target = {
+    .device = 0x0011223344556677u, .endpoint = 1, .cluster = SKEP_CLUSTER_ON_OFF,
+  };
   struct skep_value value;
   value.type = SKEP_TYPE_UINT8;
   value.v.u = 1;
   return target.endpoint + value.type + SKEP_EVENT_STARTED;
+}
+
+/* A command as a C program would send one, with the names of skep/zcl.h. */
+int skep_header_send(skep_ctx *ctx, uint64_t bulb) {
+  struct skep_target target = { .device = bulb, .endpoint = 1, .cluster = SKEP_CLUSTER_LEVEL };
+  struct skep_value arguments[] = {
+    { .type = SKEP_TYPE_UINT8, .v.u = 128 }, /* level */
+    { .type = SKEP_TYPE_UINT16, .v.u = 10 }, /* transition time: 1 s */
+  };
+  uint32_t request;
+  return skep_send_command(ctx, &target, SKEP_CMD_LEVEL_MOVE_TO_LEVEL, arguments, 2,
+                           SKEP_NO_DEADLINE, &request);
 }
 
 /* An allocator as a C program would write one. */
