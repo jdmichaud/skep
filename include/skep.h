@@ -283,15 +283,15 @@ enum skep_event_type {
   /* A device left the network or was removed. */
   SKEP_EVENT_DEVICE_LEFT = 6,
   /*
-   * Attribute values from a device: a report, or the answer to
-   * skep_read_attributes() (then skep_event_get_request() is non-zero).
+   * Attribute values a device reported by itself. Answers to
+   * skep_read_attributes() come in SKEP_EVENT_REQUEST_DONE instead.
    */
   SKEP_EVENT_ATTRIBUTES = 7,
   /* A cluster command sent by a device, for instance by a remote. */
   SKEP_EVENT_COMMAND = 8,
   /*
    * A request finished. Every request ends with exactly one such event,
-   * after any SKEP_EVENT_ATTRIBUTES it produced.
+   * which carries its result.
    */
   SKEP_EVENT_REQUEST_DONE = 9,
   /* A diagnostic message, see skep_event_get_log(). */
@@ -328,19 +328,30 @@ uint64_t skep_event_get_device(const skep_event *event);
  * SKEP_EVENT_REQUEST_DONE: whether the request was delivered and answered:
  * 0 if it was, otherwise for instance -ETIMEDOUT (no answer) or
  * -EHOSTUNREACH (device not reachable). What the device thought of the
- * request is its ZCL status.
+ * request is its status.
  */
 int skep_event_get_error(const skep_event *event);
 
 /*
- * SKEP_EVENT_REQUEST_DONE: ZCL status the device answered with, 0
- * (SUCCESS) if it reported no error, for instance 0x86
- * (UNSUPPORTED_ATTRIBUTE) or 0x81 (UNSUP_COMMAND). Only meaningful when
- * skep_event_get_error() is 0.
+ * SKEP_EVENT_REQUEST_DONE: the status the device answered with, 0 for
+ * success. Only meaningful when skep_event_get_error() is 0. Which status
+ * it is depends on the request:
+ *
+ *   skep_read_attributes(), skep_write_attributes(),
+ *   skep_configure_reporting()
+ *       0, or the ZCL status of a Default Response rejecting the whole
+ *       request, for instance 0xc3 (UNSUPPORTED_CLUSTER). The status of
+ *       each attribute is in the event's attributes.
+ *   skep_send_command()
+ *       The ZCL status of the device's Default Response, for instance
+ *       0x81 (UNSUP_COMMAND); 0 if it sent none.
+ *   skep_bind(), skep_unbind()
+ *       The ZDO status of the Bind or Unbind response, for instance 0x8c
+ *       (TABLE_FULL).
  */
-uint8_t skep_event_get_zcl_status(const skep_event *event);
+uint8_t skep_event_get_status(const skep_event *event);
 
-/* SKEP_EVENT_REQUEST_DONE and SKEP_EVENT_ATTRIBUTES: the request id. */
+/* SKEP_EVENT_REQUEST_DONE: the request id. */
 uint32_t skep_event_get_request(const skep_event *event);
 
 /*
@@ -426,17 +437,17 @@ struct skep_value {
 /* An attribute and its value. */
 struct skep_attribute {
   uint16_t id;
-  /* ZCL status of this attribute in a read response: 0 (SUCCESS), or for
-   * instance 0x86 (UNSUPPORTED_ATTRIBUTE), in which case value is not set.
-   * Always 0 in reports. Ignored when writing. */
+  /* In the result of a request, the ZCL status of this attribute: 0
+   * (SUCCESS), or for instance 0x86 (UNSUPPORTED_ATTRIBUTE) or 0x88
+   * (READ_ONLY). Always 0 in reports. Ignored when writing. */
   uint8_t status;
   struct skep_value value;
   uint64_t reserved[2]; /* for later versions; must be 0 */
 };
 
 /*
- * SKEP_EVENT_ATTRIBUTES: number of attributes in the event, and the
- * attribute at index (0 to count - 1).
+ * SKEP_EVENT_ATTRIBUTES and SKEP_EVENT_REQUEST_DONE: number of attributes
+ * in the event, and the attribute at index (0 to count - 1).
  *
  * Errors of skep_event_get_attribute: -EINVAL (index out of range).
  */
@@ -593,11 +604,19 @@ struct skep_target {
   uint32_t reserved[4]; /* for later versions; must be 0 */
 };
 
-/* Read attributes. The values arrive in one SKEP_EVENT_ATTRIBUTES. */
+/*
+ * Read attributes. SKEP_EVENT_REQUEST_DONE holds one attribute per id, in
+ * the same order, each with its status and, if the status is 0, its
+ * value.
+ */
 int skep_read_attributes(skep_ctx *ctx, const struct skep_target *target, const uint16_t *ids,
                          size_t count, uint32_t *request);
 
-/* Write attributes. The status field of each attribute is ignored. */
+/*
+ * Write attributes. The status field of each attribute is ignored.
+ * SKEP_EVENT_REQUEST_DONE holds one attribute per attribute written, in
+ * the same order, each with its status and no value.
+ */
 int skep_write_attributes(skep_ctx *ctx, const struct skep_target *target,
                           const struct skep_attribute *attributes, size_t count,
                           uint32_t *request);
@@ -614,7 +633,11 @@ struct skep_reporting {
   uint64_t reserved[2]; /* for later versions; must be 0 */
 };
 
-/* Configure attribute reporting. */
+/*
+ * Configure attribute reporting. SKEP_EVENT_REQUEST_DONE holds one
+ * attribute per configuration, in the same order, each with its status
+ * and no value.
+ */
 int skep_configure_reporting(skep_ctx *ctx, const struct skep_target *target,
                              const struct skep_reporting *reporting, size_t count,
                              uint32_t *request);

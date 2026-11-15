@@ -147,7 +147,7 @@ reviewed before the library is implemented.
   failure (`-EINVAL`, `-ETIMEDOUT`, `-ENETDOWN`, ...), as libsystemd,
   libinput and liburing do. `strerror(-r)` describes an error; there are
   no skep-specific error codes to learn. A device's answer to a request
-  is not an error code: its ZCL status is reported separately.
+  is not an error code: its status is reported separately.
 - The application chooses the driver and the parameters of a new network
   with `skep_set_option()` before `skep_start()`; only the log level can
   be changed later, so that a running skepd can be made more verbose.
@@ -156,7 +156,13 @@ reviewed before the library is implemented.
 - Devices are identified by their IEEE address, which never changes.
 - Requests to devices (read, write, configure reporting, bind, commands)
   are asynchronous. Each returns a request id and ends with exactly one
-  `SKEP_EVENT_REQUEST_DONE` event.
+  `SKEP_EVENT_REQUEST_DONE` event, which carries the whole result: an
+  errno value for delivery, the device's status, and for requests about
+  attributes, the status (and value, for reads) of each attribute in the
+  order asked. The meaning of the status is documented per request,
+  since ZCL and ZDO statuses differ. ZCL responses list only the
+  attributes that failed; libskep fills in the others, so that
+  applications need not match ids.
 - libskep interviews and sets up new devices itself, using the device
   tables, and reports `SKEP_EVENT_DEVICE_READY` when done.
 - libskep also answers devices on the coordinator's behalf, without the
@@ -330,7 +336,8 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   both read and write: networks could then move between skep, ZHA and
   Zigbee2MQTT. It does not hold what libskep knows about devices, which
   would have to extend it or be stored next to it.
-- Values from devices: `SKEP_EVENT_ATTRIBUTES` carries raw ZCL values.
+- Values from devices: attribute values in events (reports and read
+  results) are raw ZCL values.
   Should libskep also apply the device tables' corrections and units (the
   Smart Plug E2's voltage in volts, for instance), or leave that to
   applications?
