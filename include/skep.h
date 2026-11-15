@@ -293,7 +293,13 @@ enum skep_event_type {
   SKEP_EVENT_STOPPED = 2,
   /* The join window opened or closed. See skep_event_get_duration(). */
   SKEP_EVENT_PERMIT_JOIN = 3,
-  /* A device joined the network. libskep now interviews and sets it up. */
+  /*
+   * A device joined the network: a new one, or a known one joining afresh
+   * after a factory reset, which lost its bindings and reporting. libskep
+   * now interviews and sets it up. A known device rejoining, for instance
+   * after losing its parent, keeps its setup and causes no event, even if
+   * its network address changed.
+   */
   SKEP_EVENT_DEVICE_JOINED = 4,
   /*
    * A device has been interviewed and set up (bindings and reporting
@@ -303,7 +309,13 @@ enum skep_event_type {
    * may take hours.
    */
   SKEP_EVENT_DEVICE_READY = 5,
-  /* A device left the network or was removed. */
+  /*
+   * A device left the network, by itself or after skep_remove_device().
+   * libskep keeps a device that left by itself: it may come back, and a
+   * report of a leave is not always final (a device that loses its parent
+   * may be reported as gone, then rejoin). Only skep_remove_device()
+   * forgets a device.
+   */
   SKEP_EVENT_DEVICE_LEFT = 6,
   /*
    * Attribute values a device reported by itself. Answers to

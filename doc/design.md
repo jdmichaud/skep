@@ -218,6 +218,13 @@ reviewed before the library is implemented.
   - Each device records the version of the device table entry it was set
     up with. When the entry changes, for instance with a new libskep that
     corrects a reporting interval, the setup is redone.
+- Devices come and go. A device that rejoins (it lost its parent, or its
+  network address changed) keeps its setup; one that joins afresh after a
+  factory reset is set up again, as it lost its bindings and reporting.
+  The dongle tells them apart: a fresh join is an association, a rejoin
+  a rejoin request, and EZSP reports the two differently. A device that leaves stays known until the
+  application removes it, because leave reports are not always final and
+  a device that comes back should keep its identity and setup.
 - libskep also answers devices on the coordinator's behalf, without the
   application: a ZCL Default Response where the frame asks for one, reads
   of the coordinator's own clusters (Basic), and "no image available" to
