@@ -611,6 +611,22 @@ int skep_permit_join(skep_ctx *ctx, unsigned seconds, uint32_t *request);
 /* Devices ---------------------------------------------------------------- */
 
 /*
+ * libskep presents every device as the ZCL describes it, whatever the
+ * device does over the air:
+ * - values in events and read results are corrected where the device is
+ *   known to report them wrongly, for instance with a wrong scale factor;
+ * - vendor protocols that bypass the ZCL, such as Tuya's datapoints, are
+ *   translated into standard clusters and attributes, or into virtual
+ *   attributes of the vendor's cluster, documented for each device.
+ *   Reads, writes, reports and commands about them are translated to and
+ *   from the device's own protocol;
+ * - the endpoints and clusters of a device are libskep's view of it: they
+ *   may include clusters the device does not advertise, and leave out
+ *   those of a vendor protocol.
+ * So a new libskep can support new devices without changes to this API.
+ */
+
+/*
  * IEEE addresses of the known devices. Stores up to capacity addresses in
  * devices and the total number of devices in *count, so that a first call
  * with capacity 0 tells how much room is needed.

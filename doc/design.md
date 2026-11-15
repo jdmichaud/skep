@@ -228,6 +228,28 @@ reviewed before the library is implemented.
   since ZCL and ZDO statuses differ. ZCL responses list only the
   attributes that failed; libskep fills in the others, so that
   applications need not match ids.
+- libskep presents every device as the ZCL describes it. Values in events
+  and read results are corrected where a device is known to report them
+  wrongly (the Smart Plug E2's scale factors). Vendor protocols that
+  bypass the ZCL, such as Tuya's datapoints carried in commands of
+  cluster 0xEF00, are translated into standard clusters and attributes,
+  or into virtual attributes of the vendor's cluster where the ZCL has no
+  equivalent. The endpoints and clusters of a device are libskep's view
+  of it, which may differ from what the device advertises. zigpy's quirks
+  do the same for ZHA.
+  - Why: support for new devices is then a change inside libskep, with
+    no change to the API or to applications. Passing vendor protocols
+    through would leave their decoding to every application.
+  - Cost: applications need to know the ZCL (cluster ids, units such as
+    0.01 °C). Virtual attribute ids are documented for each device and
+    cannot change once released. What applications see is not always
+    what went over the air, so libskep's debug log shows frames as
+    received.
+  - Not chosen for now: an API of named features in physical units
+    ("brightness", "temperature" in °C), like Zigbee2MQTT's. It would
+    spare applications the ZCL, but its vocabulary would become the
+    stable API, and it is a large design. It can be added later, in a
+    minor version, on top of the same model.
 - libskep interviews and sets up new devices itself, using the device
   tables, and reports `SKEP_EVENT_DEVICE_READY` when done.
   - A sleepy sensor stays awake for a few seconds after joining, often
@@ -360,10 +382,19 @@ In scope:
 - events for attribute reports, joins and leaves;
 - a device registry with friendly names, and a network backup.
 
-Device-specific knowledge (which clusters to bind and report, reporting
-intervals, manufacturer-specific attributes, and corrections for values a
-device reports wrongly, such as scale factors) is kept in small data
-tables, not in per-device code.
+Device-specific knowledge lives in libskep, written once for each device:
+which clusters to bind and report, reporting intervals,
+manufacturer-specific attributes, corrections for values a device reports
+wrongly (such as scale factors), and translations of vendor protocols.
+Most of it is data, but not all of it can be. Of Zigbee2MQTT's 4,618
+device definitions (zigbee-herdsman-converters 26.125.0, by a rough scan
+of its TypeScript), about 40 % use only generic building blocks and
+standard converters; the rest rely on vendor code, such as Tuya's
+datapoints or encodings like the T2's effect colours. Most of that code
+is shared by a vendor's devices. So device entries are data, and refer by
+name to the encodings and quirks implemented in libskep. The format of
+the entries is internal, settled with the first devices, and can change
+without affecting the API.
 
 Not in version 1: MQTT (possible later as a separate bridge speaking
 skep-protocol), OTA firmware updates, groups and scenes, Touchlink, Green
@@ -422,11 +453,6 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   both read and write: networks could then move between skep, ZHA and
   Zigbee2MQTT. It does not hold what libskep knows about devices, which
   would have to extend it or be stored next to it.
-- Values from devices: attribute values in events (reports and read
-  results) are raw ZCL values.
-  Should libskep also apply the device tables' corrections and units (the
-  Smart Plug E2's voltage in volts, for instance), or leave that to
-  applications?
 - Convenience functions for common commands (On/Off, Level Control,
   Color Control), or only the generic `skep_send_command()`?
 - Wall-clock time: some devices read the current time from the
