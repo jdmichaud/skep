@@ -85,6 +85,11 @@ attribute details come from the Zigbee2MQTT device definitions
   - 0x0523: read by Zigbee2MQTT during setup, meaning unknown.
   - More attributes (on/off fade durations) are defined in
     `src/lib/lumi.ts` of zigbee-herdsman-converters.
+- Reporting: Zigbee2MQTT configures none for this bulb (its `lumiLight`
+  extend leaves the generic light's `configureReporting` off), so the bulb
+  may not report changes of on/off, level or colour by itself. To check on
+  the hardware; if it does not, its state has to be read back after each
+  command, and changes made by another controller go unnoticed.
 
 ## ThirdReality Smart Color Bulb ZL4, E27 (3RCB02070Z), candidate
 
