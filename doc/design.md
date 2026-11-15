@@ -203,7 +203,8 @@ reviewed before the library is implemented.
 - Semantic versioning. The soname major number is the ABI version. Minor
   versions may add functions, options and event types; applications must
   ignore event types they do not know, so that a new event is not an ABI
-  break.
+  break. Structs that applications fill in end with reserved fields that
+  must be 0, so that fields can be added without changing their size.
   `skep_version()` and the `SKEP_VERSION_*` macros report the version; a
   test checks that the macros match `build.zig.zon`. The header and
   `libskep.pc` are installed. Both a static and a shared library are

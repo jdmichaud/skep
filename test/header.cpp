@@ -4,7 +4,10 @@
 extern "C" int skep_header_check_cxx();
 
 int skep_header_check_cxx() {
-  skep_target target = { 0x0011223344556677u, 1, 0x0006, 0 };
+  skep_target target = {};
+  target.device = 0x0011223344556677u;
+  target.endpoint = 1;
+  target.cluster = 0x0006;
   skep_value value;
   value.type = SKEP_TYPE_UINT8;
   value.v.u = 1;

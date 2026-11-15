@@ -431,6 +431,7 @@ struct skep_attribute {
    * Always 0 in reports. Ignored when writing. */
   uint8_t status;
   struct skep_value value;
+  uint64_t reserved[2]; /* for later versions; must be 0 */
 };
 
 /*
@@ -572,8 +573,14 @@ int skep_remove_device(skep_ctx *ctx, uint64_t device);
  * Requests to sleepy end devices are delivered when the device next
  * wakes up, which can take minutes.
  *
+ * struct skep_target, struct skep_attribute and struct skep_reporting end
+ * with reserved fields, so that later versions can add fields without
+ * changing their size, which arrays of them depend on. Zero the whole
+ * struct before setting the fields you use.
+ *
  * Errors of all requests: -ENODEV (unknown device), -ENETDOWN,
- * -EINVAL, -ENOBUFS (too many requests pending).
+ * -EINVAL (including a reserved field that is not 0), -ENOBUFS (too many
+ * requests pending).
  */
 
 struct skep_target {
@@ -583,6 +590,7 @@ struct skep_target {
   /* 0 for standard attributes and commands, otherwise the manufacturer
    * code of a manufacturer-specific cluster, attribute or command. */
   uint16_t manufacturer_code;
+  uint32_t reserved[4]; /* for later versions; must be 0 */
 };
 
 /* Read attributes. The values arrive in one SKEP_EVENT_ATTRIBUTES. */
@@ -603,6 +611,7 @@ struct skep_reporting {
   /* Change that triggers a report, for analog types (integers, floats);
    * its type is the attribute's. Ignored for discrete types. */
   struct skep_value change;
+  uint64_t reserved[2]; /* for later versions; must be 0 */
 };
 
 /* Configure attribute reporting. */

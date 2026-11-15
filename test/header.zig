@@ -20,13 +20,12 @@ test "skep.h translates to Zig" {
   try std.testing.expectEqual(1, c.SKEP_EVENT_STARTED);
   try std.testing.expectEqual(11, c.SKEP_EVENT_STATE_CHANGED);
   try std.testing.expectEqual(0x29, c.SKEP_TYPE_INT16);
-  const target: c.struct_skep_target = .{
-    .device = 1,
-    .endpoint = 1,
-    .cluster = 6,
-    .manufacturer_code = 0,
-  };
+  var target = std.mem.zeroes(c.struct_skep_target);
+  target.device = 1;
+  target.endpoint = 1;
+  target.cluster = 6;
   try std.testing.expectEqual(6, target.cluster);
+  try std.testing.expectEqual(4, target.reserved.len);
 }
 
 test "struct skep_allocator translates to Zig" {

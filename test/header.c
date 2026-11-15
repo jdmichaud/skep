@@ -13,7 +13,7 @@ int skep_header_new(skep_ctx **ctx);
 void skep_header_loop(skep_ctx *ctx, int fd);
 
 int skep_header_check(void) {
-  struct skep_target target = { 0x0011223344556677u, 1, 0x0006, 0 };
+  struct skep_target target = { .device = 0x0011223344556677u, .endpoint = 1, .cluster = 0x0006 };
   struct skep_value value;
   value.type = SKEP_TYPE_UINT8;
   value.v.u = 1;
