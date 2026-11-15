@@ -24,6 +24,25 @@
   with Zig 0.17, fuzzing a debug build fails with "corrupted coverage
   file ... pcs_len was zero".
 
+## Releasing
+
+- The version in `build.zig.zon`, repeated by the `SKEP_VERSION_*`
+  macros of `skep.h`, is the version of the next release.
+- A commit that changes the API raises it, unless it has been raised
+  enough since the last release: the minor version for additions, the
+  major version for changes that break the API or the ABI (the minor
+  version while the major version is 0). So the version is right
+  whenever a release is made.
+- `./release.sh` releases it. It refuses a dirty tree, a version that
+  `skep.h` does not repeat, an existing tag and a changelog with nothing
+  under `[Unreleased]`; runs the tests in both modes and the format
+  check; moves the notes under the version and tags that commit with the
+  version (`0.1.0`, no `v`); then raises the version by a patch for the
+  next release (`./release.sh minor` or `major` for more) and commits
+  that. It pushes nothing, and prints the commands that do.
+- Pushing the tag makes CI publish the release, with the version's
+  section of `CHANGELOG.md` as its notes.
+
 ## Developing in a virtual machine
 
 We develop inside a KVM guest while the dongle is plugged into the host.

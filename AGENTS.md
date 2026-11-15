@@ -17,6 +17,8 @@
   commit, and every commit builds and passes the tests on its own.
 - Do not mix unrelated changes, such as a refactoring and a new feature, in
   the same commit.
+- A commit that changes the API raises the version, as described under
+  "Releasing" in `doc/development.md`.
 - Write commit messages for humans: a short summary line (imperative mood,
   at most 72 characters), a blank line, then a body explaining what changed
   and why. Do not explain how; the code shows that.
