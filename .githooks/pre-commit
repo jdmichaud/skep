@@ -1,13 +1,9 @@
 #!/bin/sh
-# Refuse to commit unformatted Zig code (see AGENTS.md).
+# Refuse to commit unformatted Zig code (see AGENTS.md), checked by the
+# zigfmt pinned in build.zig.zon.
 # Enable once per clone with: git config core.hooksPath .githooks
 
-if ! command -v zigfmt >/dev/null 2>&1; then
-    echo "pre-commit: zigfmt not found in PATH" >&2
-    exit 1
-fi
-
-if ! zigfmt --check .; then
-    echo "pre-commit: files above are not formatted, run 'zigfmt .' and stage the result" >&2
+if ! zig build fmt-check; then
+    echo "pre-commit: files above are not formatted, run 'zig build fmt' and stage the result" >&2
     exit 1
 fi

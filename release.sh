@@ -69,8 +69,8 @@ if [ "$gate" = 1 ]; then
     zig build test
     echo "==> zig build test -Drelease"
     zig build test -Drelease
-    echo "==> zigfmt --check ."
-    zigfmt --check .
+    echo "==> zig build fmt-check"
+    zig build fmt-check
 fi
 
 # 4. The release commit and its tag.

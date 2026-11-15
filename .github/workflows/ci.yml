@@ -19,8 +19,7 @@ jobs:
       - run: zig build test -Drelease
       # Fuzzing needs ReleaseSafe with Zig 0.17 (see doc/development.md).
       - run: zig build test -Drelease --fuzz=1M
-      # Formatting is not checked here: zigfmt is not available to CI.
-      # The pre-commit hook and release.sh check it.
+      - run: zig build fmt-check
 
   release:
     if: github.ref_type == 'tag'

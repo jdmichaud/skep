@@ -3,8 +3,8 @@
 ## Tools
 
 - Zig 0.17.0.
-- `zigfmt`, the formatter in `PATH`, configured by `zigfmt.zon`. See
-  `AGENTS.md`.
+- zigfmt, the formatter, which the build fetches (`zig build fmt`),
+  configured by `zigfmt.zon`. See `AGENTS.md`.
 - Enable the pre-commit hook once per clone:
   `git config core.hooksPath .githooks`.
 - On network file systems (sshfs, NFS), keep build outputs on a local
@@ -28,11 +28,9 @@
   build of skep fetches zigfmt and its own dependency from GitHub, into
   `zig-pkg/`.
 - CI (GitHub Actions, `.github/workflows/ci.yml`) runs the tests in both
-  modes and a million fuzz iterations on every push and pull request,
-  with the Zig version of `minimum_zig_version`. It does not check the
-  formatting, since zigfmt is not available to it: the pre-commit hook
-  and `release.sh` do. On a tag, it also publishes the release (see
-  below).
+  modes, a million fuzz iterations and the format check on every push
+  and pull request, with the Zig version of `minimum_zig_version`. On a
+  tag, it also publishes the release (see below).
 
 ## Releasing
 

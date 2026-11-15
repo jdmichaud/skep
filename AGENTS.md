@@ -2,12 +2,13 @@
 
 ## Formatting
 
-- Format Zig code (`.zig` and `.zon` files) with `zigfmt`, the formatter
-  found in `PATH`. Do not use `zig fmt`: the two produce different output.
-- Run it before every commit: `zigfmt .`, then check that
-  `zigfmt --check .` exits with 0. Never commit unformatted code.
-- The style is pinned in `zigfmt.zon`. Do not change it as part of an
-  unrelated commit.
+- Format Zig code (`.zig` and `.zon` files) with `zig build fmt`, which
+  runs the zigfmt pinned in `build.zig.zon`. Do not use `zig fmt`, nor a
+  zigfmt from `PATH`: their output may differ from the pinned version's.
+- Run it before every commit, then check that `zig build fmt-check`
+  succeeds. Never commit unformatted code.
+- The style is pinned in `zigfmt.zon` and the formatter in
+  `build.zig.zon`. Do not change either as part of an unrelated commit.
 - The pre-commit hook in `.githooks/` enforces this. Enable it once per
   clone with `git config core.hooksPath .githooks`.
 
