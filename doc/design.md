@@ -277,6 +277,11 @@ reviewed before the library is implemented.
     (`SKEP_EVENT_DEVICE_SETUP_FAILED`, with the step's error and status).
     libskep does not retry, since the device would most likely reject
     the step again; `skep_setup_device()` starts the setup over.
+  - Steps that the device tables mark as allowed to fail are the
+    exception: a rejection is ignored and the setup goes on. Zigbee2MQTT
+    needs this for Tuya devices, which it asks for six Basic attributes,
+    including 0xFFFE, ignoring an UNSUPPORTED_ATTRIBUTE answer
+    (`configureMagicPacket` in `src/lib/tuya.ts`).
   - Each device records the version of the device table entry it was set
     up with. When the entry changes, for instance with a new libskep that
     corrects a reporting interval, the setup is redone.
