@@ -136,8 +136,9 @@ reviewed before the library is implemented.
   no skep-specific error codes to learn. A device's answer to a request
   is not an error code: its ZCL status is reported separately.
 - The application chooses the driver and the parameters of a new network
-  with `skep_set_option()` before `skep_start()`. Options are strings so
-  that they map directly to a configuration file. Nothing else in
+  with `skep_set_option()` before `skep_start()`; only the log level can
+  be changed later, so that a running skepd can be made more verbose.
+  Options are strings so that they map directly to a configuration file. Nothing else in
   `skep.h` depends on the dongle.
 - Devices are identified by their IEEE address, which never changes.
 - Requests to devices (read, write, configure reporting, bind, commands)

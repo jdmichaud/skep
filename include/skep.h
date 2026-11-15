@@ -114,8 +114,9 @@ int skep_new(const struct skep_allocator *allocator, skep_ctx **ctx);
 void skep_free(skep_ctx *ctx);
 
 /*
- * Set an option. Options can only be set before skep_start(). Values are
- * strings so that they can come straight from a configuration file.
+ * Set an option. Options can only be set before skep_start(), except
+ * log-level, which can be changed at any time. Values are strings so that
+ * they can come straight from a configuration file.
  *
  *   driver           Dongle driver: "ezsp" (Silicon Labs EmberZNet) or
  *                    "sim" (a simulated network that needs no dongle, for
@@ -131,7 +132,7 @@ void skep_free(skep_ctx *ctx);
  *   network-key      128-bit network key in hexadecimal. Default: random.
  *
  * Errors: -ENOENT (unknown option), -EINVAL (invalid value),
- * -EBUSY (already started).
+ * -EBUSY (already started, for options other than log-level).
  */
 int skep_set_option(skep_ctx *ctx, const char *name, const char *value);
 
