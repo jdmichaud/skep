@@ -298,7 +298,9 @@ enum skep_event_type {
   /*
    * A device has been interviewed and set up (bindings and reporting
    * configured from the device tables). Its endpoints and clusters are
-   * known.
+   * known. Setup proceeds while the device is awake: a sensor that falls
+   * asleep half-way is set up further when it is next heard from, which
+   * may take hours.
    */
   SKEP_EVENT_DEVICE_READY = 5,
   /* A device left the network or was removed. */
@@ -510,7 +512,7 @@ const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
  *   center link key and its frame counter, and the link keys of devices
  *   that have their own, with their counters;
  * - the devices: addresses, node descriptors, endpoints, clusters,
- *   manufacturer and model.
+ *   manufacturer and model, and how far their setup has got.
  * libskep never stores it itself; the caller does, and must keep it
  * private (it holds keys, so mode 0600 for a file).
  *

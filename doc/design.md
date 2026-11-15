@@ -207,6 +207,13 @@ reviewed before the library is implemented.
   applications need not match ids.
 - libskep interviews and sets up new devices itself, using the device
   tables, and reports `SKEP_EVENT_DEVICE_READY` when done.
+  - A sleepy sensor stays awake for a few seconds after joining, often
+    not long enough for the whole setup. libskep records how far each
+    device's setup has got, in the state so that a restart does not lose
+    it, and carries on when it next hears from the device.
+  - Each device records the version of the device table entry it was set
+    up with. When the entry changes, for instance with a new libskep that
+    corrects a reporting interval, the setup is redone.
 - libskep also answers devices on the coordinator's behalf, without the
   application: a ZCL Default Response where the frame asks for one, reads
   of the coordinator's own clusters (Basic), and "no image available" to
