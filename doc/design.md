@@ -70,7 +70,7 @@ the daemon `skepd` and the command-line tool `skep`.
   requests with it. Dongles of this kind (Silicon Labs EZSP, TI Z-Stack,
   deCONZ, ...) are interchangeable behind the interface.
 - Initial driver operations:
-  - open, close, reset;
+  - reset the dongle's stack and the link to it;
   - read the network state, form a network (channel, PAN ID, extended
     PAN ID, network key), resume an existing network;
   - permit joining for a number of seconds;
@@ -78,8 +78,10 @@ the daemon `skepd` and the command-line tool `skep`.
   - report events: incoming APS frame, device joined, left or announced,
     send confirmation, stack status change;
   - back up and restore the network parameters and keys.
-- Drivers are internal to libskep and selected at run time by name
-  (`ezsp`, `sim`) together with the device path and serial options.
+- Drivers are internal to libskep and selected at run time by name, with
+  the `driver` option (`ezsp`, `sim`). They never open the dongle or
+  configure the serial port: the caller does, with the settings the driver
+  suggests (`skep_get_serial_defaults()`), and passes the bytes.
 - First drivers: `ezsp` (Silicon Labs EmberZNet NCP over ASH, used by the
   ZBDongle-E) and `sim` (a simulated network for tests). Having two
   drivers from day one keeps the interface honest.
