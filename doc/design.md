@@ -77,6 +77,10 @@ the daemon `skepd` and the command-line tool `skep`.
     PAN ID, network key), resume an existing network;
   - permit joining for a number of seconds;
   - send an APS frame by unicast, multicast (group) or broadcast;
+  - send a ZDO request and receive its response (interview, binding,
+    leave). Not built on APS frames by libskep, because dongles differ:
+    EZSP carries ZDO in APS frames to endpoint 0, while TI's Z-Stack has
+    a command for each ZDO request;
   - report events: incoming APS frame, device joined, left or announced,
     send confirmation, stack status change;
   - back up and restore the network parameters and keys.
