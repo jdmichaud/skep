@@ -136,6 +136,12 @@ reviewed before the library is implemented.
   light switched from a user interface, hours for a setting meant for a
   sensor that wakes up rarely. The protocol's own timers start when bytes
   are written.
+- Requests to sleepy end devices are queued by libskep and sent when the
+  device is next heard from, while it is awake. Its parent buffers frames
+  for it for a few seconds only (7.68 s by default), far less than a
+  sensor sleeps. A newer write or reporting configuration for the same
+  attributes replaces a waiting one, so that a device that has been
+  asleep is not sent outdated settings first.
 - State: what must survive a restart or a new dongle (network parameters
   and keys, device registry) is exported and imported as opaque bytes
   (`skep_export_state()`, `skep_import_state()`). `SKEP_EVENT_STATE_CHANGED`

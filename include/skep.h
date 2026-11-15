@@ -582,8 +582,11 @@ int skep_remove_device(skep_ctx *ctx, uint64_t device);
  * Requests talk to one cluster of one device endpoint. They are
  * asynchronous: each returns at once, stores a non-zero request id in
  * *request, and ends with one SKEP_EVENT_REQUEST_DONE carrying that id.
- * Requests to sleepy end devices are delivered when the device next
- * wakes up, which can take minutes.
+ * Requests to a sleepy end device wait in libskep until the device is
+ * next heard from, which can take hours, and are then sent in the order
+ * they were made. A waiting write or reporting configuration is replaced
+ * by a newer one for the same attributes of the same target: the older
+ * request ends with -ECANCELED.
  *
  * Each request takes a deadline: the time, on the clock given to
  * skep_advance(), by which it must be done. A request still pending at
