@@ -321,7 +321,11 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   may be.
 - The JSON schema of skep-protocol.
 - Format of the exported state: compact binary, or text that a human can
-  inspect (it holds the network key either way).
+  inspect (it holds the network key either way). A candidate is the Open
+  Coordinator Backup format, a JSON file that zigpy and zigbee-herdsman
+  both read and write: networks could then move between skep, ZHA and
+  Zigbee2MQTT. It does not hold what libskep knows about devices, which
+  would have to extend it or be stored next to it.
 - Values from devices: `SKEP_EVENT_ATTRIBUTES` carries raw ZCL values.
   Should libskep also apply the device tables' corrections and units (the
   Smart Plug E2's voltage in volts, for instance), or leave that to
