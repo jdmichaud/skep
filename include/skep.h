@@ -49,7 +49,7 @@ extern "C" {
 /* Version ---------------------------------------------------------------- */
 
 #define SKEP_VERSION_MAJOR 0
-#define SKEP_VERSION_MINOR 0
+#define SKEP_VERSION_MINOR 1
 #define SKEP_VERSION_PATCH 0
 
 /*
