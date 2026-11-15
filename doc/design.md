@@ -172,6 +172,11 @@ reviewed before the library is implemented.
     own saved counter at every boot. The margin costs nothing, the
     counters having four billion values, and it can be raised to
     restore an old backup.
+  - When the dongle holds a network other than the imported one, the
+    imported one wins, but not silently: `skep_start()` stops with
+    `-EEXIST` unless `replace-network` allows overwriting the dongle's.
+    Resuming the dongle's network instead would leave every known device
+    behind, and a dongle used elsewhere before is the usual cause.
 - No threads inside libskep and no callbacks into caller code. Results
   are events, drained with `skep_next_event()`. Diagnostics are events
   too (`SKEP_EVENT_LOG`); libskep never writes to stdout or stderr, with

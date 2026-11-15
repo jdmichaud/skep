@@ -130,6 +130,8 @@ void skep_free(skep_ctx *ctx);
  *                    Added to the saved frame counters when the network is
  *                    restored onto a dongle, to stay ahead of frames sent
  *                    after the last refresh. Default: 100000.
+ *   replace-network  "yes" lets skep_start() overwrite a network found on
+ *                    the dongle with the imported one. Default: "no".
  *
  * Used only when a new network is formed (no network on the dongle and no
  * imported state):
@@ -166,9 +168,13 @@ int skep_get_serial_defaults(const skep_ctx *ctx, unsigned *baudrate,
                              enum skep_flow_control *flow_control);
 
 /*
- * Bring the network up, once the caller has opened the dongle: resume the
- * network stored on the dongle; if it has none, restore the network from
- * the imported state; if there is no state either, form a new network.
+ * Bring the network up, once the caller has opened the dongle.
+ * - With an imported state: resume its network if the dongle holds it,
+ *   restore it onto the dongle if the dongle holds none. If the dongle
+ *   holds another network, stop with -EEXIST rather than lose either,
+ *   unless the replace-network option allows overwriting it.
+ * - Without a state: resume the dongle's network if it holds one,
+ *   otherwise form a new network.
  *
  * This only starts the work: the first bytes for the dongle are now in
  * skep_output(). Success is reported by SKEP_EVENT_STARTED, failure by
@@ -339,8 +345,9 @@ uint64_t skep_event_get_device(const skep_event *event);
 /*
  * SKEP_EVENT_STOPPED: 0 after skep_stop(), -ENOTCONN after
  * skep_link_lost(), otherwise a negative errno value telling why libskep
- * stopped, for instance -ETIMEDOUT when the dongle stopped answering or
- * -EPROTO when it broke the protocol.
+ * stopped, for instance -ETIMEDOUT when the dongle stopped answering,
+ * -EPROTO when it broke the protocol, or -EEXIST when skep_start() found
+ * another network on the dongle.
  * SKEP_EVENT_REQUEST_DONE: whether the request was delivered and answered:
  * 0 if it was, otherwise for instance -ETIMEDOUT (no answer) or
  * -EHOSTUNREACH (device not reachable). What the device thought of the
