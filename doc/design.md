@@ -84,6 +84,11 @@ the daemon `skepd` and the command-line tool `skep`.
   the `driver` option (`ezsp`, `sim`). They never open the dongle or
   configure the serial port: the caller does, with the settings the driver
   suggests (`skep_get_serial_defaults()`), and passes the bytes.
+- Software flow control (XON/XOFF) is handled by libskep: the driver
+  pauses its output on XOFF, so the caller opens the port in raw mode
+  whatever the dongle uses. XON or XOFF arriving when the driver expects
+  no software flow control means the firmware and the serial settings
+  disagree; libskep logs a warning.
 - First drivers: `ezsp` (Silicon Labs EmberZNet NCP over ASH, used by the
   ZBDongle-E) and `sim` (a simulated network for tests). Having two
   drivers from day one keeps the interface honest.

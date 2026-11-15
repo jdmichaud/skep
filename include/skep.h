@@ -141,7 +141,7 @@ int skep_set_option(skep_ctx *ctx, const char *name, const char *value);
 
 enum skep_flow_control {
   SKEP_FLOW_CONTROL_NONE = 0,
-  SKEP_FLOW_CONTROL_SOFTWARE = 1, /* XON/XOFF */
+  SKEP_FLOW_CONTROL_SOFTWARE = 1, /* XON/XOFF, handled by libskep */
   SKEP_FLOW_CONTROL_HARDWARE = 2, /* RTS/CTS */
 };
 
@@ -149,6 +149,10 @@ enum skep_flow_control {
  * Serial settings the driver's dongles usually need, for the caller to
  * open the device with (8 data bits, no parity, 1 stop bit, raw mode).
  * The caller may use other settings for a dongle that needs them.
+ *
+ * Software flow control needs nothing from the caller: libskep pauses its
+ * output on XOFF until XON, so raw mode (IXON off) is fine. For hardware
+ * flow control, the caller enables RTS/CTS on the port.
  *
  * Errors: -EINVAL (no driver set), -ENOTSUP (the driver does not talk to
  * a serial device, like "sim").
