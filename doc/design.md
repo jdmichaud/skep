@@ -93,9 +93,12 @@ the daemon `skepd` and the command-line tool `skep`.
   ZBDongle-E) and `sim` (a simulated network for tests). Having two
   drivers from day one keeps the interface honest.
 - The `ezsp` driver negotiates the protocol version with the dongle at
-  start-up. It starts with the version of our development dongle's
-  firmware, and keeps version-specific frame layouts apart so that other
-  EmberZNet dongles and firmware versions can be added.
+  start-up and requires EZSP 13 (EmberZNet 7.4) or newer, the same
+  minimum as zigbee-herdsman's `ember` driver. Dongles with older
+  firmware are flashed rather than supported: versions before 13 differ
+  in frame layouts and behaviour, and current releases are freely
+  available. Version-specific layouts are kept apart, so that newer
+  versions can be added.
 - Nothing outside a driver may depend on a particular dongle, chip or
   firmware.
 - Out of scope: radio co-processors (RCP), which need a full Zigbee stack
@@ -307,9 +310,6 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
 
 - Configuration file format.
 - Source format of the man pages (mdoc, scdoc, pandoc Markdown).
-- Which EZSP protocol version to implement first: probe our dongle's
-  firmware, then decide whether to use it as is or to flash a current
-  EmberZNet release.
 - Dongle detection: should libskep offer to find dongles and pick the
   driver? USB ids are not reliable for this (see
   [hardware.md](hardware.md)); product strings or probing the protocol
