@@ -27,6 +27,9 @@
   a decision changes, update it in the same commit.
 - `doc/hardware.md` holds what we know about the dongle and devices, and
   `doc/development.md` the development setup and the reference sources.
+- Record changes that matter to users of skep (new or changed API,
+  behaviour, devices, fixes) in `CHANGELOG.md`, under `[Unreleased]`, in
+  the commit that makes them. They become the release notes.
 - Do not copy or port code from Zigbee2MQTT (GPL-3.0). Code from the MIT
   licensed zigbee-herdsman projects may be ported with its copyright
   notice.
