@@ -161,6 +161,14 @@ reviewed before the library is implemented.
     protocol, so it is the application's choice: libskep has no clock
     to schedule it with, and zigpy and zigbee-herdsman likewise back up
     from the application layer, once a day.
+  - A state saved before the old dongle died lags behind the counters
+    the devices last saw. On restore, libskep adds a margin to the saved
+    counters (`frame-counter-margin`, 100,000 by default). Other stacks
+    do the same with smaller margins and longer intervals: zigpy adds
+    10,000 to a daily backup, and EmberZNet firmware adds 4,096 to its
+    own saved counter at every boot. The margin costs nothing, the
+    counters having four billion values, and it can be raised to
+    restore an old backup.
 - No threads inside libskep and no callbacks into caller code. Results
   are events, drained with `skep_next_event()`. Diagnostics are events
   too (`SKEP_EVENT_LOG`); libskep never writes to stdout or stderr, with

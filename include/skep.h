@@ -126,6 +126,10 @@ void skep_free(skep_ctx *ctx);
  *                    tests). Required.
  *   log-level        "error", "warning", "info" or "debug".
  *                    Default: "warning".
+ *   frame-counter-margin
+ *                    Added to the saved frame counters when the network is
+ *                    restored onto a dongle, to stay ahead of frames sent
+ *                    after the last refresh. Default: 100000.
  *
  * Used only when a new network is formed (no network on the dongle and no
  * imported state):
