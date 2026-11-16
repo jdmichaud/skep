@@ -11,14 +11,21 @@ Unix stream socket. Clients ask it things with requests; it answers each
 with a response, and sends events to the clients that asked for them.
 
 Messages are JSON objects (RFC 8259) in UTF-8, one per line: each ends with
-a newline, and contains none. A line is at most 65536 bytes.
+a newline, and contains none.
 
 # SOCKET
 
-skepd listens on _$XDG_RUNTIME_DIR/skep/skepd.sock_ when run as a user
-service, on _$RUNTIME_DIRECTORY/skepd.sock_ (_/run/skep/skepd.sock_) as a
-system service. Only its owner can connect: the directory is readable by
-its owner only. skepd serves any number of clients at once.
+skepd listens on _$RUNTIME_DIRECTORY/skepd.sock_ (_/run/skep/skepd.sock_) when
+run as a system service, on _$XDG_RUNTIME_DIR/skep/skepd.sock_ otherwise.
+Clients look for it in _$SKEP_SOCKET_, then at those two paths.
+
+Whoever can connect has full control of the network: opening it to new
+devices, removing devices, sending them commands. Who can is decided by the
+socket's directory: skepd creates _$XDG_RUNTIME_DIR/skep_ for its owner only,
+and the system service's unit creates _/run/skep_ for its owner and group. The
+socket itself is readable and writable by its owner and group.
+
+skepd serves any number of clients at once.
 
 # REQUESTS AND RESPONSES
 
@@ -26,33 +33,52 @@ A request names a method, and carries an id of the client's choosing, which
 its response repeats:
 
 ```
-{"id": 1, "method": "permit-join", "params": {"seconds": 60}}
+{"id": 1, "method": "permit_join", "params": {"seconds": 60}}
 ```
 
-_params_ may be left out when there are none. Ids are integers; a client
-keeps them unique among its pending requests.
+"params" may be left out when there are none. Ids are integers, unique
+among the client's pending requests.
 
 Each request gets exactly one response, once it is done. Requests to a
 sleepy device wait until the device wakes up, which can take hours, so
 responses come in the order requests end, not the order they were made,
 and a client may make more requests while it waits. A response holds a
-_result_, an object:
+result, an object:
 
 ```
 {"id": 1, "result": {}}
 ```
 
-or an _error_, whose _code_ is the name of a POSIX errno value, and whose
-_message_ is for people to read, not for programs to parse:
+or an error, whose "code" is the name of a POSIX errno value, and whose
+"message" is for people to read, not for programs to parse:
 
 ```
 {"id": 1, "error": {"code": "EINVAL", "message": "seconds: at most 254"}}
 ```
 
 A request that cannot be read as one, not JSON or without an id, gets an
-error response whose _id_ is null.
+error whose "id" is null. Empty lines are ignored.
 
-When a client disconnects, its pending requests are canceled.
+A response reflects every event sent before it on the same connection: a
+client that sends *watch*, then *devices*, has a list that the events after
+it update.
+
+# CONNECTIONS
+
+A client that shuts down its sending side, as _echo request | socat_ does,
+has made its last request: skepd still answers its pending requests, and
+sends it events if it watches, then closes the connection once nothing is
+pending and it does not watch. Closing the connection altogether cancels the
+client's pending requests.
+
+A client's lines are at most 65536 bytes, newline included. skepd answers a
+longer one with an *EMSGSIZE* error whose "id" is null, and closes the
+connection, since it cannot tell where the next line starts. skepd's lines
+have no such limit: a list of many devices can be longer.
+
+A client that leaves more than a mebibyte unread, such as one that watches
+events and stops reading them, is disconnected. Once connected again, it
+asks for *devices* to learn what it missed.
 
 # EVENTS
 
@@ -60,19 +86,24 @@ Events tell what happens on the network. skepd sends them to the clients
 that sent a *watch* request, from then on, as long as they stay connected:
 
 ```
-{"event": "device-joined", "time": "2026-11-16T20:29:51.935Z", "device": "f44250000d350000"}
+{"event": "device_joined", "time": "2026-11-16T20:29:51.935Z", "device": "f44250000d350000"}
 ```
 
-_time_ is when skepd learnt of it, in UTC, as ISO 8601 with milliseconds.
+"time" is when skepd learnt of it, in UTC, as ISO 8601 with milliseconds.
+jq's _fromdateiso8601_ does not take the milliseconds: drop them first, with
+_sub("\\\\.[0-9]+Z$"; "Z")_.
 
 # COMPATIBILITY
 
-Newer versions of skepd add methods, events, and members to results and
-events. Clients ignore events and members they do not know.
+Newer versions of skepd add methods, events, members of results and events,
+and values: strings such as a device's "type" or a ZCL type's name, and
+error codes. Clients ignore the events and members they do not know, and
+accept the values they do not know.
 
-skepd refuses a request with members of _params_ it does not know
-(*EINVAL*), and methods it does not know (*ENOSYS*): a client that relies on
-something new learns that skepd is too old, instead of having it ignored.
+skepd refuses a request with a member it does not know, at the top level or
+in "params", with *ENOTSUP*, and a method it does not know with *ENOSYS*: a
+client that relies on something new learns that skepd is too old, instead
+of having it ignored. A value it cannot take is *EINVAL*.
 
 The protocol's version, which *version* gives, changes only when a change
 would break existing clients.
@@ -81,33 +112,47 @@ would break existing clients.
 
 IEEE addresses are strings of 16 lowercase hexadecimal digits, most
 significant first, as devices print them: "f44250000d350000". So is the
-extended PAN ID.
+extended PAN ID. skepd takes them in uppercase and with "0x" too.
 
-Everything else with a number is a JSON number: network addresses, PAN IDs,
-endpoints, profiles, clusters, attributes, commands, manufacturer codes and
-statuses.
+Other numbers are JSON numbers: network addresses, PAN IDs, endpoints,
+profiles, clusters, attributes, commands, manufacturer codes and statuses.
+skepd takes them as strings of hexadecimal digits after "0x" too, such as
+"0x0402", as the Zigbee specifications write them.
 
-A device can be named, with *rename*. Wherever a request takes a _device_,
-it takes its IEEE address or its name. Names are 1 to 64 characters, unique,
-and never 16 hexadecimal digits, so they cannot be taken for an address.
+A device can be named, with *rename*. Wherever a request takes a "device",
+it takes its IEEE address or its name. A name is 1 to 64 bytes of UTF-8,
+without control characters, unique, and never 16 hexadecimal digits, with
+or without "0x", so that it cannot be taken for an address.
 
-ZCL values carry their type, named as in *skep.h* without the SKEP_TYPE_
-prefix, in lowercase:
+ZCL values carry their type:
 
 ```
 {"type": "int16", "value": 2154}
 ```
 
-- Booleans are JSON booleans.
-- Integers, bitmaps, enumerations, data, times and ids are numbers, except
-  those wider than 48 bits, which are strings of decimal digits: not every
-  JSON parser keeps more than 53 bits of a number.
-- Floats are numbers, or null for those JSON cannot hold (NaN, infinities).
+The types are named after the ZCL: "nodata", "data8" to "data64", "bool",
+"bitmap8" to "bitmap64", "uint8" to "uint64", "int8" to "int64", "enum8",
+"enum16", "semi", "single", "double", "octet_string", "char_string",
+"long_octet_string", "long_char_string", "array", "struct", "set", "bag",
+"time_of_day", "date", "utc", "cluster_id", "attribute_id", "bacnet_oid",
+"ieee_address" and "key128". A type without a name is its number, and its
+value the hexadecimal digits of its encoding.
+
+- "bool" is a JSON boolean.
+- Integers, data, bitmaps, enumerations, times and ids are numbers, except
+  the types of 56 and 64 bits, which are always strings of decimal digits,
+  even for small values: not every JSON parser keeps more than 53 bits of a
+  number. skepd takes either for them.
+- "ieee_address" is 16 hexadecimal digits, as above.
+- Floats are numbers, "single" at single precision, or null for those JSON
+  cannot hold (NaN, infinities).
 - Character strings are strings. Bytes that are not UTF-8 become U+FFFD.
-- Octet strings, keys, and arrays, sets, bags and structures are strings of
-  lowercase hexadecimal digits: the bytes of their ZCL encoding, without the
+- Octet strings and keys are hexadecimal digits: their bytes, without the
   length of strings.
-- _nodata_ has no _value_.
+- Arrays, sets, bags and structures are hexadecimal digits: their ZCL
+  encoding as it is, element type and count first for arrays, sets and
+  bags, count first for structures.
+- "nodata" has no "value".
 
 # METHODS
 
@@ -120,17 +165,19 @@ prefix, in lowercase:
 	Result: {}
 
 *network*
-	The network, if it is up.
-	Result: {"up": true, "channel": 15, "pan_id": 17784, "extended_pan_id":
-	"8a4f7ca9954c4cd5"}, or {"up": false}.
+	The network. When it is up: {"up": true, "channel": 15, "pan_id": 17784,
+	"extended_pan_id": "8a4f7ca9954c4cd5", "permit_join": _seconds left_, 0
+	when no device may join}. When it is not: {"up": false}, with the
+	"error" that took it down, if one did, such as "EEXIST" when the dongle
+	holds another network.
 
-*permit-join* {"seconds": _0 to 254_}
+*permit_join* {"seconds": _0 to 254_}
 	Let new devices join for that long, or stop letting them with 0. Done
 	once the coordinator and the routers have been told.
 	Result: {}
 
 *devices*
-	The devices of the network.
+	The devices of the network, the coordinator aside.
 	Result: {"devices": [_device_, ...]}
 
 *device* {"device": _device_}
@@ -138,35 +185,38 @@ prefix, in lowercase:
 	Result: _device_
 
 *rename* {"device": _device_, "name": _name_ or null}
-	Name a device, or forget its name.
+	Name a device, or forget its name. A name already taken is *EEXIST*.
 	Result: {}
 
 *setup* {"device": _device_}
-	Interview and set the device up again, from the start. Done once started:
-	the *device-ready* or *device-setup-failed* event tells how it went.
+	Interview and set the device up again, from the start. Done once
+	started: the *device_ready* or *device_setup_failed* event tells how it
+	went.
 	Result: {}
 
 *remove* {"device": _device_}
-	Ask the device to leave the network, and forget it, whether it answered
-	or not.
-	Result: {"status": _ZDO status_}
+	Ask the device to leave the network, and forget it and its name, whether
+	it answered or not. Done once forgotten.
+	Result: {"status": _ZDO status_} if it answered, {} if not.
 
 *read* {_target_, "attributes": [_id_, ...]}
 	Read attributes.
 	Result: {"status": _ZCL status_, "attributes": [{"id": _id_, "status":
-	_ZCL status_, "type": ..., "value": ...}, ...]}, with a type and value for
-	each attribute whose status is 0.
+	_ZCL status_, "type": ..., "value": ...}, ...]}, a type and value for each
+	attribute whose status is 0. "attributes" is left out when the device
+	refused the whole request, with a status other than 0.
 
 *write* {_target_, "attributes": [{"id": _id_, "type": ..., "value": ...}, ...]}
 	Write attributes.
 	Result: {"status": _ZCL status_, "attributes": [{"id": _id_, "status":
 	_ZCL status_}, ...]}
 
-*configure-reporting* {_target_, "reporting": [_reporting_, ...]}
-	Configure how attributes are reported. A _reporting_ is {"attribute":
-	_id_, "type": ..., "min_interval": _seconds_, "max_interval": _seconds_,
-	"change": _value_}, the change in the attribute's type, for analog types
-	only.
+*configure_reporting* {_target_, "reporting": [_reporting_, ...]}
+	Configure how attributes are reported. A _reporting_ is {"id": _id_,
+	"type": ..., "min_interval": _seconds_, "max_interval": _seconds_,
+	"change": _value_}: "change" is a value of the attribute's type, without
+	its own "type", which analog types (integers, floats, times) need and the
+	others do without.
 	Result: {"status": _ZCL status_, "attributes": [{"id": _id_, "status":
 	_ZCL status_}, ...]}
 
@@ -184,23 +234,36 @@ prefix, in lowercase:
 
 *cancel* {"id": _id_}
 	Give up a pending request of this client, which ends with *ECANCELED*. A
-	request already sent may still take effect.
+	request already sent may still take effect. An id that is not pending is
+	*ENOENT*.
 	Result: {}
 
 A _target_ is the members "device", "endpoint" and "cluster", and
 "manufacturer_code" for manufacturer-specific clusters, attributes and
 commands.
 
-Requests to devices (*remove*, *read*, *write*, *configure-reporting*,
-*bind*, *unbind*, *command*) take a "timeout" too, in seconds: how long the
-request may wait, for a sleepy device to wake up among others. Without
-one, it waits as long as it takes.
+Requests to devices (*remove*, *read*, *write*, *configure_reporting*,
+*bind*, *unbind*, *command*) take a "timeout" too: how long, in seconds,
+fractions allowed, the request may wait, for a sleepy device to wake up
+among others. Without one, it waits as long as it takes.
 
-Their result's _status_ is what the device answered: a request it refused
-has a result, not an error. Errors say the request did not get there or
-back: *ETIMEDOUT*, *EHOSTUNREACH*, *ECANCELED*; or that it cannot be made:
-*ENODEV* (no such device), *ENETDOWN* (the network is not up), *EINVAL*,
-*ENOBUFS* (too many requests pending).
+Their result's "status" is what the device answered: a request it refused
+has a result, not an error. Errors say that the request did not get there
+or back, or that it cannot be made:
+
+- *ETIMEDOUT*: no answer in time.
+- *EHOSTUNREACH*: the device could not be reached.
+- *ECANCELED*: canceled with *cancel*; replaced, if it was a *write* or a
+  *configure_reporting* still waiting, by a newer one for the same
+  attributes of the same target, from any client; or given up because the
+  network went down.
+- *ENODEV*: no such device.
+- *ENETDOWN*: the network is not up.
+- *ENOBUFS*: too many requests pending: 32 for all clients together, 16
+  for one client.
+- *EINVAL*, *ENOTSUP*: a request that is not right, as above. A request
+  takes at most 16 attributes.
+- *EEXIST*: an id already pending, for any method.
 
 # DEVICES
 
@@ -211,7 +274,7 @@ the interview learns them:
 {
   "device": "f44250000d350000",
   "name": "living room",
-  "address": 7118,
+  "network_address": 7118,
   "type": "end_device",
   "manufacturer_code": 5127,
   "rx_on_when_idle": false,
@@ -225,41 +288,52 @@ the interview learns them:
 }
 ```
 
-(shown on several lines here; on the socket, it is on one.) _type_ is
-"coordinator", "router" or "end_device". _setup_ is "pending" while the
-device is interviewed and set up, "ready" once done, "failed" when it
-refused a step.
+(shown on several lines here; on the socket, it is on one.) "type" is
+"coordinator", "router" or "end_device". "setup" is "pending" while the
+device is interviewed and set up, or waits to wake up to go on, "ready" once
+done, and "failed" when it refused a step.
 
-# EVENTS
+# EVENT TYPES
 
-Each event has the members _event_ and _time_, and those listed here. Those
-about a device have _device_, and _name_ if it has one.
+Each event has the members "event" and "time", and those listed here. Those
+about a device have "device", and "name" if it has one.
 
-*network-up* {"origin": "resumed", "restored" or "formed", "channel",
+*network_up* {"origin": "resumed", "restored" or "formed", "channel",
 "pan_id", "extended_pan_id"}
 	The network is up.
 
-*network-down* {"error": _errno name_}
-	The network went down, for instance ENOTCONN when the dongle went away.
+*network_down* {"error": _errno name_}
+	The network went down, for instance with "ENOTCONN" when the dongle went
+	away.
 
-*permit-join* {"seconds": _seconds_}
+*permit_join* {"seconds": _seconds_}
 	The join window opened for that long, or closed (0).
 
-*device-joined*, *device-left*, *device-ready*
-	A device joined, left, or is set up.
+*device_joined*, *device_ready*
+	A device joined, or is set up.
 
-*device-setup-failed* {"error": _errno name_, "status": _status_}
+*device_left* {"removed": _boolean_}
+	A device left the network: by itself, and it may come back; or removed
+	with *remove*, and forgotten.
+
+*device_setup_failed* {"status": _status_} or {"error": _errno name_}
 	Setting a device up failed: it refused a step with that status, or the
-	error tells why.
+	error tells why. One of the two members is there, never both.
+
+*device_renamed* {"old_name": _name_}
+	A device got a new name, or lost its name. "old_name" is left out when it
+	had none, "name" when it has none now.
 
 *attributes* {"endpoint", "cluster", "manufacturer_code",
 "attributes": [{"id": _id_, "type": ..., "value": ...}, ...]}
-	A device reported attributes. _manufacturer_code_ only for
+	A device reported attributes. "manufacturer_code" only for
 	manufacturer-specific frames.
 
 *command* {"endpoint", "cluster", "manufacturer_code", "command",
-"payload": _hexadecimal_}
-	A device sent a cluster command, its arguments in their ZCL encoding.
+"payload": _hexadecimal_, "arguments": [{"type": ..., "value": ...}, ...]}
+	A device sent a cluster command. "payload" is its arguments in their
+	ZCL encoding; "arguments" has them decoded, for the commands libskep
+	knows.
 
 # EXAMPLE
 
@@ -268,15 +342,23 @@ A client opens the join window, then watches a device join and report:
 ```
 > {"id": 1, "method": "watch"}
 < {"id": 1, "result": {}}
-> {"id": 2, "method": "permit-join", "params": {"seconds": 60}}
-< {"event": "permit-join", "time": "...", "seconds": 60}
+> {"id": 2, "method": "permit_join", "params": {"seconds": 60}}
+< {"event": "permit_join", "time": "...", "seconds": 60}
 < {"id": 2, "result": {}}
-< {"event": "device-joined", "time": "...", "device": "f44250000d350000"}
-< {"event": "device-ready", "time": "...", "device": "f44250000d350000"}
+< {"event": "device_joined", "time": "...", "device": "f44250000d350000"}
+< {"event": "device_ready", "time": "...", "device": "f44250000d350000"}
 < {"event": "attributes", "time": "...", "device": "f44250000d350000",
    "endpoint": 1, "cluster": 1026, "attributes": [{"id": 0, "type":
    "int16", "value": 2154}]}
 ```
+
+From a shell, with *socat*(1):
+
+```
+echo '{"id": 1, "method": "devices"}' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/skep/skepd.sock
+```
+
+For a request that may wait, give socat time: _socat -t 3600_.
 
 # SEE ALSO
 
