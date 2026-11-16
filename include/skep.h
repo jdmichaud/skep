@@ -555,6 +555,36 @@ size_t skep_event_get_attribute_count(const skep_event *event);
 int skep_event_get_attribute(const skep_event *event, size_t index, struct skep_attribute *attribute);
 
 /*
+ * What an attribute reads as, in words and units: a temperature in °C,
+ * scaled from the hundredths of a degree the ZCL reports it in, with the
+ * device's own scale where it has one, corrected where it gets it wrong.
+ * The names and units are UTF-8 strings that stay valid as long as the
+ * program runs:
+ *
+ *   temperature (°C), humidity (%), pressure (hPa), battery (%),
+ *   battery_voltage (V), on (1 or 0, no unit), level (%),
+ *   color_temperature (mired), voltage (V), current (A), power (W),
+ *   power_factor (no unit), frequency (Hz), energy (kWh).
+ *
+ * Newer versions of libskep name more readings.
+ */
+struct skep_reading {
+  const char *name;
+  const char *unit; /* "" for none */
+  double value;
+  uint64_t reserved[2]; /* for later versions */
+};
+
+/*
+ * SKEP_EVENT_ATTRIBUTES, and SKEP_EVENT_REQUEST_DONE of reads: the
+ * reading of the attribute at index, if libskep names it.
+ *
+ * Errors: -EINVAL (index out of range), -ENOENT (no reading: an attribute
+ * libskep does not name, or the value the ZCL reserves for "invalid").
+ */
+int skep_event_get_reading(const skep_event *event, size_t index, struct skep_reading *reading);
+
+/*
  * SKEP_EVENT_COMMAND: the command id, and its arguments, decoded for the
  * commands libskep knows. Devices may leave out optional fields at the
  * end, so there may be fewer arguments than the command has fields.
@@ -750,6 +780,26 @@ enum skep_setup {
  * Errors: -ENODEV.
  */
 int skep_device_get_setup(skep_ctx *ctx, uint64_t device, enum skep_setup *setup);
+
+/* An attribute of a device that libskep names as a reading. */
+struct skep_reading_source {
+  uint8_t endpoint;
+  uint16_t cluster;
+  uint16_t attribute;
+  const char *name;
+  const char *unit;
+  uint64_t reserved[2]; /* for later versions */
+};
+
+/*
+ * The readings the device can be read for: those of the input clusters
+ * of its endpoints, what matters most first, such as a temperature before
+ * a battery. Same capacity and count convention as skep_get_devices().
+ *
+ * Errors: -ENODEV, -EAGAIN (not interviewed yet).
+ */
+int skep_device_get_readings(skep_ctx *ctx, uint64_t device, struct skep_reading_source *sources,
+                             size_t capacity, size_t *count);
 
 /*
  * Set the device up again from the start, after a failed setup or when

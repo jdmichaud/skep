@@ -5,6 +5,7 @@ const std = @import("std");
 const c = @import("skep_h");
 const CAllocator = @import("allocator.zig").CAllocator;
 const Event = @import("Event.zig");
+const readings = @import("readings.zig");
 const requests = @import("requests.zig");
 const zcl = @import("zcl.zig");
 
@@ -31,4 +32,6 @@ test "the structs of skep.h are laid out as libskep's" {
   try expectSameLayout(requests.Target, c.struct_skep_target);
   try expectSameLayout(requests.Reporting, c.struct_skep_reporting);
   try expectSameLayout(CAllocator, c.struct_skep_allocator);
+  try expectSameLayout(Event.CReading, c.struct_skep_reading);
+  try expectSameLayout(readings.CSource, c.struct_skep_reading_source);
 }

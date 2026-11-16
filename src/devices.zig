@@ -29,6 +29,7 @@
 //!   DEALINGS IN THE SOFTWARE.
 
 const std = @import("std");
+const readings = @import("readings.zig");
 const zcl = @import("zcl.zig");
 
 pub const Step = union(enum) {
@@ -42,6 +43,8 @@ pub const Entry = struct {
   /// The model identifier the device gives in its Basic cluster.
   model: []const u8,
   steps: []const Step,
+  /// Readings whose scale is the device's, or that it gets wrong, before the standard ones.
+  readings: []const readings.Definition = &.{},
 };
 
 pub const Cluster = struct {
@@ -105,6 +108,50 @@ pub const entries = [_]Entry{
       report(1, Cluster.electrical_measurement, 0x0508, zcl.Type.uint16, 5, hour, 50),
       // RMSVoltage, in tenths of a volt: on a change of 0.5 V.
       report(1, Cluster.electrical_measurement, 0x0505, zcl.Type.uint16, 5, hour, 5),
+    },
+    // Its multipliers and divisors are not to be trusted: zigbee-herdsman-converters fixes them.
+    .readings = &.{
+      .{
+        .cluster = Cluster.electrical_measurement,
+        .attribute = 0x050b,
+        .name = "power",
+        .unit = "W",
+        .divisor = 10,
+      },
+      .{
+        .cluster = Cluster.metering,
+        .attribute = 0x0000,
+        .name = "energy",
+        .unit = "kWh",
+        .divisor = 3600000,
+      },
+      .{
+        .cluster = Cluster.electrical_measurement,
+        .attribute = 0x0505,
+        .name = "voltage",
+        .unit = "V",
+        .divisor = 10,
+      },
+      .{
+        .cluster = Cluster.electrical_measurement,
+        .attribute = 0x0508,
+        .name = "current",
+        .unit = "A",
+        .divisor = 1000,
+      },
+      .{
+        .cluster = Cluster.electrical_measurement,
+        .attribute = 0x0510,
+        .name = "power_factor",
+        .unit = "",
+        .divisor = 100,
+      },
+      .{
+        .cluster = Cluster.electrical_measurement,
+        .attribute = 0x0300,
+        .name = "frequency",
+        .unit = "Hz",
+      },
     },
   },
 };

@@ -8,6 +8,7 @@ const Event = @import("Event.zig");
 const State = @import("State.zig");
 const driver_layer = @import("driver/driver.zig");
 const exchange = @import("exchange.zig");
+const setup = @import("setup.zig");
 const zcl = @import("zcl.zig");
 const zdo = @import("zdo.zig");
 
@@ -372,6 +373,9 @@ pub fn ended(
   } else switch (r.kind) {
     .read => if (h.command == zcl.Command.read_attributes_response) {
       event.setAttributes(.read_response, frame.payload);
+      if (ctx.state.?.device(e.device)) |d| {
+        event.addReadings(setup.entryOf(d).readings, e.frame.cluster);
+      }
     },
     .write, .configure => {
       for (r.attributes[0..r.count]) |a| {

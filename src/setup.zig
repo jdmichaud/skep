@@ -145,7 +145,7 @@ fn basicEndpoint(d: *const State.Device) u8 {
 }
 
 /// The device's entry; one without steps for a model libskep does not know.
-fn entryOf(d: *const State.Device) *const devices.Entry {
+pub fn entryOf(d: *const State.Device) *const devices.Entry {
   const none: devices.Entry = .{ .model = "", .steps = &.{} };
   return devices.find(d.model orelse return &none) orelse &none;
 }

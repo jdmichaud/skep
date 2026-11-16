@@ -12,6 +12,7 @@ const Event = @import("Event.zig");
 const State = @import("State.zig");
 const requests = @import("requests.zig");
 const setup = @import("setup.zig");
+const readings = @import("readings.zig");
 const zcl = @import("zcl.zig");
 const sim = @import("driver/sim/sim.zig");
 const driver_layer = @import("driver/driver.zig");
@@ -182,6 +183,59 @@ export fn skep_event_get_attribute(
 ) c_int {
   if (index >= event.attribute_count) return err(.INVAL);
   attribute.* = event.attributes[index];
+  return 0;
+}
+
+export fn skep_event_get_reading(
+  event: *const Event,
+  index: usize,
+  reading: *Event.CReading,
+) c_int {
+  if (index >= event.attribute_count) return err(.INVAL);
+  const r = event.attribute_readings[index] orelse return err(.NOENT);
+  reading.* = .{ .name = r.name, .unit = r.unit, .value = r.value };
+  return 0;
+}
+
+const ReadingSource = readings.CSource;
+
+export fn skep_device_get_readings(
+  ctx: *Context,
+  ieee: u64,
+  sources: ?[*]ReadingSource,
+  capacity: usize,
+  count: *usize,
+) c_int {
+  const d = switch (deviceOf(ctx, ieee)) {
+    .device => |d| d,
+    .err => |e| return e,
+  };
+  if (!interviewed(d)) return err(.AGAIN);
+  if (capacity > 0 and sources == null) return err(.INVAL);
+  const own = setup.entryOf(d).readings;
+  var n: usize = 0;
+  // The standard readings, as the device scales them if it does its own way, then its others:
+  // in the tables' order, what matters most first.
+  for ([_][]const readings.Definition{ &readings.standard, own }, 0..) |definitions, pass| {
+    for (definitions) |*listed| {
+      if (pass == 1 and readings.find(&.{}, listed.cluster, listed.attribute) != null) continue;
+      const definition = readings.find(own, listed.cluster, listed.attribute).?;
+      for (d.endpoints) |e| {
+        if (!e.hasInput(definition.cluster)) continue;
+        if (n < capacity) {
+          sources.?[n] = .{
+            .endpoint = e.id,
+            .cluster = definition.cluster,
+            .attribute = definition.attribute,
+            .name = definition.name.ptr,
+            .unit = definition.unit.ptr,
+          };
+        }
+        n += 1;
+      }
+    }
+  }
+  count.* = n;
   return 0;
 }
 
@@ -815,6 +869,23 @@ test "a device that joins is interviewed, set up, and reports" {
   try testing.expectEqual(1, report.attribute_count);
   try testing.expectEqual(0x0000, report.attributes[0].id);
   try testing.expectEqual(2243, report.attributes[0].value.v.i);
+  var reading: Event.CReading = undefined;
+  try testing.expectEqual(0, skep_event_get_reading(report, 0, &reading));
+  try testing.expectEqualStrings("temperature", std.mem.span(reading.name));
+  try testing.expectEqualStrings("°C", std.mem.span(reading.unit));
+  try testing.expectEqual(22.43, reading.value);
+  try testing.expectEqual(err(.INVAL), skep_event_get_reading(report, 1, &reading));
+
+  // What it can be read for: its clusters' readings.
+  var sources: [8]ReadingSource = undefined;
+  var count: usize = 0;
+  try testing.expectEqual(
+    0,
+    skep_device_get_readings(ctx, sensor_ieee, &sources, sources.len, &count),
+  );
+  try testing.expectEqual(4, count);
+  try testing.expectEqualStrings("temperature", std.mem.span(sources[0].name));
+  try testing.expectEqualStrings("battery_voltage", std.mem.span(sources[3].name));
 }
 
 test "a device that falls silent is set up further when it is next heard from" {
@@ -1223,6 +1294,7 @@ test {
   _ = @import("requests.zig");
   _ = @import("setup.zig");
   _ = @import("abi_test.zig");
+  _ = @import("readings.zig");
   _ = @import("driver/driver.zig");
   _ = @import("driver/ezsp/ezsp.zig");
   std.testing.refAllDecls(@This());

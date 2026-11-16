@@ -42,6 +42,11 @@ publishes the section of each released version as its release notes.
   `skep_write_attributes()`, `skep_configure_reporting()`, `skep_bind()`,
   `skep_unbind()`, `skep_send_command()`, `skep_cancel()`), which wait
   for sleepy devices to wake up.
+- Readings: libskep names attributes in words and units, a temperature
+  in °C rather than hundredths of a degree, with the device's own scale
+  where it has one, such as the plug's power, current and voltage.
+  `skep_event_get_reading()` gives an attribute's, and
+  `skep_device_get_readings()` lists what a device can be read for.
 - Opening or closing the join window tells the routers too.
 - libskep answers devices on the coordinator's behalf: a Default
   Response where a frame asks for one, and "no image available" to

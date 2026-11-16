@@ -771,6 +771,7 @@ fn unsolicited(ctx: *Context, d: *const State.Device, frame: *const driver_layer
   event.manufacturer_code = h.manufacturer_code orelse 0;
   if (report) {
     event.setAttributes(.report, parsed.payload);
+    event.addReadings(setup.entryOf(d).readings, frame.cluster);
   } else {
     event.command = h.command;
     event.setPayload(parsed.payload);

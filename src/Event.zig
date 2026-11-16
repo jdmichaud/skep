@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const CAllocator = @import("allocator.zig").CAllocator;
+const readings = @import("readings.zig");
 const zcl = @import("zcl.zig");
 
 const Event = @This();
@@ -62,6 +63,8 @@ payload: [max_payload_len]u8 = undefined,
 payload_len: u8 = 0,
 attributes: [max_attributes]Attribute = undefined,
 attribute_count: u8 = 0,
+/// What each attribute reads as, for those libskep names.
+attribute_readings: [max_attributes]?readings.Reading = undefined,
 
 /// `struct skep_attribute`.
 pub const Attribute = extern struct {
@@ -100,9 +103,27 @@ pub fn setAttributes(event: *Event, records: Records, payload: []const u8) void 
 pub fn addAttribute(event: *Event, a: zcl.Attribute) bool {
   if (event.attribute_count == max_attributes) return false;
   event.attributes[event.attribute_count] = .{ .id = a.id, .status = a.status, .value = a.value };
+  event.attribute_readings[event.attribute_count] = null;
   event.attribute_count += 1;
   return true;
 }
+
+/// Names the event's attributes that have a reading, those of the device's `definitions` first.
+pub fn addReadings(event: *Event, definitions: []const readings.Definition, cluster: u16) void {
+  for (event.attributes[0..event.attribute_count], 0..) |a, i| {
+    if (a.status != zcl.Status.success) continue;
+    const definition = readings.find(definitions, cluster, a.id) orelse continue;
+    event.attribute_readings[i] = readings.read(definition, a.value);
+  }
+}
+
+/// `struct skep_reading`.
+pub const CReading = extern struct {
+  name: [*:0]const u8,
+  unit: [*:0]const u8,
+  value: f64,
+  reserved: [2]u64 = @splat(0),
+};
 
 /// Copies a payload into the event, cut short if it is too long.
 pub fn setPayload(event: *Event, payload: []const u8) void {
