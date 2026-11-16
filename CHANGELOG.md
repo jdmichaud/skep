@@ -74,7 +74,7 @@ publishes the section of each released version as its release notes.
   `skep` user and group of the system unit; skepd reports its readiness
   and status to systemd.
 - Man pages, written in scdoc and rendered at build time by zzdoc:
-  skep(1) and skep-protocol(7).
+  skep(1), skep-protocol(7) and skepd(8).
 - `zig build probe -- <device>`, a development tool that resets an
   EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to

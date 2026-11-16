@@ -261,7 +261,7 @@ fn addManpages(b: *std.Build) !void {
   const rendered = run.addOutputDirectoryArg2("man", .{});
   // One at a time: with Zig 0.17, installing a directory into a prefix that does not exist yet
   // installs nothing.
-  for ([_][]const u8{ "man1/skep.1", "man7/skep-protocol.7" }) |page| {
+  for ([_][]const u8{ "man1/skep.1", "man7/skep-protocol.7", "man8/skepd.8" }) |page| {
     const install = b.addInstallFileWithDir(
       rendered.path(b, page),
       .{ .custom = b.fmt("share/man/{s}", .{ std.fs.path.dirname(page).? }) },
