@@ -11,6 +11,7 @@ pub const version: std.SemanticVersion = std.SemanticVersion.parse(build_options
 
 test {
   _ = @import("allocator.zig");
+  _ = @import("driver/driver.zig");
   _ = @import("driver/ezsp/ezsp.zig");
   std.testing.refAllDecls(@This());
 }
