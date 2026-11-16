@@ -232,13 +232,13 @@ pub const Driver = struct {
     leaving,
     waiting_for_leave,
     restoring_frame_counter,
+    restoring_trust_center_counter,
     securing,
     extending_security,
     clearing_keys,
     forming,
     waiting_for_formed,
     writing_tokens,
-    restoring_trust_center_counter,
     /// Failed: `start` begins again.
     failed,
   };
@@ -699,7 +699,7 @@ pub const Driver = struct {
             },
           });
         }
-        d.secure(now);
+        d.restoreTrustCenterCounter(now);
       },
       .securing => {
         const status = d.statusOf(received, .set_initial_security_state) orelse return;
@@ -778,13 +778,8 @@ pub const Driver = struct {
             },
           });
         }
-        const counters = d.form_parameters.frame_counters orelse return d.readNetwork(.formed, now);
-        // Once the network is formed: before, there is no trust center link key to count for.
-        d.step = .restoring_trust_center_counter;
-        var value: [4]u8 = undefined;
-        std.mem.writeInt(u32, &value, counters.trust_center, .little);
-        var out: [6]u8 = undefined;
-        d.send(.set_value, command.setValue(&out, .aps_frame_counter, &value), now);
+        if (d.form_parameters.frame_counters == null) return d.readNetwork(.formed, now);
+        d.restart();
       },
       .restoring_trust_center_counter => {
         const status = d.statusOf(received, .set_value) orelse return;
@@ -797,7 +792,7 @@ pub const Driver = struct {
             },
           });
         }
-        d.restart();
+        d.secure(now);
       },
       .idle,
       .starting,
@@ -888,6 +883,21 @@ pub const Driver = struct {
     std.mem.writeInt(u32, &value, blockStart(counters.network), .little);
     var out: [6]u8 = undefined;
     d.send(.set_value, command.setValue(&out, .nwk_frame_counter, &value), now);
+  }
+
+  /// Sets the trust center's frame counter of a saved network put back, before its security state
+  /// too: once the network is formed, EmberZNet 6.10.3 refuses it.
+  fn restoreTrustCenterCounter(d: *Driver, now: u64) void {
+    d.step = .restoring_trust_center_counter;
+    var value: [4]u8 = undefined;
+    std.mem.writeInt(
+      u32,
+      &value,
+      blockStart(d.form_parameters.frame_counters.?.trust_center),
+      .little,
+    );
+    var out: [6]u8 = undefined;
+    d.send(.set_value, command.setValue(&out, .aps_frame_counter, &value), now);
   }
 
   /// Restarts the NCP once a saved network is back, and reports it as formed once it resumes it.
@@ -1361,6 +1371,10 @@ test "a saved network is put back with its frame counters" {
   // 0x00012345, up to the start of a block of 4096.
   try testing.expectEqualSlices(u8, &hex("ab00" ++ "23" ++ "04" ++ "00300100"), counter[3..]);
   ncp.respond(&.{ counter[0], 0x80, 0x01, 0xab, 0x00, 0x35 });
+  // Then the trust center's, before the security state too, also up to a block's start.
+  const trust_center = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqualSlices(u8, &hex("ab00" ++ "24" ++ "04" ++ "00100000"), trust_center[3..]);
+  ncp.respond(&.{ trust_center[0], 0x80, 0x01, 0xab, 0x00, 0x00 });
   const security = ncp.take() orelse return error.TestExpectedCommand;
   // The bitmask keeps the frame counter, and the network key's sequence number follows the keys.
   try testing.expectEqualSlices(u8, &hex("841b"), security[5..7]);
@@ -1371,10 +1385,6 @@ test "a saved network is put back with its frame counters" {
   try answer(&ncp, .form_network, 0x00);
   ncp.respond(&hex("009001190090"));
   try answer(&ncp, .set_value, 0x00);
-  // The trust center's frame counter, once the network is formed.
-  const trust_center = ncp.take() orelse return error.TestExpectedCommand;
-  try testing.expectEqualSlices(u8, &hex("ab00" ++ "24" ++ "04" ++ "00040000"), trust_center[3..]);
-  ncp.respond(&.{ trust_center[0], 0x80, 0x01, 0xab, 0x00, 0x00 });
   // Then the NCP restarts, so that it saves its frame counter ahead, and resumes the network.
   try ncp.answerReset();
   try handshake(&ncp, 8);
@@ -1417,6 +1427,7 @@ test "a saved network the NCP does not bring back after its restart fails the dr
   driver.form(parameters);
   for ([_]frame.FrameId{
     .set_value,
+    .set_value,
     .set_initial_security_state,
     .set_value,
     .clear_key_table,
@@ -1425,7 +1436,6 @@ test "a saved network the NCP does not bring back after its restart fails the dr
     try answer(&ncp, id, 0x00);
   }
   ncp.respond(&hex("009001190090"));
-  try answer(&ncp, .set_value, 0x00);
   try answer(&ncp, .set_value, 0x00);
   try ncp.answerReset();
   try handshake(&ncp, 8);

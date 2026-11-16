@@ -225,9 +225,9 @@ reviewed before the library is implemented.
     own saved counter at every boot. The margin costs nothing, the
     counters having four billion values, and it can be raised to
     restore an old backup.
-  - Putting a network back follows zigbee-herdsman: the network frame
-    counter is set before the security state, which is told to keep it,
-    and the trust center's once the network is formed. A dongle that
+  - Putting a network back follows zigbee-herdsman: the frame counters
+    are set before the security state, which is told to keep them. A
+    dongle that
     refuses a counter is logged as a warning, not a failure, and the
     state keeps the counter it had: a key's counter in the state never
     goes down, since devices remember the highest they saw. Unlike

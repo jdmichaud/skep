@@ -49,12 +49,15 @@ attribute details come from the Zigbee2MQTT device definitions
   and the trust center link key, with their outgoing frame counters.
   The firmware raises its saved network frame counter by 4096 at each
   start (49153, 53250, 57346 over three starts).
-- Putting a saved network back (2026-11-16, four times, over a throwaway
-  network): `set_value` of `NWK_FRAME_COUNTER` before the security state
-  is accepted, and the network carries on from it; `APS_FRAME_COUNTER`
-  after forming is refused (status 0x70), and the trust center's counter
-  reads 0 afterwards. The sensor came back by itself each time, with a
-  secured rejoin within 25 seconds, and went on reporting.
+- Putting a saved network back (2026-11-16, five times, over a throwaway
+  network): `set_value` of `NWK_FRAME_COUNTER` and `APS_FRAME_COUNTER`
+  before the security state is accepted, and the network carries on
+  from them. `APS_FRAME_COUNTER` after forming is refused (status 0x70),
+  and the trust center's counter then reads 0. Set before, at 118784,
+  it read 118784 after the restart and the start after it: unlike the
+  network counter, it does not move at a start, at least while no frame
+  uses it. The sensor came back by itself each time, with a secured
+  rejoin within 25 seconds, and went on reporting.
 - The network frame counter after a restore, by the value set (4096 ×
   block + offset) and the starts that followed:
   - 157347 (38 + 1699): the next start resumed at 157347 or below,
