@@ -16,8 +16,9 @@ publishes the section of each released version as its release notes.
 - The ASH link layer: resetting the dongle, acknowledgements,
   retransmissions and software flow control (XON/XOFF).
 - EZSP frames, in the legacy and the extended format, for EZSP 8 to 19.
-- Starting an EmberZNet dongle: reset, agreeing on the EZSP version, and
-  reading the firmware version.
+- Starting an EmberZNet dongle: reset, agreeing on the EZSP version,
+  reading the firmware version, configuring it and bringing up the
+  network it holds.
 - `zig build probe -- <device>`, a development tool that resets an
   EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to

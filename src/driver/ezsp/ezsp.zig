@@ -7,6 +7,7 @@ pub const link = @import("link.zig");
 pub const frame = @import("frame.zig");
 pub const command = @import("command.zig");
 pub const startup = @import("startup.zig");
+pub const driver = @import("driver.zig");
 
 const test_ncp = @import("test_ncp.zig");
 
