@@ -9,6 +9,11 @@ const Event = @import("Event.zig");
 const State = @import("State.zig");
 const driver_layer = @import("driver/driver.zig");
 const sim = @import("driver/sim/sim.zig");
+const exchange = @import("exchange.zig");
+const requests = @import("requests.zig");
+const setup = @import("setup.zig");
+const zdo = @import("zdo.zig");
+const zcl = @import("zcl.zig");
 
 const Context = @This();
 
@@ -37,21 +42,41 @@ spares: Event.Queue = .{},
 /// The id of the next request.
 next_request: u32 = 1,
 /// What the driver was asked to do and has not done, in order: one thing at a time, the first
-/// being under way when `busy`.
+/// being under way when the driver is busy with an operation.
 ops: [max_ops]Op = undefined,
 ops_len: usize = 0,
-busy: bool = false,
+busy: Busy = .idle,
+/// The time last given, on the application's clock.
+now: u64 = 0,
+/// What is asked of devices, and waits for their answers.
+exchanges: std.ArrayList(exchange.Exchange) = .empty,
+next_exchange: u32 = 0,
+/// Sequence numbers of ZDO and ZCL frames, and tags of the frames given to the driver.
+zdo_sequence: u8 = 0,
+zcl_sequence: u8 = 0,
+next_tag: u8 = 0,
 /// `stop` was called: once the driver is idle, the state is refreshed, then the context stops.
 stopping: bool = false,
 /// The join window last asked for, in seconds, reported when the dongle opens it.
 window_seconds: u8 = 0,
 /// Requests ended without a spare event to report them, by `linkLost`: still to be queued.
-canceled_pending: [max_ops]u32 = undefined,
+canceled_pending: [max_ops + requests.max_pending]u32 = undefined,
 canceled_len: usize = 0,
 /// The error of a STOPPED event still to be queued, after the canceled requests.
 stopped_pending: ?c_int = null,
 
 pub const Status = enum { idle, starting, running, stopped };
+
+/// What the driver is busy with.
+const Busy = union(enum) {
+  idle,
+  /// The first of `ops`.
+  op,
+  /// The first of `ops`, a join window, whose broadcast to the routers is this frame.
+  routers: u8,
+  /// A frame of an exchange.
+  frame: u8,
+};
 
 /// Something the driver is asked to do.
 const Op = struct {
@@ -79,7 +104,8 @@ pub const Options = struct {
 const LogLevelName = enum { @"error", warning, info, debug };
 
 /// Spare events kept ready, as many as a driver event can lead to: a failure is logged, ends
-/// both requests and stops the context.
+/// both requests and stops the context; a device that leaves on request ends the request, is
+/// reported gone, and changes the state.
 const spare_count = 2 + max_ops;
 
 /// Creates a context. With `allocator` null, memory comes from the C library.
@@ -101,6 +127,7 @@ pub fn destroy(ctx: *Context) void {
   if (ctx.state) |*s| {
     s.deinit(ctx.gpa);
   }
+  ctx.exchanges.deinit(ctx.gpa);
   ctx.events.destroyAll();
   ctx.spares.destroyAll();
   var copy = ctx.c_allocator;
@@ -245,7 +272,7 @@ pub fn importState(ctx: *Context, bytes: []const u8) c_int {
   return 0;
 }
 
-fn newRequest(ctx: *Context) u32 {
+pub fn newRequest(ctx: *Context) u32 {
   const id = ctx.next_request;
   ctx.next_request +%= 1;
   if (ctx.next_request == 0) {
@@ -268,17 +295,22 @@ fn push(ctx: *Context, op: Op) void {
   ctx.kick();
 }
 
-/// Starts the next thing for the driver to do, if it is idle: what was asked for, or the refresh
-/// before stopping.
-fn kick(ctx: *Context) void {
-  if (ctx.busy) return;
+/// Starts the next thing for the driver to do, if it is idle: what was asked for, the refresh
+/// before stopping, or a frame for a device that can hear it.
+pub fn kick(ctx: *Context) void {
+  if (ctx.busy != .idle or ctx.status != .running) return;
   if (ctx.ops_len == 0) {
-    if (!ctx.stopping) return;
+    if (!ctx.stopping) {
+      if (exchange.sendNext(ctx)) |tag| {
+        ctx.busy = .{ .frame = tag };
+      }
+      return;
+    }
     ctx.ops[0] = .{ .kind = .refresh, .request = null };
     ctx.ops_len = 1;
   }
   const op = ctx.ops[0];
-  ctx.busy = true;
+  ctx.busy = .op;
   const d = &ctx.driver.?;
   switch (op.kind) {
     .permit_join => {
@@ -294,7 +326,7 @@ fn done(ctx: *Context) Op {
   const op = ctx.ops[0];
   std.mem.copyForwards(Op, ctx.ops[0..ctx.ops_len - 1], ctx.ops[1..ctx.ops_len]);
   ctx.ops_len -= 1;
-  ctx.busy = false;
+  ctx.busy = .idle;
   return op;
 }
 
@@ -311,8 +343,9 @@ pub fn stop(ctx: *Context) c_int {
     return 0;
   }
   ctx.cancelRequests();
+  exchange.cancelAll(ctx);
   // What the driver has not started is dropped; what it has started, it finishes.
-  ctx.ops_len = if (ctx.busy) 1 else 0;
+  ctx.ops_len = if (ctx.busy == .op or ctx.busy == .routers) 1 else 0;
   ctx.stopping = true;
   ctx.kick();
   return 0;
@@ -328,6 +361,7 @@ pub fn linkLost(ctx: *Context) void {
 /// Ends pending requests, queues STOPPED with `error_code`, and lets the driver go.
 fn finish(ctx: *Context, error_code: c_int) void {
   ctx.cancelRequests();
+  exchange.cancelAll(ctx);
   // After the canceled requests, which may still wait for events.
   if (ctx.canceled_len == 0) {
     if (ctx.spares.pop()) |event| {
@@ -341,7 +375,7 @@ fn finish(ctx: *Context, error_code: c_int) void {
     ctx.stopped_pending = error_code;
   }
   ctx.ops_len = 0;
-  ctx.busy = false;
+  ctx.busy = .idle;
   ctx.stopping = false;
   ctx.restoring = false;
   ctx.driver = null;
@@ -354,17 +388,98 @@ fn cancelRequests(ctx: *Context) void {
   for (ctx.ops[0..ctx.ops_len]) |*op| {
     const id = op.request orelse continue;
     op.request = null;
-    if (ctx.spares.pop()) |event| {
-      requestDone(event, id, err(.CANCELED));
-      ctx.events.push(event);
-    } else {
-      ctx.canceled_pending[ctx.canceled_len] = id;
-      ctx.canceled_len += 1;
-    }
+    ctx.cancelRequest(id);
   }
 }
 
+/// Ends a request with -ECANCELED, now if a spare event is left, otherwise at the next call that
+/// can allocate one.
+pub fn cancelRequest(ctx: *Context, id: u32) void {
+  if (ctx.spares.pop()) |event| {
+    requestDone(event, id, err(.CANCELED));
+    ctx.events.push(event);
+  } else {
+    ctx.canceled_pending[ctx.canceled_len] = id;
+    ctx.canceled_len += 1;
+  }
+}
+
+/// SKEP_EVENT_REQUEST_DONE, to fill in and push. Takes a spare event, of which the caller made
+/// sure one was left.
+pub fn requestEvent(ctx: *Context, id: u32, error_code: c_int, status: u8) *Event {
+  const event = ctx.spares.pop().?;
+  requestDone(event, id, error_code);
+  event.status = status;
+  return event;
+}
+
+pub fn requestEnded(ctx: *Context, id: u32, error_code: c_int, status: u8) void {
+  ctx.events.push(ctx.requestEvent(id, error_code, status));
+}
+
+/// An event about a device, without more to it.
+pub fn deviceEvent(ctx: *Context, t: Event.Type, ieee: u64) void {
+  const event = ctx.spares.pop().?;
+  event.type = t;
+  event.device = ieee;
+  ctx.events.push(event);
+}
+
+/// A device refused a step of its setup: logged, and reported.
+pub fn setupFailed(
+  ctx: *Context,
+  ieee: u64,
+  error_code: c_int,
+  status: u8,
+  progress: State.Progress,
+) void {
+  const message: driver_layer.Message = .init(
+    "device {x:0>16}: setup failed at {t} {d} (error {d}, status 0x{x:0>2})",
+    .{
+      ieee,
+      progress.stage,
+      progress.step,
+      error_code,
+      status,
+    },
+  );
+  ctx.logMessage(.warning, message.text());
+  const event = ctx.spares.pop().?;
+  event.type = .device_setup_failed;
+  event.device = ieee;
+  event.error_code = error_code;
+  event.status = status;
+  ctx.events.push(event);
+}
+
+/// Forgets a device that left on request: its exchanges go, and so does it.
+pub fn forgetDevice(ctx: *Context, ieee: u64) void {
+  var i: usize = 0;
+  while (i < ctx.exchanges.items.len) {
+    const e = ctx.exchanges.items[i];
+    // Its requests are ended as canceled; it has no other exchange left.
+    if (e.device == ieee and e.phase == .waiting) {
+      _ = ctx.exchanges.orderedRemove(i);
+      if (e.purpose == .request) {
+        ctx.cancelRequest(e.purpose.request.id);
+      }
+    } else {
+      i += 1;
+    }
+  }
+  const s = &ctx.state.?;
+  for (s.devices.items, 0..) |*d, j| {
+    if (d.ieee != ieee) continue;
+    d.deinit(ctx.gpa);
+    _ = s.devices.orderedRemove(j);
+    break;
+  }
+  ctx.deviceEvent(.device_left, ieee);
+  ctx.stateChanged();
+}
+
 pub fn input(ctx: *Context, bytes: []const u8, now: u64) c_int {
+  ctx.now = now;
   const d = if (ctx.driver) |*d| d else return 0;
   d.input(bytes, now);
   return ctx.process();
@@ -376,6 +491,7 @@ pub fn output(ctx: *const Context) []const u8 {
 }
 
 pub fn outputDone(ctx: *Context, len: usize, now: u64) void {
+  ctx.now = now;
   // The driver's events wait for the next call that can report a failed allocation.
   if (ctx.driver) |*d| {
     d.outputDone(len, now);
@@ -384,10 +500,15 @@ pub fn outputDone(ctx: *Context, len: usize, now: u64) void {
 
 pub fn nextDeadline(ctx: *const Context) ?u64 {
   const d = if (ctx.driver) |*d| d else return null;
-  return d.nextDeadline();
+  const driver_deadline = d.nextDeadline();
+  const exchange_deadline = exchange.nextDeadline(ctx);
+  if (driver_deadline == null) return exchange_deadline;
+  if (exchange_deadline == null) return driver_deadline;
+  return @min(driver_deadline.?, exchange_deadline.?);
 }
 
 pub fn advance(ctx: *Context, now: u64) c_int {
+  ctx.now = now;
   if (ctx.driver) |*d| {
     d.advance(now);
   }
@@ -401,14 +522,15 @@ pub fn nextEvent(ctx: *Context) ?*Event {
 /// Turns the driver's events into the application's. Returns 0 or -ENOMEM; on -ENOMEM nothing
 /// is lost, and the next call goes on.
 fn process(ctx: *Context) c_int {
-  ctx.fillSpares() catch return err(.NOMEM);
-  // As many spares as there are events pending.
-  for (ctx.canceled_pending[0..ctx.canceled_len]) |id| {
+  // One at a time, each with a spare event.
+  while (ctx.canceled_len > 0) {
+    ctx.fillSpares() catch return err(.NOMEM);
+    ctx.canceled_len -= 1;
     const event = ctx.spares.pop().?;
-    requestDone(event, id, err(.CANCELED));
+    requestDone(event, ctx.canceled_pending[ctx.canceled_len], err(.CANCELED));
     ctx.events.push(event);
   }
-  ctx.canceled_len = 0;
+  ctx.fillSpares() catch return err(.NOMEM);
   if (ctx.stopped_pending) |error_code| {
     ctx.stopped_pending = null;
     const event = ctx.spares.pop().?;
@@ -445,17 +567,38 @@ fn process(ctx: *Context) c_int {
         }
       },
       .permit_join_done => |failure| {
-        const op = ctx.done();
         if (failure) |f| {
           ctx.logMessage(.err, f.message.text());
-        }
-        if (op.request) |id| {
-          const event = ctx.spares.pop().?;
-          requestDone(event, id, if (failure) |f| err(errnoOf(f.kind)) else 0);
-          ctx.events.push(event);
+          const op = ctx.done();
+          if (op.request) |id| {
+            ctx.requestEnded(id, err(errnoOf(f.kind)), 0);
+          }
+        } else {
+          ctx.tellRouters(ctx.ops[0].seconds);
         }
         ctx.kick();
       },
+      .send_done => |sent| {
+        switch (ctx.busy) {
+          .routers => |tag| if (tag == sent.tag) {
+            const op = ctx.done();
+            if (sent.failure) |f| {
+              ctx.logMessage(.warning, f.message.text());
+            }
+            if (op.request) |id| {
+              ctx.requestEnded(id, if (sent.failure) |f| err(errnoOf(f.kind)) else 0, 0);
+            }
+          },
+          .frame => |tag| if (tag == sent.tag) {
+            ctx.busy = .idle;
+            exchange.sendDone(ctx, sent.tag, sent.failure != null);
+          },
+          .idle, .op => {},
+        }
+        ctx.kick();
+      },
+      .delivered => |delivered| exchange.delivered(ctx, delivered.tag, delivered.ok),
+      .message => |frame| ctx.onFrame(&frame),
       .join_window => |open| {
         const event = ctx.spares.pop().?;
         event.type = .permit_join;
@@ -464,24 +607,24 @@ fn process(ctx: *Context) c_int {
       },
       .device => |device| switch (device.kind) {
         .joined, .rejoined => {
-          const changed = if (ctx.state) |*s|
-            s.noteDeviceAssumeCapacity(device.ieee, device.nwk)
-          else
-            false;
+          const s = &ctx.state.?;
+          const changed = s.noteDeviceAssumeCapacity(device.ieee, device.nwk);
+          const known = s.device(device.ieee).?;
+          exchange.heard(ctx, known);
           if (device.kind == .joined) {
-            const event = ctx.spares.pop().?;
-            event.type = .device_joined;
-            event.device = device.ieee;
-            ctx.events.push(event);
+            // New, or joining afresh after a factory reset: set up from the start.
+            ctx.deviceEvent(.device_joined, device.ieee);
+            setup.restart(ctx, known);
           } else {
             // A known device keeps its setup: nothing to report.
             const message: driver_layer.Message = .init("device {x:0>16} rejoined", .{
               device.ieee,
             });
             ctx.logMessage(.debug, message.text());
-          }
-          if (changed) {
-            ctx.stateChanged();
+            if (changed) {
+              ctx.stateChanged();
+            }
+            setup.next(ctx, known);
           }
         },
         // libskep keeps a device that left: it may come back.
@@ -497,12 +640,81 @@ fn process(ctx: *Context) c_int {
         ctx.finish(err(errnoOf(failure.kind)));
       },
       .log => |entry| ctx.logMessage(entry.level, entry.message.text()),
-      // Nothing sends or listens yet.
-      .send_done, .delivered, .message => {},
     }
     ctx.fillSpares() catch return err(.NOMEM);
   }
+  // Exchanges overdue, one at a time, each with its spare events.
+  if (ctx.status == .running) {
+    while (exchange.checkTimes(ctx)) {
+      ctx.fillSpares() catch return err(.NOMEM);
+    }
+  }
+  ctx.kick();
   return 0;
+}
+
+/// After the dongle opened or closed the join window, the routers are told, with a broadcast.
+fn tellRouters(ctx: *Context, seconds: u8) void {
+  var out: [3]u8 = undefined;
+  const built = exchange.zdoFrame(
+    ctx,
+    zdo.Cluster.permit_joining_request,
+    zdo.permitJoiningRequest(&out, 0, seconds),
+  );
+  var frame = built.frame;
+  frame.address = 0xfffc;
+  frame.broadcast = true;
+  ctx.next_tag +%= 1;
+  frame.tag = ctx.next_tag;
+  ctx.busy = .{ .routers = frame.tag };
+  ctx.driver.?.send(&frame);
+}
+
+/// A frame from a device: an announcement, the answer to an exchange, a report, or a command.
+fn onFrame(ctx: *Context, frame: *const driver_layer.Frame) void {
+  const s = if (ctx.state) |*s| s else return;
+  if (frame.profile == zdo.profile and frame.cluster == zdo.Cluster.device_announce) {
+    const announce = zdo.DeviceAnnounce.parse(frame.bytes()) catch return;
+    const known = s.device(announce.ieee) != null;
+    if (s.noteDeviceAssumeCapacity(announce.ieee, announce.nwk)) {
+      ctx.stateChanged();
+    }
+    const d = s.device(announce.ieee).?;
+    exchange.heard(ctx, d);
+    if (!known) {
+      ctx.deviceEvent(.device_joined, d.ieee);
+    }
+    setup.next(ctx, d);
+    return;
+  }
+  const d = s.deviceAt(frame.address) orelse return;
+  exchange.heard(ctx, d);
+  if (!exchange.answer(ctx, d, frame)) {
+    ctx.unsolicited(d, frame);
+  }
+  setup.next(ctx, d);
+}
+
+/// What a device sent by itself: attribute reports, and cluster commands.
+fn unsolicited(ctx: *Context, d: *const State.Device, frame: *const driver_layer.Frame) void {
+  if (frame.profile == zdo.profile) return;
+  const parsed = zcl.Frame.parse(frame.bytes()) catch return;
+  const h = parsed.header;
+  const report = !h.cluster_specific and h.command == zcl.Command.report_attributes;
+  if (!report and !h.cluster_specific) return;
+  const event = ctx.spares.pop().?;
+  event.type = if (report) .attributes else .command;
+  event.device = d.ieee;
+  event.endpoint = frame.source_endpoint;
+  event.cluster = frame.cluster;
+  event.manufacturer_code = h.manufacturer_code orelse 0;
+  if (report) {
+    event.setAttributes(.report, parsed.payload);
+  } else {
+    event.command = h.command;
+    event.setPayload(parsed.payload);
+  }
+  ctx.events.push(event);
 }
 
 fn onReady(ctx: *Context, r: driver_layer.Ready) void {
@@ -635,7 +847,7 @@ fn started(ctx: *Context, held: driver_layer.Held, origin: Event.Origin) void {
   }
 }
 
-fn stateChanged(ctx: *Context) void {
+pub fn stateChanged(ctx: *Context) void {
   const event = ctx.spares.pop().?;
   event.type = .state_changed;
   ctx.events.push(event);

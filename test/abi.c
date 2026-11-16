@@ -104,14 +104,15 @@ int main(void) {
   CHECK(skep_permit_join(ctx, 255, &request) == -EINVAL);
   CHECK(skep_permit_join(ctx, 60, &request) == 0 && request != 0);
   CHECK(skep_advance(ctx, 0) == 0);
+  /* The window opens, then the request ends once the routers are told. */
+  event = skep_next_event(ctx);
+  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_PERMIT_JOIN);
+  CHECK(skep_event_get_duration(event) == 60);
+  skep_event_free(event);
   event = skep_next_event(ctx);
   CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_REQUEST_DONE);
   CHECK(skep_event_get_request(event) == request && skep_event_get_error(event) == 0);
   CHECK(skep_event_get_status(event) == 0);
-  skep_event_free(event);
-  event = skep_next_event(ctx);
-  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_PERMIT_JOIN);
-  CHECK(skep_event_get_duration(event) == 60);
   skep_event_free(event);
 
   CHECK(skep_stop(ctx) == 0);

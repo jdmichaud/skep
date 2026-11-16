@@ -9,6 +9,7 @@ const build_options = @import("build_options");
 const CAllocator = @import("allocator.zig").CAllocator;
 const Context = @import("Context.zig");
 const Event = @import("Event.zig");
+const State = @import("State.zig");
 const sim = @import("driver/sim/sim.zig");
 
 /// Version of libskep, taken from `.version` in `build.zig.zon`.
@@ -351,15 +352,21 @@ test "devices join while the window is open" {
   var second: u32 = 0;
   try testing.expectEqual(err(.NOBUFS), skep_permit_join(ctx, 60, &second));
   try testing.expectEqual(0, skep_advance(ctx, 0));
+  // The window opens, then the request ends once the routers are told.
+  const window = skep_next_event(ctx).?;
+  defer skep_event_free(window);
+  try testing.expectEqual(@backingInt(Event.Type.permit_join), skep_event_get_type(window));
+  try testing.expectEqual(60, skep_event_get_duration(window));
   const done = skep_next_event(ctx).?;
   defer skep_event_free(done);
   try testing.expectEqual(@backingInt(Event.Type.request_done), skep_event_get_type(done));
   try testing.expectEqual(request, skep_event_get_request(done));
   try testing.expectEqual(0, skep_event_get_error(done));
-  const window = skep_next_event(ctx).?;
-  defer skep_event_free(window);
-  try testing.expectEqual(@backingInt(Event.Type.permit_join), skep_event_get_type(window));
-  try testing.expectEqual(60, skep_event_get_duration(window));
+  // Told with a broadcast.
+  const broadcast = ctx.driver.?.sim.sent[ctx.driver.?.sim.sent_len - 1];
+  try testing.expect(broadcast.broadcast);
+  try testing.expectEqual(0xfffc, broadcast.address);
+  try testing.expectEqual(0x0036, broadcast.cluster);
 
   ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .joined });
   ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .rejoined });
@@ -387,7 +394,7 @@ fn exportState(ctx: *Context) ![]u8 {
 
 /// The events up to the next of type `wanted`, which is returned: null if there is none.
 fn nextOfType(ctx: *Context, wanted: Event.Type) !?*Event {
-  for (0..10) |_| {
+  for (0..100) |_| {
     if (skep_advance(ctx, 0) != 0) return error.OutOfMemory;
     const event = skep_next_event(ctx) orelse return null;
     if (skep_event_get_type(event) == @backingInt(wanted)) return event;
@@ -408,6 +415,7 @@ test "the state is exported, and brings the network back onto a new dongle" {
   try testing.expectEqual(0, skep_permit_join(ctx, 60, &request));
   ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .joined });
   skep_event_free((try nextOfType(ctx, .state_changed)).?);
+  skep_event_free((try nextOfType(ctx, .request_done)).?);
   try testing.expectEqual(null, try nextEventType(ctx));
   // A refresh reports the counters that moved, then ends.
   ctx.driver.?.sim.network.?.security.network_frame_counter = 5000;
@@ -468,6 +476,112 @@ test "a dongle holding another network is not overwritten without replace-networ
   try testing.expectEqual(0, skep_set_option(other, "replace-network", "yes"));
   try testing.expectEqual(@backingInt(Event.Origin.restored), try startedOrigin(other));
   try testing.expectEqual(ctx.network.?, other.network.?);
+}
+
+/// A context with the sim driver, whose network holds `devices`, started.
+fn simContext(allocator: *const std.mem.Allocator, devices: []sim.Device) !*Context {
+  const ctx = try testContext(allocator);
+  errdefer skep_free(ctx);
+  ctx.sim_dongle.devices = devices;
+  if (skep_set_option(ctx, "driver", "sim") != 0) return error.TestUnexpectedResult;
+  if (try startedOrigin(ctx) != @backingInt(Event.Origin.formed)) return error.TestUnexpectedResult;
+  return ctx;
+}
+
+const sensor_ieee = 0xf44250000d350000;
+
+test "a device that joins is interviewed, set up, and reports" {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce, .rx_on_when_idle = false }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  const ready = (try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady;
+  try testing.expectEqual(sensor_ieee, skep_event_get_device(ready));
+  skep_event_free(ready);
+
+  const d = ctx.state.?.device(sensor_ieee).?;
+  try testing.expectEqual(State.Stage.ready, d.progress.stage);
+  try testing.expectEqualStrings("3RTHS0224Z", d.model.?);
+  try testing.expectEqualStrings("Third Reality, Inc", d.manufacturer.?);
+  try testing.expectEqual(State.NodeType.end_device, d.node.?.type);
+  try testing.expect(d.sleepy());
+  try testing.expectEqual(1, d.endpoints.len);
+  try testing.expect(d.endpoints[0].hasInput(0x0405));
+  try testing.expectEqualSlices(u16, &.{ 0x0019 }, d.endpoints[0].output_clusters);
+  // The steps of its entry: three bindings, three reporting configurations.
+  try testing.expectEqual(3, devices[0].binds);
+  try testing.expectEqual(3, devices[0].configurations);
+
+  // MeasuredValue of the temperature: 22.43 °C.
+  ctx.driver.?.sim.report(&devices[0], 0x0402, &.{ 0x00, 0x00, 0x29, 0xc3, 0x08 });
+  const report = (try nextOfType(ctx, .attributes)) orelse return error.TestExpectedReport;
+  defer skep_event_free(report);
+  try testing.expectEqual(sensor_ieee, report.device);
+  try testing.expectEqual(1, report.endpoint);
+  try testing.expectEqual(0x0402, report.cluster);
+  try testing.expectEqual(1, report.attribute_count);
+  try testing.expectEqual(0x0000, report.attributes[0].id);
+  try testing.expectEqual(2243, report.attributes[0].value.v.i);
+}
+
+test "a device that falls silent is set up further when it is next heard from" {
+  var devices = [_]sim.Device{.{
+    .ieee = sensor_ieee,
+    .nwk = 0x1bce,
+    .rx_on_when_idle = false,
+    .silent = true,
+  }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  // Asleep: its interview waits, and nothing more is sent to it.
+  try testing.expectEqual(null, try nextOfType(ctx, .device_ready));
+  const sent = ctx.driver.?.sim.sent_len;
+  try testing.expectEqual(null, try nextOfType(ctx, .device_ready));
+  try testing.expectEqual(sent, ctx.driver.?.sim.sent_len);
+  try testing.expectEqual(State.Stage.node, ctx.state.?.device(sensor_ieee).?.progress.stage);
+  // It wakes up, and reports: the interview goes on.
+  devices[0].silent = false;
+  ctx.driver.?.sim.report(&devices[0], 0x0402, &.{ 0x00, 0x00, 0x29, 0xc3, 0x08 });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+}
+
+test "a device that refuses a step of its setup has failed" {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce, .bind_status = 0x8c }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  const failed = (try nextOfType(ctx, .device_setup_failed)) orelse
+    return error.TestExpectedFailure;
+  defer skep_event_free(failed);
+  try testing.expectEqual(0, skep_event_get_error(failed));
+  try testing.expectEqual(0x8c, skep_event_get_status(failed));
+  try testing.expectEqual(State.Stage.failed, ctx.state.?.device(sensor_ieee).?.progress.stage);
+  // And goes no further.
+  try testing.expectEqual(null, try nextOfType(ctx, .device_ready));
+}
+
+/// A device joins and is interviewed, every allocation failing in turn.
+fn interviewOnce(allocator: std.mem.Allocator) !void {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
+  const ctx = try simContext(&allocator, &devices);
+  defer skep_free(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  for (0..60) |_| {
+    _ = skep_advance(ctx, 0);
+    while (skep_next_event(ctx)) |event| {
+      skep_event_free(event);
+    }
+  }
+}
+
+test "running out of memory during an interview leaks nothing" {
+  var i: usize = 0;
+  while (true) : (i += 1) {
+    var failing: std.testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = i });
+    interviewOnce(failing.allocator()) catch {};
+    if (!failing.has_induced_failure) break;
+  }
 }
 
 test "stopping ends pending requests" {
@@ -546,6 +660,9 @@ test {
   _ = @import("zcl.zig");
   _ = @import("zdo.zig");
   _ = @import("devices.zig");
+  _ = @import("exchange.zig");
+  _ = @import("requests.zig");
+  _ = @import("setup.zig");
   _ = @import("driver/driver.zig");
   _ = @import("driver/ezsp/ezsp.zig");
   std.testing.refAllDecls(@This());

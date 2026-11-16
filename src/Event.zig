@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const CAllocator = @import("allocator.zig").CAllocator;
+const zcl = @import("zcl.zig");
 
 const Event = @This();
 
@@ -30,6 +31,10 @@ pub const Origin = enum(c_int) { none = 0, resumed = 1, restored = 2, formed = 3
 
 /// Longest log message, without its terminating NUL.
 pub const max_log_len = 160;
+/// Longest ZCL payload an event keeps: more than a Zigbee frame holds.
+pub const max_payload_len = 127;
+/// Most attributes an event holds: as many as fit a payload, of one byte each.
+pub const max_attributes = max_payload_len / 4 + 1;
 
 type: Type = .log,
 /// The next event in a queue.
@@ -46,6 +51,65 @@ origin: Origin = .none,
 device: u64 = 0,
 log_level: c_int = 0,
 log_buffer: [max_log_len + 1]u8 = @splat(0),
+/// For ATTRIBUTES and COMMAND: where the frame came from.
+endpoint: u8 = 0,
+cluster: u16 = 0,
+manufacturer_code: u16 = 0,
+/// For COMMAND: the command, and its arguments in their ZCL encoding.
+command: u8 = 0,
+/// The ZCL payload the event's attributes and arguments point into.
+payload: [max_payload_len]u8 = undefined,
+payload_len: u8 = 0,
+attributes: [max_attributes]Attribute = undefined,
+attribute_count: u8 = 0,
+
+/// `struct skep_attribute`.
+pub const Attribute = extern struct {
+  id: u16,
+  status: u8,
+  value: zcl.Value,
+  reserved: [2]u64 = @splat(0),
+};
+
+/// How the attributes of a payload are laid out.
+pub const Records = enum { report, read_response };
+
+/// Copies a ZCL payload into the event, and decodes its attributes from the copy, so that their
+/// values point into the event. Attributes after one that cannot be decoded are left out.
+pub fn setAttributes(event: *Event, records: Records, payload: []const u8) void {
+  event.setPayload(payload);
+  event.attribute_count = 0;
+  const bytes = event.payload[0..event.payload_len];
+  switch (records) {
+    .report => {
+      var it: zcl.ReportIterator = .{ .bytes = bytes };
+      while (it.next() catch null) |a| {
+        if (!event.addAttribute(a)) break;
+      }
+    },
+    .read_response => {
+      var it: zcl.ReadResponseIterator = .{ .bytes = bytes };
+      while (it.next() catch null) |a| {
+        if (!event.addAttribute(a)) break;
+      }
+    },
+  }
+}
+
+/// Adds an attribute, without a value; returns false if the event holds as many as it can.
+pub fn addAttribute(event: *Event, a: zcl.Attribute) bool {
+  if (event.attribute_count == max_attributes) return false;
+  event.attributes[event.attribute_count] = .{ .id = a.id, .status = a.status, .value = a.value };
+  event.attribute_count += 1;
+  return true;
+}
+
+/// Copies a payload into the event, cut short if it is too long.
+pub fn setPayload(event: *Event, payload: []const u8) void {
+  const len = @min(payload.len, max_payload_len);
+  @memcpy(event.payload[0..len], payload[0..len]);
+  event.payload_len = @intCast(len);
+}
 
 pub fn create(allocator: ?CAllocator) error{ OutOfMemory }!*Event {
   var copy = allocator;
@@ -131,6 +195,21 @@ test "log messages are cut short" {
   const long: [400]u8 = @splat('x');
   event.setLog(0, &long);
   try std.testing.expectEqual(max_log_len, std.mem.span(event.log()).len);
+}
+
+test "attributes point into the event, which outlives the frame" {
+  const c: CAllocator = .wrap(&std.testing.allocator);
+  const event = try create(c);
+  defer event.destroy();
+  {
+    // The sensor's model and an unknown attribute, in a read response.
+    var frame = [_]u8{ 0x05, 0x00, 0x00, 0x42, 0x03, 'a', 'b', 'c', 0x04, 0x00, 0x86 };
+    event.setAttributes(.read_response, &frame);
+    @memset(&frame, 0);
+  }
+  try std.testing.expectEqual(2, event.attribute_count);
+  try std.testing.expectEqualStrings("abc", event.attributes[0].value.bytesOf());
+  try std.testing.expectEqual(0x86, event.attributes[1].status);
 }
 
 test "a queue keeps events in order" {

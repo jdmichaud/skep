@@ -6,6 +6,28 @@
 
 const std = @import("std");
 const driver = @import("../driver.zig");
+const zcl = @import("../../zcl.zig");
+const zdo = @import("../../zdo.zig");
+
+/// A simulated device, which answers its interview and setup as the ThirdReality sensor does.
+pub const Device = struct {
+  ieee: u64,
+  nwk: u16,
+  /// Its receiver is on when idle: false for a sleepy end device.
+  rx_on_when_idle: bool = true,
+  manufacturer: []const u8 = "Third Reality, Inc",
+  model: []const u8 = "3RTHS0224Z",
+  /// The input and output clusters of its only endpoint, 1.
+  input_clusters: []const u16 = &.{ 0x0000, 0x0001, 0x0003, 0x0402, 0x0405 },
+  output_clusters: []const u16 = &.{ 0x0019 },
+  /// Picks nothing up, and answers nothing: asleep, or gone.
+  silent: bool = false,
+  /// The ZDO status it answers bindings with.
+  bind_status: u8 = 0,
+  /// What it accepted.
+  binds: u8 = 0,
+  configurations: u8 = 0,
+};
 
 pub const Driver = struct {
   /// The network the simulated dongle holds. Tests set it before `start`, and advance its
@@ -19,6 +41,8 @@ pub const Driver = struct {
   /// The messages sent, the last ones if more were.
   sent: [16]driver.Frame = undefined,
   sent_len: usize = 0,
+  /// The devices of the simulated network, which the test owns and changes as it likes.
+  devices: []Device = &.{},
 
   pub fn start(d: *Driver) void {
     d.pending_len = 0;
@@ -60,7 +84,174 @@ pub const Driver = struct {
     d.sent[d.sent_len] = message.*;
     d.sent_len += 1;
     d.post(.{ .send_done = .{ .tag = message.tag, .failure = null } });
-    d.post(.{ .delivered = .{ .tag = message.tag, .ok = true } });
+    const to = if (message.broadcast) null else d.deviceAt(message.address);
+    if (to) |dev| {
+      d.post(.{ .delivered = .{ .tag = message.tag, .ok = !dev.silent } });
+      if (!dev.silent) {
+        d.answer(dev, message);
+      }
+    } else {
+      d.post(.{ .delivered = .{ .tag = message.tag, .ok = true } });
+    }
+  }
+
+  fn deviceAt(d: *Driver, nwk: u16) ?*Device {
+    for (d.devices) |*dev| {
+      if (dev.nwk == nwk) return dev;
+    }
+    return null;
+  }
+
+  /// A simulated device answers a frame.
+  fn answer(d: *Driver, dev: *Device, message: *const driver.Frame) void {
+    var reply: driver.Frame = .{
+      .address = dev.nwk,
+      .profile = message.profile,
+      .cluster = message.cluster,
+      .source_endpoint = message.destination_endpoint,
+      .destination_endpoint = message.source_endpoint,
+    };
+    var w: std.Io.Writer = .fixed(&reply.payload);
+    if (message.profile == zdo.profile) {
+      const request = message.bytes();
+      reply.cluster = message.cluster | zdo.Cluster.response;
+      w.writeByte(request[0]) catch unreachable;
+      switch (message.cluster) {
+        zdo.Cluster.node_descriptor_request => {
+          w.writeAll(&.{ 0, @truncate(dev.nwk), @truncate(dev.nwk >> 8) }) catch unreachable;
+          const logical: u8 = if (dev.rx_on_when_idle) 1 else 2;
+          const capabilities: u8 = if (dev.rx_on_when_idle) 0x8e else 0x80;
+          w.writeAll(
+            &.{
+              logical,
+              0x40,
+              capabilities,
+              0x07,
+              0x14,
+              0x52,
+              0x80,
+              0x00,
+              0x00,
+              0x2c,
+              0x80,
+              0x00,
+              0x00,
+            },
+          ) catch unreachable;
+        },
+        zdo.Cluster.active_endpoints_request => {
+          w.writeAll(&.{ 0, @truncate(dev.nwk), @truncate(dev.nwk >> 8), 1, 1 }) catch unreachable;
+        },
+        zdo.Cluster.simple_descriptor_request => {
+          const len = 8 + 2 * (dev.input_clusters.len + dev.output_clusters.len);
+          w.writeAll(
+            &.{
+              0,
+              @truncate(dev.nwk),
+              @truncate(dev.nwk >> 8),
+              @intCast(len),
+              1,
+              0x04,
+              0x01,
+              0x02,
+              0x03,
+              0,
+            },
+          ) catch unreachable;
+          w.writeByte(@intCast(dev.input_clusters.len)) catch unreachable;
+          for (dev.input_clusters) |c| {
+            w.writeInt(u16, c, .little) catch unreachable;
+          }
+          w.writeByte(@intCast(dev.output_clusters.len)) catch unreachable;
+          for (dev.output_clusters) |c| {
+            w.writeInt(u16, c, .little) catch unreachable;
+          }
+        },
+        zdo.Cluster.bind_request, zdo.Cluster.unbind_request => {
+          w.writeByte(dev.bind_status) catch unreachable;
+          if (dev.bind_status == 0) {
+            dev.binds += 1;
+          }
+        },
+        else => w.writeByte(zdo.Status.not_supported) catch unreachable,
+      }
+    } else {
+      const request = zcl.Frame.parse(message.bytes()) catch return;
+      const h = request.header;
+      var response: zcl.Header = .{
+        .cluster_specific = false,
+        .from_server = true,
+        .disable_default_response = true,
+        .sequence = h.sequence,
+        .command = zcl.Command.default_response,
+      };
+      if (h.cluster_specific) {
+        response.write(&w) catch unreachable;
+        w.writeAll(&.{ h.command, zcl.Status.success }) catch unreachable;
+      } else {
+        switch (h.command) {
+          zcl.Command.read_attributes => {
+            response.command = zcl.Command.read_attributes_response;
+            response.write(&w) catch unreachable;
+            var i: usize = 0;
+            while (i + 2 <= request.payload.len) : (i += 2) {
+              const id = std.mem.readInt(u16, request.payload[i..][0..2], .little);
+              w.writeInt(u16, id, .little) catch unreachable;
+              const text: ?[]const u8 = if (message.cluster != 0x0000) null else switch (id) {
+                0x0004 => dev.manufacturer,
+                0x0005 => dev.model,
+                else => null,
+              };
+              if (text) |t| {
+                w.writeAll(&.{ zcl.Status.success, zcl.Type.char_string, @intCast(t.len) }) catch
+                  unreachable;
+                w.writeAll(t) catch unreachable;
+              } else {
+                w.writeByte(zcl.Status.unsupported_attribute) catch unreachable;
+              }
+            }
+          },
+          zcl.Command.configure_reporting => {
+            response.command = zcl.Command.configure_reporting_response;
+            response.write(&w) catch unreachable;
+            w.writeByte(zcl.Status.success) catch unreachable;
+            dev.configurations += 1;
+          },
+          zcl.Command.write_attributes => {
+            response.command = zcl.Command.write_attributes_response;
+            response.write(&w) catch unreachable;
+            w.writeByte(zcl.Status.success) catch unreachable;
+          },
+          else => return,
+        }
+      }
+    }
+    reply.len = @intCast(w.end);
+    d.post(.{ .message = reply });
+  }
+
+  /// A simulated device reports attributes of a cluster of its endpoint 1, the records given in
+  /// their ZCL encoding. For tests.
+  pub fn report(d: *Driver, dev: *const Device, cluster: u16, records: []const u8) void {
+    var frame: driver.Frame = .{
+      .address = dev.nwk,
+      .profile = 0x0104,
+      .cluster = cluster,
+      .source_endpoint = 1,
+      .destination_endpoint = 1,
+    };
+    var w: std.Io.Writer = .fixed(&frame.payload);
+    const header: zcl.Header = .{
+      .cluster_specific = false,
+      .from_server = true,
+      .disable_default_response = true,
+      .sequence = 0x40,
+      .command = zcl.Command.report_attributes,
+    };
+    header.write(&w) catch unreachable;
+    w.writeAll(records) catch unreachable;
+    frame.len = @intCast(w.end);
+    d.post(.{ .message = frame });
   }
 
   /// A message comes in from a device. For tests.
