@@ -195,7 +195,15 @@ pub fn send(s: *Server, c: *Client, line: []const u8) void {
 /// Writes what a client can take of its output.
 pub fn flush(c: *Client) void {
   while (c.output.items.len > 0) {
-    const n = linux.write(c.fd, c.output.items.ptr, c.output.items.len);
+    // Not write(): to a client that went away, it raises SIGPIPE, which would end skepd.
+    const n = linux.sendto(
+      c.fd,
+      c.output.items.ptr,
+      c.output.items.len,
+      linux.MSG.NOSIGNAL,
+      null,
+      0,
+    );
     switch (linux.errno(n)) {
       .SUCCESS => {},
       .INTR => continue,

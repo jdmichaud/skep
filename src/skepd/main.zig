@@ -613,4 +613,5 @@ test {
   _ = @import("Server.zig");
   _ = @import("StateFile.zig");
   _ = @import("values.zig");
+  _ = @import("protocol.zig");
 }
