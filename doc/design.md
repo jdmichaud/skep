@@ -381,6 +381,18 @@ The API is in [include/skep.h](../include/skep.h).
   available" to OTA queries, since firmware updates are not in version
   1; those are not reported as commands. ZDO requests to the coordinator
   are answered by the dongle's firmware.
+- Readings: libskep names the attributes that hold a measurement or a
+  state, in words and units (`temperature` in °C rather than hundredths
+  of a degree), in events (`skep_event_get_reading()`), and lists those a
+  device has (`skep_device_get_readings()`), what matters most first.
+  - Why in libskep: what an attribute means and how it is scaled is
+    Zigbee knowledge, and devices get their scale factors wrong, which
+    their entries in `devices.zig` correct. Every application would
+    otherwise need the same tables, skep among them.
+  - The standard ones come from the ZCL, with a device's own definitions
+    first. Values the ZCL reserves for "invalid" have no reading.
+  - Not chosen: scaling in skep, which would put Zigbee logic in a client
+    and leave other clients to do it again.
 - No global state: everything libskep knows is in a context, which the
   application holds as an opaque handle. The application decides when a
   context is created and freed; only libskep reads or changes what is
@@ -458,6 +470,11 @@ The API is in [include/skep.h](../include/skep.h).
 - Device names, which clients give with skep-protocol's rename, are
   skepd's, not libskep's: they are kept in `names.json` next to the
   state.
+- It remembers the last reading of each attribute, as reported or read,
+  with its time, and gives them with the devices: a sleepy device cannot
+  be read on the spot, and the last report is often what a client wants.
+  In memory only: saving them would write a file on every report, for
+  values the devices send again within the hour.
 - A state file it cannot read stops it before it opens the dongle, and
   is left as it is: replacing it would lose the network it holds.
 - Runs in the foreground and never daemonizes itself. Under systemd it

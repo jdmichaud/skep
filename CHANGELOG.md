@@ -47,6 +47,8 @@ publishes the section of each released version as its release notes.
   where it has one, such as the plug's power, current and voltage.
   `skep_event_get_reading()` gives an attribute's, and
   `skep_device_get_readings()` lists what a device can be read for.
+  skep-protocol(7) carries them, and skepd remembers the last ones, which
+  the devices' descriptions give.
 - Opening or closing the join window tells the routers too.
 - libskep answers devices on the coordinator's behalf: a Default
   Response where a frame asks for one, and "no image available" to

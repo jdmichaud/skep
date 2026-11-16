@@ -203,8 +203,9 @@ value the hexadecimal digits of its encoding.
 	Read attributes.
 	Result: {"status": _ZCL status_, "attributes": [{"id": _id_, "status":
 	_ZCL status_, "type": ..., "value": ...}, ...]}, a type and value for each
-	attribute whose status is 0. "attributes" is left out when the device
-	refused the whole request, with a status other than 0.
+	attribute whose status is 0, and its reading (see *READINGS*). "attributes"
+	is left out when the device refused the whole request, with a status
+	other than 0.
 
 *write* {_target_, "attributes": [{"id": _id_, "type": ..., "value": ...}, ...]}
 	Write attributes.
@@ -284,14 +285,52 @@ the interview learns them:
     {"endpoint": 1, "profile": 260, "device_type": 770,
      "input_clusters": [0, 1, 3, 32, 1026, 1029], "output_clusters": [25]}
   ],
-  "setup": "ready"
+  "setup": "ready",
+  "readings": [...]
 }
 ```
 
 (shown on several lines here; on the socket, it is on one.) "type" is
 "coordinator", "router" or "end_device". "setup" is "pending" while the
 device is interviewed and set up, or waits to wake up to go on, "ready" once
-done, and "failed" when it refused a step.
+done, and "failed" when it refused a step. "readings" is under *READINGS*.
+
+# READINGS
+
+skepd names some attributes as readings, in words and units: a temperature in
+°C, rather than in the hundredths of a degree the ZCL reports it in, scaled
+as the device needs. An attribute with a reading, in the result of *read*
+and in *attributes* events, has three more members: "reading", its name;
+"scaled", its value in its unit; and "unit", "" for none:
+
+```
+{"id": 0, "type": "int16", "value": 2154, "reading": "temperature", "scaled": 21.54, "unit": "°C"}
+```
+
+The readings, and their units: "on" (1 or 0, no unit), "level" (%),
+"color_temperature" (mired), "temperature" (°C), "humidity" (%),
+"pressure" (hPa), "battery" (%), "battery_voltage" (V), "power" (W),
+"energy" (kWh), "voltage" (V), "current" (A), "power_factor" (no unit) and
+"frequency" (Hz). Newer versions of skepd name more. A value the ZCL
+reserves for "invalid", such as 0x8000 for a temperature, has no reading.
+
+A device's "readings" are those it can be read for, what matters most
+first, once its interview found its clusters. Each has the "endpoint",
+"cluster" and "id" to *read* it, its "reading" and "unit", and the "type",
+"value", "scaled" and "time" of the last value the device reported or was
+read for, if any:
+
+```
+"readings": [
+  {"endpoint": 1, "cluster": 1026, "id": 0, "type": "int16", "value": 2154,
+   "reading": "temperature", "scaled": 21.54, "unit": "°C",
+   "time": "2026-11-16T21:39:12.250Z"},
+  {"endpoint": 1, "cluster": 1, "id": 33, "reading": "battery", "unit": "%"}
+]
+```
+
+"time" is when skepd received it, as for events. skepd keeps the last values
+in memory: after it restarts, they come back as the devices report.
 
 # EVENT TYPES
 
@@ -326,8 +365,8 @@ about a device have "device", and "name" if it has one.
 
 *attributes* {"endpoint", "cluster", "manufacturer_code",
 "attributes": [{"id": _id_, "type": ..., "value": ...}, ...]}
-	A device reported attributes. "manufacturer_code" only for
-	manufacturer-specific frames.
+	A device reported attributes, with their readings (see *READINGS*).
+	"manufacturer_code" only for manufacturer-specific frames.
 
 *command* {"endpoint", "cluster", "manufacturer_code", "command",
 "payload": _hexadecimal_, "arguments": [{"type": ..., "value": ...}, ...]}
@@ -349,7 +388,8 @@ A client opens the join window, then watches a device join and report:
 < {"event": "device_ready", "time": "...", "device": "f44250000d350000"}
 < {"event": "attributes", "time": "...", "device": "f44250000d350000",
    "endpoint": 1, "cluster": 1026, "attributes": [{"id": 0, "type":
-   "int16", "value": 2154}]}
+   "int16", "value": 2154, "reading": "temperature", "scaled": 21.54,
+   "unit": "°C"}]}
 ```
 
 From a shell, with *socat*(1):

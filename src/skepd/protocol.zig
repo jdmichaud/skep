@@ -34,6 +34,9 @@ down_error: ?c_int = null,
 window_until: ?u64 = null,
 /// The monotonic time in milliseconds, as last given: libskep's clock.
 now: u64 = 0,
+/// The last readings of devices' attributes, as they were reported or read: what `device` and
+/// `devices` give, since a sleepy device cannot be read on the spot.
+last: std.AutoHashMapUnmanaged(Source, Last) = .empty,
 /// The id of the request being handled, once known, for its error response.
 request_id: ?i64 = null,
 failure: Failure = .{},
@@ -62,6 +65,25 @@ const Pending = struct {
   id: i64,
   method: Method,
   device: u64 = 0,
+  /// For reads: what was read, whose readings skepd remembers.
+  endpoint: u8 = 0,
+  cluster: u16 = 0,
+};
+
+/// An attribute of a device's endpoint.
+const Source = struct {
+  device: u64,
+  endpoint: u8,
+  cluster: u16,
+  attribute: u16,
+};
+
+/// The last reading of an attribute, as reported or read.
+const Last = struct {
+  value: c.struct_skep_value,
+  scaled: f64,
+  /// When it came, in milliseconds since the epoch.
+  time: i64,
 };
 
 /// Why the request being handled fails.
@@ -76,6 +98,7 @@ const Failure = struct {
 const Error = error{ Fail, OutOfMemory, WriteFailed };
 
 pub fn deinit(p: *Protocol) void {
+  p.last.deinit(p.gpa);
   p.pending.deinit(p.gpa);
   p.names.deinit();
   p.server.deinit();
@@ -336,7 +359,14 @@ fn request(
         &req,
       );
       if (r != 0) return p.failErrno(r, "read");
-      try p.wait(client, req, .{ .client = client.id, .id = id, .method = .read });
+      try p.wait(client, req, .{
+        .client = client.id,
+        .id = id,
+        .method = .read,
+        .device = target.target.device,
+        .endpoint = target.target.endpoint,
+        .cluster = target.target.cluster,
+      });
     },
     .write => {
       try p.params(ps, &(target_members ++ [_][]const u8{ "attributes" }));
@@ -795,6 +825,7 @@ fn describe(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u64) Erro
       },
     );
   }
+  try p.describeReadings(j, a, device);
 }
 
 // libskep's events.
@@ -863,6 +894,9 @@ pub fn event(p: *Protocol, e: *const c.skep_event) bool {
       p.deviceEvent(&m, "device_left", device) catch return false;
       m.j.objectField("removed") catch return false;
       m.j.write(removed) catch return false;
+      if (removed) {
+        p.forgetReadings(device);
+      }
       p.broadcast(&m);
     },
     c.SKEP_EVENT_DEVICE_SETUP_FAILED => {
@@ -885,7 +919,9 @@ pub fn event(p: *Protocol, e: *const c.skep_event) bool {
       var m: Message = undefined;
       m.init(p.gpa);
       defer m.deinit();
-      p.deviceEvent(&m, "attributes", c.skep_event_get_device(e)) catch return false;
+      const device = c.skep_event_get_device(e);
+      p.remember(device, c.skep_event_get_endpoint(e), c.skep_event_get_cluster(e), e);
+      p.deviceEvent(&m, "attributes", device) catch return false;
       p.frameMembers(&m.j, e) catch return false;
       p.writeAttributes(&m.j, e, false) catch return false;
       p.broadcast(&m);
@@ -969,6 +1005,100 @@ fn frameMembers(_: *Protocol, j: *Stringify, e: *const c.skep_event) !void {
   }
 }
 
+/// The members of an attribute's reading: its name, its value in its unit, and its unit.
+fn readingMembers(
+  j: *Stringify,
+  name: [*c]const u8,
+  unit: [*c]const u8,
+  scaled: f64,
+) !void {
+  try j.objectField("reading");
+  try j.write(std.mem.span(name));
+  try j.objectField("scaled");
+  if (std.math.isFinite(scaled)) {
+    try j.write(scaled);
+  } else {
+    try j.write(null);
+  }
+  try j.objectField("unit");
+  try j.write(std.mem.span(unit));
+}
+
+/// Remembers the readings of an event's attributes, from a device's endpoint and cluster.
+fn remember(p: *Protocol, device: u64, endpoint: u8, cluster: u16, e: *const c.skep_event) void {
+  const time: i64 = @intCast(@divTrunc(Io.Clock.real.now(p.io).nanoseconds, std.time.ns_per_ms));
+  for (0..c.skep_event_get_attribute_count(e)) |i| {
+    var a: c.struct_skep_attribute = undefined;
+    var reading: c.struct_skep_reading = undefined;
+    if (c.skep_event_get_attribute(e, i, &a) != 0 or
+      c.skep_event_get_reading(e, i, &reading) != 0) {
+      continue;
+    }
+    const source: Source = .{
+      .device = device,
+      .endpoint = endpoint,
+      .cluster = cluster,
+      .attribute = a.id,
+    };
+    // Out of memory: a value not remembered, which the next report brings again.
+    p.last.put(p.gpa, source, .{
+      .value = a.value,
+      .scaled = reading.value,
+      .time = time,
+    }) catch {};
+  }
+}
+
+/// "readings": what the device can be read for, with what it last reported or was read, and
+/// when.
+fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u64) !void {
+  var count: usize = 0;
+  if (c.skep_device_get_readings(p.ctx, device, null, 0, &count) != 0) return;
+  const sources = try a.alloc(c.struct_skep_reading_source, count);
+  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
+  try j.objectField("readings");
+  try j.beginArray();
+  for (sources[0..@min(count, sources.len)]) |source| {
+    try j.beginObject();
+    try j.objectField("endpoint");
+    try j.write(source.endpoint);
+    try j.objectField("cluster");
+    try j.write(source.cluster);
+    try j.objectField("id");
+    try j.write(source.attribute);
+    const key: Source = .{
+      .device = device,
+      .endpoint = source.endpoint,
+      .cluster = source.cluster,
+      .attribute = source.attribute,
+    };
+    if (p.last.get(key)) |last| {
+      try values.write(j, p.gpa, last.value);
+      try readingMembers(j, source.name, source.unit, last.scaled);
+      var buffer: [32]u8 = undefined;
+      try j.objectField("time");
+      try j.write(formatTime(&buffer, last.time));
+    } else {
+      try j.objectField("reading");
+      try j.write(std.mem.span(source.name));
+      try j.objectField("unit");
+      try j.write(std.mem.span(source.unit));
+    }
+    try j.endObject();
+  }
+  try j.endArray();
+}
+
+/// Forgets the readings of a device that left the network for good.
+fn forgetReadings(p: *Protocol, device: u64) void {
+  var it = p.last.iterator();
+  while (it.next()) |entry| {
+    if (entry.key_ptr.device != device) continue;
+    p.last.removeByPtr(entry.key_ptr);
+    it = p.last.iterator();
+  }
+}
+
 /// "attributes": those of the event, with their statuses in results, and values where they have
 /// them.
 fn writeAttributes(p: *Protocol, j: *Stringify, e: *const c.skep_event, with_status: bool) !void {
@@ -986,6 +1116,10 @@ fn writeAttributes(p: *Protocol, j: *Stringify, e: *const c.skep_event, with_sta
     }
     if (a.status == 0 and a.value.type != 0) {
       try values.write(j, p.gpa, a.value);
+    }
+    var reading: c.struct_skep_reading = undefined;
+    if (c.skep_event_get_reading(e, i, &reading) == 0) {
+      try readingMembers(j, reading.name, reading.unit, reading.value);
     }
     try j.endObject();
   }
@@ -1059,6 +1193,9 @@ fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   switch (pending.method) {
     .permit_join => {},
     .read, .write, .configure_reporting => {
+      if (pending.method == .read) {
+        p.remember(pending.device, pending.endpoint, pending.cluster, e);
+      }
       m.j.objectField("status") catch return true;
       m.j.write(status) catch return true;
       if (pending.method != .read or status == 0) {
@@ -1111,18 +1248,26 @@ pub fn dropFinished(p: *Protocol) void {
 
 /// The current time in UTC, as ISO 8601 with milliseconds.
 fn timestamp(p: *Protocol, buffer: *[32]u8) []const u8 {
-  const ms: u64 = @intCast(@divTrunc(Io.Clock.real.now(p.io).nanoseconds, std.time.ns_per_ms));
+  return formatTime(
+    buffer,
+    @intCast(@divTrunc(Io.Clock.real.now(p.io).nanoseconds, std.time.ns_per_ms)),
+  );
+}
+
+/// A time in milliseconds since the epoch, in UTC, as ISO 8601 with milliseconds.
+fn formatTime(buffer: *[32]u8, time: i64) []const u8 {
+  const ms: u64 = @intCast(@max(time, 0));
   const epoch: std.time.epoch.EpochSeconds = .{ .secs = ms / 1000 };
   const year_day = epoch.getEpochDay().calculateYearDay();
   const month_day = year_day.calculateMonthDay();
-  const time = epoch.getDaySeconds();
+  const day = epoch.getDaySeconds();
   return std.fmt.bufPrint(buffer, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
     year_day.year,
     @backingInt(month_day.month),
     month_day.day_index + 1,
-    time.getHoursIntoDay(),
-    time.getMinutesIntoHour(),
-    time.getSecondsIntoMinute(),
+    day.getHoursIntoDay(),
+    day.getMinutesIntoHour(),
+    day.getSecondsIntoMinute(),
     ms % 1000,
   }) catch "";
 }
