@@ -27,8 +27,9 @@ publishes the section of each released version as its release notes.
   `replace-network` option. `skep_permit_join()` opens the join window,
   and events report it, and the devices that join or leave.
 - skepd, which runs the network of a dongle through libskep: it opens
-  the serial port, reopens it when it disappears, logs to stderr, and
-  stops cleanly on SIGTERM or SIGINT.
+  the serial port, reopens it when it disappears, logs to stderr with
+  timestamps unless journald adds them, and stops cleanly on SIGTERM or
+  SIGINT.
 - `zig build probe -- <device>`, a development tool that resets an
   EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to

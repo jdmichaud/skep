@@ -82,6 +82,8 @@ fn parseOptions(args: []const [:0]const u8) ?Options {
 const Daemon = struct {
   io: Io,
   log: *Io.Writer,
+  /// Start log lines with the time, unless journald, which adds its own.
+  timestamps: bool,
   ctx: *c.skep_ctx,
   device: [:0]const u8,
   baudrate: u32,
@@ -102,6 +104,9 @@ const Daemon = struct {
   }
 
   fn print(d: *Daemon, comptime format: []const u8, args: anytype) void {
+    if (d.timestamps) {
+      writeTimestamp(d.log, d.io) catch {};
+    }
     d.log.print("skepd: " ++ format ++ "\n", args) catch {};
     d.log.flush() catch {};
   }
@@ -324,6 +329,44 @@ const Daemon = struct {
   }
 };
 
+/// The current time in UTC, as ISO 8601 with milliseconds, and a space.
+fn writeTimestamp(w: *Io.Writer, io: Io) !void {
+  const ms: u64 = @intCast(@divTrunc(Io.Clock.real.now(io).nanoseconds, std.time.ns_per_ms));
+  const epoch: std.time.epoch.EpochSeconds = .{ .secs = ms / 1000 };
+  const year_day = epoch.getEpochDay().calculateYearDay();
+  const month_day = year_day.calculateMonthDay();
+  const time = epoch.getDaySeconds();
+  try w.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z ", .{
+    year_day.year,
+    @backingInt(month_day.month),
+    month_day.day_index + 1,
+    time.getHoursIntoDay(),
+    time.getMinutesIntoHour(),
+    time.getSecondsIntoMinute(),
+    ms % 1000,
+  });
+}
+
+/// Whether stderr goes to journald, as systemd says in JOURNAL_STREAM ("device:inode" of the
+/// stream it connected). The variable is inherited, so stderr must still be that stream.
+fn toJournald(environ: *const std.process.Environ.Map) bool {
+  const stream = environ.get("JOURNAL_STREAM") orelse return false;
+  var fields = std.mem.splitScalar(u8, stream, ':');
+  const device = std.fmt.parseInt(u64, fields.next() orelse return false, 10) catch return false;
+  const inode = std.fmt.parseInt(u64, fields.next() orelse return false, 10) catch return false;
+  var st: linux.Statx = undefined;
+  const empty_path = 0x1000;
+  if (linux.errno(linux.statx(2, "", empty_path, .{ .INO = true }, &st)) != .SUCCESS) return false;
+  // st_dev as fstat(2) gives it, encoded as glibc's makedev does.
+  const major: u64 = st.dev_major;
+  const minor: u64 = st.dev_minor;
+  const dev = (major & 0xfffff000) << 32 |
+    (major & 0xfff) << 8 |
+    (minor & 0xffffff00) << 12 |
+    (minor & 0xff);
+  return dev == device and st.ino == inode;
+}
+
 fn errnoName(r: c_int) posix.E {
   return @fromBackingInt(@intCast(@as(u16, @intCast(-r))));
 }
@@ -379,6 +422,7 @@ pub fn main(init: std.process.Init) !u8 {
   var daemon: Daemon = .{
     .io = io,
     .log = log,
+    .timestamps = !toJournald(init.environ_map),
     .ctx = ctx.?,
     .device = options.device,
     .baudrate = options.baudrate orelse baudrate,

@@ -426,7 +426,10 @@ reviewed before the library is implemented.
   serial settings.
 - Runs in the foreground and never daemonizes itself. Under systemd it
   uses `Type=notify` and reports readiness with sd_notify.
-- Logs to stderr; journald adds timestamps. The log level is configurable.
+- Logs to stderr, each line starting with the time in UTC (ISO 8601,
+  with milliseconds), except under journald, which adds its own: skepd
+  checks that stderr is the stream `JOURNAL_STREAM` names. The log level
+  is configurable.
 - SIGTERM and SIGINT shut it down cleanly: skepd calls `skep_stop()`,
   which refreshes the state, and saves the state before exiting. SIGHUP
   reloads the configuration.
