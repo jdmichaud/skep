@@ -13,5 +13,7 @@ publishes the section of each released version as its release notes.
   Nothing in it is implemented yet.
 - The frame codec of ASH, the serial link protocol of Silicon Labs
   EmberZNet dongles, with fuzz tests.
+- The ASH link layer: resetting the dongle, acknowledgements,
+  retransmissions and software flow control (XON/XOFF).
 - Build checks that the headers compile as C99 and C++ and translate to
   Zig.

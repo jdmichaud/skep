@@ -11,5 +11,6 @@ pub const version: std.SemanticVersion = std.SemanticVersion.parse(build_options
 
 test {
   _ = @import("driver/ezsp/ash.zig");
+  _ = @import("driver/ezsp/link.zig");
   std.testing.refAllDecls(@This());
 }
