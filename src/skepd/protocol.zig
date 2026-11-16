@@ -1303,3 +1303,47 @@ test "a client done sending still gets its answers" {
   bench.protocol.dropFinished();
   try testing.expectEqual(0, bench.protocol.server.clients.items.len);
 }
+
+test "fuzz: whatever a client sends, skepd answers in JSON" {
+  var bench: TestBench = undefined;
+  try bench.init();
+  defer bench.deinit();
+  try testing.fuzz(&bench, fuzzRequest, .{
+    .corpus = &.{
+      "{\"id\": 1, \"method\": \"version\"}",
+      "{\"id\": 2, \"method\": \"write\", \"params\": {\"device\": \"f44250000d350000\", \"endpoint\": 1, \"cluster\": 6, \"timeout\": 1.5, \"attributes\": [{\"id\": 0, \"type\": \"bool\", \"value\": true}]}}",
+      "{\"id\": 3, \"method\": \"configure_reporting\", \"params\": {\"device\": \"plug\", \"endpoint\": 1, \"cluster\": \"0x0b04\", \"reporting\": [{\"id\": 1291, \"type\": \"int16\", \"min_interval\": 5, \"max_interval\": 3600, \"change\": 10}]}}",
+      "{\"id\": 4, \"method\": \"command\", \"params\": {\"device\": \"0xF44250000D350000\", \"endpoint\": 1, \"cluster\": 3, \"command\": 0, \"arguments\": [{\"type\": \"uint16\", \"value\": 5}, {\"type\": \"octet_string\", \"value\": \"01ab\"}]}}",
+      "{\"id\": 5, \"method\": \"rename\", \"params\": {\"device\": \"f44250000d350000\", \"name\": null}}",
+    },
+  });
+}
+
+fn fuzzRequest(bench: *TestBench, smith: *testing.Smith) !void {
+  var line: [512]u8 = undefined;
+  const len = smith.slice(&line);
+  if (std.mem.indexOfScalar(u8, line[0..len], '\n') != null) return;
+  const client = bench.protocol.server.clients.items[0];
+  bench.protocol.handle(client, line[0..len]);
+  var answers = std.mem.splitScalar(u8, client.output.items, '\n');
+  while (answers.next()) |answer| {
+    if (answer.len == 0) continue;
+    try testing.expect(try std.json.validate(testing.allocator, answer));
+  }
+  // Each input from scratch, leaving nothing allocated behind it: the fuzzer counts that as a leak.
+  const p = &bench.protocol;
+  client.output.deinit(p.gpa);
+  client.output = .empty;
+  var it = p.pending.iterator();
+  while (it.next()) |entry| {
+    _ = c.skep_cancel(p.ctx, entry.key_ptr.*);
+  }
+  p.pending.clearAndFree(p.gpa);
+  client.pending = 0;
+  client.watching = false;
+  p.names.deinit();
+  p.names = .{ .gpa = p.gpa };
+  while (c.skep_next_event(p.ctx)) |e| {
+    c.skep_event_free(e);
+  }
+}
