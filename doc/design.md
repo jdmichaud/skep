@@ -393,6 +393,9 @@ reviewed before the library is implemented.
   whenever it changes. It refreshes the state from the dongle every hour
   (`skep_refresh_state()`), which is cheap, so that a dongle that dies
   takes at most an hour of frame counters with it.
+- Until the configuration file format is settled, its options come from
+  the command line: `--device`, `--driver`, `--log-level`, and `--baud`
+  and `--rtscts` to override the driver's serial settings.
 - Runs in the foreground and never daemonizes itself. Under systemd it
   uses `Type=notify` and reports readiness with sd_notify.
 - Logs to stderr; journald adds timestamps. The log level is configurable.

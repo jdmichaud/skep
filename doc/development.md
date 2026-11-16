@@ -38,6 +38,9 @@
 
 ## Talking to the dongle
 
+- `zig build skepd -- --device <path>` runs skepd on the dongle, which
+  brings its network up; SIGINT (Ctrl-C) or SIGTERM stop it cleanly.
+  `zig-out/bin/skepd --help` lists its options.
 - `zig build probe -- <device>` starts a Silicon Labs EmberZNet dongle as
   the `ezsp` driver does, and reports its EZSP and firmware versions,
   whether it sent XON/XOFF, its IEEE address and the network it holds.

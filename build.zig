@@ -24,7 +24,13 @@ pub fn build(b: *std.Build) !void {
   const test_step = b.step("test", "Run the unit tests");
   const unit_tests = b.addTest(.{ .root_module = skep });
   test_step.dependOn(&b.addRunArtifact(unit_tests).step);
-  addHeaderChecks(b, test_step, target, optimize, build_options);
+  // skep.h as Zig sees it: how skepd uses libskep.
+  const skep_h = b.addTranslateC(.{
+    .root_source_file = b.path("include/skep.h"),
+    .target = target,
+    .optimize = optimize,
+  }).createModule();
+  addHeaderChecks(b, test_step, target, optimize, build_options, skep_h);
   addAbiCheck(b, test_step, target, optimize, library);
   // Opening a dongle's serial port, for the programs that do.
   const serial = b.createModule(.{
@@ -34,6 +40,7 @@ pub fn build(b: *std.Build) !void {
   });
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = serial })).step);
   addProbe(b, test_step, target, optimize, serial);
+  addSkepd(b, target, optimize, skep_h, serial, library);
   if (b.isRoot()) {
     try addFormatSteps(b);
   }
@@ -100,6 +107,30 @@ fn addAbiCheck(
   test_step.dependOn(&b.addRunArtifact(abi).step);
 }
 
+/// skepd, which uses libskep through skep.h only: its module, in src/skepd/, imports nothing of
+/// libskep's sources, which a Zig module cannot reach outside its directory.
+fn addSkepd(
+  b: *std.Build,
+  target: std.Build.ResolvedTarget,
+  optimize: std.lang.Optimize,
+  skep_h: *std.Build.Module,
+  serial: *std.Build.Module,
+  library: *std.Build.Step.Compile,
+) void {
+  const module = b.createModule(.{
+    .root_source_file = b.path("src/skepd/main.zig"),
+    .target = target,
+    .optimize = optimize,
+    .imports = &.{.{ .name = "skep_h", .module = skep_h }, .{ .name = "serial", .module = serial }},
+  });
+  module.linkLibrary(library);
+  const skepd = b.addExecutable(.{ .name = "skepd", .root_module = module });
+  b.installArtifact(skepd);
+  const run = b.addRunArtifact(skepd);
+  run.addPassthruArgs();
+  b.step("skepd", "Run skepd (-- --device <path>)").dependOn(&run.step);
+}
+
 /// `zig build probe -- <device>` resets a Silicon Labs dongle and reports its versions: the
 /// minimal I/O loop around the ezsp driver. The tests build it too, so that it keeps compiling.
 fn addProbe(
@@ -163,6 +194,7 @@ fn addHeaderChecks(
   target: std.Build.ResolvedTarget,
   optimize: std.lang.Optimize,
   build_options: *std.Build.Step.Options,
+  skep_h: *std.Build.Module,
 ) void {
   const warnings: []const []const u8 = &.{ "-Wall", "-Wextra", "-Wpedantic", "-Werror" };
   const sources = [_]struct { name: []const u8, file: []const u8, flags: []const []const u8 }{
@@ -185,18 +217,13 @@ fn addHeaderChecks(
     test_step.dependOn(&object.step);
   }
 
-  const skep_h = b.addTranslateC(.{
-    .root_source_file = b.path("include/skep.h"),
-    .target = target,
-    .optimize = optimize,
-  });
   const translated = b.addTest(.{
     .root_module = b.createModule(.{
       .root_source_file = b.path("test/header.zig"),
       .target = target,
       .optimize = optimize,
       .imports = &.{
-        .{ .name = "skep_h", .module = skep_h.createModule() },
+        .{ .name = "skep_h", .module = skep_h },
         .{ .name = "build_options", .module = build_options.createModule() },
       },
     }),

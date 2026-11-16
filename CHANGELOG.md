@@ -24,6 +24,9 @@ publishes the section of each released version as its release notes.
 - The core of the C API: contexts with the application's allocator and
   seed, options, the I/O loop, events, and starting on a dongle that
   holds a network.
+- skepd, which runs the network of a dongle through libskep: it opens
+  the serial port, reopens it when it disappears, logs to stderr, and
+  stops cleanly on SIGTERM or SIGINT.
 - `zig build probe -- <device>`, a development tool that resets an
   EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to
