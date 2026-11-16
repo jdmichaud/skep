@@ -63,10 +63,10 @@ the daemon `skepd` and the command-line tool `skep`.
   `std.heap.DebugAllocator` to catch leaks and misuse, and every parser
   of external input has a fuzz test.
 - No dependencies outside the Zig standard library unless agreed first.
-  The one agreed so far is a build tool, not a library: zigfmt, the
-  formatter, pinned in `build.zig.zon`. It is a lazy dependency, asked
-  for only when skep is the project being built, so projects that use
-  libskep never fetch it.
+  The two agreed so far are build tools, not libraries, pinned in
+  `build.zig.zon`: zigfmt, the formatter, and zzdoc, which renders the
+  man pages. They are lazy dependencies, asked for only when skep is the
+  project being built, so projects that use libskep never fetch them.
 
 ## Dongle drivers
 
@@ -494,6 +494,10 @@ replaces them atomically. The socket is not accessible to other users.
 
 - Man pages: skep(1), skepd(8), libskep(3) (plus per-function pages as the
   API settles), skepd.conf(5) and skep-protocol(7).
+- They are written in scdoc, a small markup for man pages, in `man/`, and
+  rendered to roff at build time by zzdoc, a Zig port of scdoc
+  (github.com/rockorager/zzdoc), so building them needs nothing but Zig.
+  `zig build` installs them.
 - `README.md` stays minimal. Developer documentation lives in `doc/`.
 
 ## Scope of version 1
@@ -563,14 +567,13 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
    form or resume, permit joining, join events. From here on every
    feature is exercised by skepd through `<skep.h>`.
 4. Device interview, binding and reporting: sensor readings arrive.
-5. Light control: the bulb obeys.
-6. skep-protocol and the skep command-line tool.
+5. skep-protocol and the skep command-line tool.
+6. Light control: the bulb obeys.
 7. Packaging: man pages, systemd units, installation.
 
 ## Open questions
 
 - Configuration file format.
-- Source format of the man pages (mdoc, scdoc, pandoc Markdown).
 - Dongle detection: should libskep offer to find dongles and pick the
   driver? USB ids are not reliable for this (see
   [hardware.md](hardware.md)); product strings or probing the protocol
