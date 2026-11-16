@@ -34,8 +34,9 @@ attribute details come from the Zigbee2MQTT device definitions
   software flow control: it sends XON about 0.1 s after a reset, as
   builds for XON/XOFF do. RSTACK follows about 1 s after RST. (Measured
   on 2026-11-16 with `zig build probe`.)
-- Firmware: our unit runs EmberZNet 6.10.3 (stack version 0x6a30), EZSP
-  protocol version 8, as early ZBDongle-E units shipped. skep supports it
+- Firmware: our unit runs EmberZNet 6.10.3 build 297, a general
+  availability release (stack version 0x6a30), EZSP protocol version 8,
+  as early ZBDongle-E units shipped. skep supports it
   (see design.md); Zigbee2MQTT's `ember` driver needs EmberZNet 7.4 or
   newer. `universal-silabs-flasher --device <path> probe` also reports
   the running firmware, and the same tool flashes a new one.
