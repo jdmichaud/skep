@@ -403,8 +403,9 @@ reviewed before the library is implemented.
   takes at most an hour of frame counters with it.
 - Until the configuration file format is settled, its options come from
   the command line: `--device`, `--driver`, `--log-level`,
-  `--replace-network`, and `--baud` and `--rtscts` to override the
-  driver's serial settings.
+  `--replace-network`, `--permit-join` to open the join window once the
+  network is up, and `--baud` and `--rtscts` to override the driver's
+  serial settings.
 - Runs in the foreground and never daemonizes itself. Under systemd it
   uses `Type=notify` and reports readiness with sd_notify.
 - Logs to stderr; journald adds timestamps. The log level is configurable.

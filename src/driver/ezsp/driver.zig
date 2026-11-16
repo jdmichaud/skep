@@ -33,6 +33,22 @@ const configuration = [_]struct { id: command.ConfigId, value: u16 }{
   .{ .id = .trust_center_address_cache_size, .value = 2 },
 };
 
+/// Trust center policies, as zigbee-herdsman sets them: new devices join only while the window
+/// is open, devices that lost the network key can always rejoin, and devices get the trust
+/// center link key they ask for, but no application link keys.
+const policies = [_]struct { id: command.PolicyId, decision: u8 }{
+  .{
+    .id = .trust_center_policy,
+    .decision = command.TrustCenterDecision.allow_joins |
+      command.TrustCenterDecision.allow_unsecured_rejoins,
+  },
+  .{
+    .id = .tc_key_request_policy,
+    .decision = command.KeyRequestDecision.allow_tc_key_requests_and_send_current_key,
+  },
+  .{ .id = .app_key_request_policy, .decision = command.KeyRequestDecision.deny_app_key_requests },
+};
+
 /// The coordinator's endpoint, as zigbee-herdsman registers it (src/adapter/ember/adapter/endpoints.ts):
 /// the clusters it serves and those it uses, which devices look for before binding to it.
 const coordinator_endpoint: command.Endpoint = .{
@@ -95,10 +111,22 @@ pub const FormParameters = struct {
   trust_center_link_key: [16]u8,
 };
 
+/// A device the trust center saw join, rejoin or leave.
+pub const DeviceChange = struct {
+  eui64: u64,
+  node_id: u16,
+  kind: enum { joined, rejoined, left },
+};
+
 pub const Event = union(enum) {
   ready: Ready,
   /// `form` formed the network.
   formed: Network,
+  /// `permitJoin` was done: null if the NCP did it, what it refused otherwise.
+  permit_join_done: ?Refused,
+  /// The join window opened (true) or closed.
+  join_window: bool,
+  device: DeviceChange,
   failed: Failure,
   /// The firmware refused a configuration value and keeps its own.
   configuration_refused: struct { id: command.ConfigId, status: command.Status },
@@ -119,20 +147,28 @@ pub const Driver = struct {
   now: u64 = 0,
   form_parameters: FormParameters = undefined,
   ready: Ready = undefined,
-  events: [configuration.len + 1]Event = undefined,
+  policy_index: usize = 0,
+  /// Events for the caller. Callbacks arrive in bursts of at most the link's receive slots, and
+  /// the caller takes events after each call: 32 leave room to spare.
+  events: [32]Event = undefined,
   events_len: usize = 0,
+  /// Events lost because the queue was full, which `takeDropped` reports.
+  events_dropped: u32 = 0,
 
   const Step = enum {
     idle,
     starting,
     configuring,
     adding_endpoint,
+    setting_policies,
     initialising_network,
     waiting_for_network,
     reading_network,
     reading_ieee,
     /// Ready: running the network the dongle holds, if any.
     running,
+    // `permitJoin`:
+    permitting,
     // `form`:
     leaving,
     waiting_for_leave,
@@ -205,6 +241,12 @@ pub const Driver = struct {
     }
   }
 
+  /// Events lost because the caller did not take them in time, since the last call.
+  pub fn takeDropped(d: *Driver) u32 {
+    defer d.events_dropped = 0;
+    return d.events_dropped;
+  }
+
   pub fn nextEvent(d: *Driver) ?Event {
     if (d.events_len == 0) return null;
     const event = d.events[0];
@@ -227,6 +269,15 @@ pub const Driver = struct {
     }
   }
 
+  /// Opens the network to new devices for `seconds`, or closes it with 0. Reports
+  /// `permit_join_done`, then `join_window` when the NCP opened or closed it.
+  pub fn permitJoin(d: *Driver, seconds: u8) void {
+    std.debug.assert(d.step == .running);
+    d.step = .permitting;
+    var out: [1]u8 = undefined;
+    d.send(.permit_joining, command.permitJoining(&out, seconds), d.now);
+  }
+
   fn waiting(d: *const Driver) bool {
     return switch (d.step) {
       .idle, .starting, .running, .failed => false,
@@ -235,7 +286,10 @@ pub const Driver = struct {
   }
 
   fn post(d: *Driver, event: Event) void {
-    // Room for every refused configuration value, and the final event.
+    if (d.events_len == d.events.len) {
+      d.events_dropped +|= 1;
+      return;
+    }
     d.events[d.events_len] = event;
     d.events_len += 1;
   }
@@ -316,7 +370,27 @@ pub const Driver = struct {
           if (d.step == .waiting_for_leave) {
             d.secure(now);
           }
+        } else if (status.is(.network_opened)) {
+          d.post(.{ .join_window = true });
+        } else if (status.is(.network_closed)) {
+          d.post(.{ .join_window = false });
         }
+      } else if (received.id == .trust_center_join_handler) {
+        const join = command.TrustCenterJoin.parse(received.parameters) catch
+          return d.fail(.bad_response);
+        d.post(.{
+          .device = .{
+            .eui64 = join.eui64,
+            .node_id = join.node_id,
+            .kind = switch (join.update) {
+              .unsecured_join => .joined,
+              .secured_rejoin, .unsecured_rejoin => .rejoined,
+              .left => .left,
+              // An update the trust center does not know: not a device of ours.
+              _ => return,
+            },
+          },
+        });
       }
       // Other callbacks are not needed yet.
       return;
@@ -348,9 +422,29 @@ pub const Driver = struct {
         if (!status.is(.ok)) {
           return d.fail(.{ .refused = .{ .command = .add_endpoint, .status = status } });
         }
+        d.step = .setting_policies;
+        d.setPolicy(now);
+      },
+      .setting_policies => {
+        const status = d.statusOf(received, .set_policy) orelse return;
+        if (!status.is(.ok)) {
+          return d.fail(.{ .refused = .{ .command = .set_policy, .status = status } });
+        }
+        d.policy_index += 1;
+        if (d.policy_index < policies.len) return d.setPolicy(now);
         d.step = .initialising_network;
         var out: [2]u8 = undefined;
         d.send(.network_init, command.networkInit(&out), now);
+      },
+      .permitting => {
+        const status = d.statusOf(received, .permit_joining) orelse return;
+        d.step = .running;
+        d.post(.{
+          .permit_join_done = if (status.is(.ok))
+            null
+          else
+            .{ .command = .permit_joining, .status = status },
+        });
       },
       .initialising_network => {
         if (received.id != .network_init) return d.fail(.bad_response);
@@ -508,6 +602,12 @@ pub const Driver = struct {
     };
   }
 
+  fn setPolicy(d: *Driver, now: u64) void {
+    var out: [2]u8 = undefined;
+    const entry = policies[d.policy_index];
+    d.send(.set_policy, command.setPolicy(&out, entry.id, entry.decision), now);
+  }
+
   /// Sets the security of the network to form.
   fn secure(d: *Driver, now: u64) void {
     d.step = .securing;
@@ -586,21 +686,35 @@ fn configured(ncp: *Ncp, refused: []const usize) !void {
   try testing.expectEqual(endpoint_sequence, sent[0]);
   try testing.expectEqual(@backingInt(frame.FrameId.add_endpoint), sent[3]);
   ncp.respond(&.{ endpoint_sequence, 0x80, 0x01, 0x02, 0x00, 0x00 });
+  for (policies, 0..) |entry, i| {
+    const sequence: u8 = @intCast(endpoint_sequence + 1 + i);
+    var expected: [5 + 2]u8 = undefined;
+    var out: [2]u8 = undefined;
+    try ncp.expectCommand(
+      frame.encode(
+        &expected,
+        sequence,
+        .set_policy,
+        command.setPolicy(&out, entry.id, entry.decision),
+      ),
+    );
+    ncp.respond(&.{ sequence, 0x80, 0x01, 0x55, 0x00, 0x00 });
+  }
 }
 
 test "a dongle holding a network brings it up" {
   var driver: Driver = undefined;
   var ncp = try started(&driver);
   try configured(&ncp, &.{});
-  try ncp.expectCommand(&hex("0a000117000000"));
-  ncp.respond(&hex("0a8001170000"));
+  try ncp.expectCommand(&hex("0d000117000000"));
+  ncp.respond(&hex("0d8001170000"));
   try testing.expectEqual(null, driver.nextEvent());
   // The network comes up: stack_status_handler, NETWORK_UP.
   ncp.respond(&hex("0a9001190090"));
-  try ncp.expectCommand(&hex("0b00012800"));
+  try ncp.expectCommand(&hex("0e00012800"));
   ncp.respond(
     &hex(
-      "0b80012800" ++
+      "0e80012800" ++
         "00" ++
         "01" ++
         "efcdab8967452301" ++
@@ -613,8 +727,8 @@ test "a dongle holding a network brings it up" {
         "00f8ff07",
     ),
   );
-  try ncp.expectCommand(&hex("0c00012600"));
-  ncp.respond(&hex("0c80012600" ++ "8877665544332211"));
+  try ncp.expectCommand(&hex("0f00012600"));
+  ncp.respond(&hex("0f80012600" ++ "8877665544332211"));
   const event = driver.nextEvent() orelse return error.TestExpectedEvent;
   const ready = event.ready;
   try testing.expectEqual(0x1122334455667788, ready.ieee);
@@ -634,9 +748,9 @@ test "a dongle without a network is ready without one" {
   try configured(&ncp, &.{});
   _ = ncp.take();
   // NOT_JOINED.
-  ncp.respond(&hex("0a8001170093"));
-  try ncp.expectCommand(&hex("0b00012600"));
-  ncp.respond(&hex("0b80012600" ++ "8877665544332211"));
+  ncp.respond(&hex("0d8001170093"));
+  try ncp.expectCommand(&hex("0e00012600"));
+  ncp.respond(&hex("0e80012600" ++ "8877665544332211"));
   const ready = (driver.nextEvent() orelse return error.TestExpectedEvent).ready;
   try testing.expectEqual(null, ready.network);
 }
@@ -646,9 +760,9 @@ test "refused configuration values are reported, and the driver goes on" {
   var ncp = try started(&driver);
   try configured(&ncp, &.{ 1, 4 });
   _ = ncp.take();
-  ncp.respond(&hex("0a8001170093"));
+  ncp.respond(&hex("0d8001170093"));
   _ = ncp.take();
-  ncp.respond(&hex("0b80012600" ++ "8877665544332211"));
+  ncp.respond(&hex("0e80012600" ++ "8877665544332211"));
   try testing.expectEqual(configuration[1].id, driver.nextEvent().?.configuration_refused.id);
   try testing.expectEqual(configuration[4].id, driver.nextEvent().?.configuration_refused.id);
   try testing.expect(driver.nextEvent().? == .ready);
@@ -660,7 +774,7 @@ test "the driver fails when the network does not come up" {
   try configured(&ncp, &.{});
   _ = ncp.take();
   ncp.now = 1000;
-  ncp.respond(&hex("0a8001170000"));
+  ncp.respond(&hex("0d8001170000"));
   try testing.expectEqual(1000 + response_timeout, driver.nextDeadline());
   driver.advance(1000 + response_timeout);
   try testing.expectEqual(Failure.response_timeout, driver.nextEvent().?.failed);
@@ -831,4 +945,24 @@ test "a link failure after the start is reported" {
     link_layer.Failure{ .ncp_error = 0x51 },
     driver.nextEvent().?.failed.link,
   );
+}
+
+test "open the join window and see a device join" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, false);
+  driver.permitJoin(60);
+  const sent = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqual(@backingInt(frame.FrameId.permit_joining), sent[3]);
+  try testing.expectEqualSlices(u8, &.{ 60 }, sent[5..]);
+  ncp.respond(&.{ sent[0], 0x80, 0x01, 0x22, 0x00, 0x00 });
+  try testing.expectEqual(null, driver.nextEvent().?.permit_join_done);
+  // NETWORK_OPENED, a device joining, NETWORK_CLOSED.
+  ncp.respond(&hex("00900119009c"));
+  ncp.respond(&hex("0090012400" ++ "3412" ++ "8877665544332211" ++ "01" ++ "00" ++ "0000"));
+  ncp.respond(&hex("00900119009d"));
+  try testing.expectEqual(true, driver.nextEvent().?.join_window);
+  const device = driver.nextEvent().?.device;
+  try testing.expectEqual(0x1122334455667788, device.eui64);
+  try testing.expect(device.kind == .joined);
+  try testing.expectEqual(false, driver.nextEvent().?.join_window);
 }

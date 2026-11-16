@@ -48,6 +48,7 @@ int main(void) {
   uint8_t channel = 0;
   uint16_t pan_id = 0;
   uint64_t extended_pan_id = 0;
+  uint32_t request = 0;
 
   CHECK(skep_version() ==
         (uint32_t)(SKEP_VERSION_MAJOR << 16 | SKEP_VERSION_MINOR << 8 | SKEP_VERSION_PATCH));
@@ -80,6 +81,19 @@ int main(void) {
   skep_event_free(event);
   CHECK(skep_get_network(ctx, &channel, &pan_id, &extended_pan_id) == 0 && channel == 20);
   CHECK(skep_next_event(ctx) == NULL);
+
+  CHECK(skep_permit_join(ctx, 255, &request) == -EINVAL);
+  CHECK(skep_permit_join(ctx, 60, &request) == 0 && request != 0);
+  CHECK(skep_advance(ctx, 0) == 0);
+  event = skep_next_event(ctx);
+  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_REQUEST_DONE);
+  CHECK(skep_event_get_request(event) == request && skep_event_get_error(event) == 0);
+  CHECK(skep_event_get_status(event) == 0);
+  skep_event_free(event);
+  event = skep_next_event(ctx);
+  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_PERMIT_JOIN);
+  CHECK(skep_event_get_duration(event) == 60);
+  skep_event_free(event);
 
   CHECK(skep_stop(ctx) == 0);
   CHECK(skep_advance(ctx, 0) == 0);

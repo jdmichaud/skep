@@ -14,7 +14,7 @@ const Io = std.Io;
 
 const usage =
   \\usage: skepd --device <path> [--driver <name>] [--log-level <level>] [--replace-network]
-  \\             [--baud <rate>] [--rtscts]
+  \\             [--permit-join <seconds>] [--baud <rate>] [--rtscts]
   \\
   \\Runs the Zigbee network of the dongle on <path>. Stops cleanly on SIGTERM or SIGINT.
   \\
@@ -23,6 +23,9 @@ const usage =
   \\  --log-level <level> error, warning, info (default) or debug
   \\  --replace-network   replace the network the dongle holds with a new one; its devices
   \\                      must then be paired again
+  \\  --permit-join <seconds>
+  \\                      let new devices join for that long (at most 254) once the network
+  \\                      is up
   \\  --baud <rate>       the serial speed, if not the driver's usual one
   \\  --rtscts            hardware flow control, if not the driver's usual one
   \\
@@ -36,6 +39,7 @@ const Options = struct {
   driver: [:0]const u8 = "ezsp",
   log_level: [:0]const u8 = "info",
   replace_network: bool = false,
+  permit_join: ?c_uint = null,
   baudrate: ?u32 = null,
   rtscts: ?bool = null,
 };
@@ -63,6 +67,8 @@ fn parseOptions(args: []const [:0]const u8) ?Options {
       options.driver = value;
     } else if (std.mem.eql(u8, arg, "--log-level")) {
       options.log_level = value;
+    } else if (std.mem.eql(u8, arg, "--permit-join")) {
+      options.permit_join = std.fmt.parseInt(c_uint, value, 10) catch return null;
     } else if (std.mem.eql(u8, arg, "--baud")) {
       options.baudrate = std.fmt.parseInt(u32, value, 10) catch return null;
     } else {
@@ -86,6 +92,8 @@ const Daemon = struct {
   reopen_at: ?u64 = null,
   /// A signal asked to stop: exit once libskep has.
   stopping: bool = false,
+  /// How long to open the join window for once the network is up.
+  permit_join: ?c_uint = null,
   exit_code: ?u8 = null,
 
   fn now(d: *const Daemon) u64 {
@@ -193,8 +201,40 @@ const Daemon = struct {
             pan_id,
             extended_pan_id,
           });
+          // Once: a dongle opened again does not reopen the window.
+          if (d.permit_join) |seconds| {
+            d.permit_join = null;
+            var request: u32 = 0;
+            const r = c.skep_permit_join(d.ctx, seconds, &request);
+            if (r != 0) {
+              d.print("--permit-join {d}: {t}", .{ seconds, errnoName(r) });
+            }
+          }
         },
         c.SKEP_EVENT_STOPPED => d.stopped(c.skep_event_get_error(event)),
+        c.SKEP_EVENT_PERMIT_JOIN => {
+          const duration = c.skep_event_get_duration(event);
+          if (duration > 0) {
+            d.print("join window open for {d} s", .{ duration });
+          } else {
+            d.print("join window closed", .{});
+          }
+        },
+        c.SKEP_EVENT_DEVICE_JOINED => d.print("device joined: {x:0>16}", .{
+          c.skep_event_get_device(event),
+        }),
+        c.SKEP_EVENT_DEVICE_LEFT => d.print("device left: {x:0>16}", .{
+          c.skep_event_get_device(event),
+        }),
+        c.SKEP_EVENT_REQUEST_DONE => {
+          const error_code = c.skep_event_get_error(event);
+          if (error_code != 0) {
+            d.print("request {d} failed: {t}", .{
+              c.skep_event_get_request(event),
+              errnoName(error_code),
+            });
+          }
+        },
         // Events of types skepd does not know are ignored, as skep.h asks.
         else => {},
       }
@@ -343,6 +383,7 @@ pub fn main(init: std.process.Init) !u8 {
     .device = options.device,
     .baudrate = options.baudrate orelse baudrate,
     .rtscts = options.rtscts orelse (flow_control == c.SKEP_FLOW_CONTROL_HARDWARE),
+    .permit_join = options.permit_join,
   };
   return daemon.run(signals);
 }

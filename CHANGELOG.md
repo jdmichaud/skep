@@ -24,7 +24,8 @@ publishes the section of each released version as its release notes.
 - The core of the C API: contexts with the application's allocator and
   seed, options, the I/O loop and events. Starting resumes the dongle's
   network, or forms a new one, also in place of the dongle's with the
-  `replace-network` option.
+  `replace-network` option. `skep_permit_join()` opens the join window,
+  and events report it, and the devices that join or leave.
 - skepd, which runs the network of a dongle through libskep: it opens
   the serial port, reopens it when it disappears, logs to stderr, and
   stops cleanly on SIGTERM or SIGINT.

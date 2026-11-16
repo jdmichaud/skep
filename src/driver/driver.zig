@@ -80,10 +80,21 @@ pub const Form = struct {
   trust_center_link_key: [16]u8,
 };
 
+/// A device the trust center saw join, rejoin or leave.
+pub const Device = struct {
+  ieee: u64,
+  kind: enum { joined, rejoined, left },
+};
+
 pub const Event = union(enum) {
   ready: Ready,
   /// `form` formed the network.
   formed: Network,
+  /// `permitJoin` was done: null if it worked, why not otherwise.
+  permit_join_done: ?Failure,
+  /// The join window opened (true) or closed.
+  join_window: bool,
+  device: Device,
   failed: Failure,
   log: struct { level: Level, message: Message },
 };
@@ -134,6 +145,14 @@ pub const Driver = union(Name) {
     }
   }
 
+  /// Opens the network to new devices for `seconds`, or closes it with 0, once the network is up.
+  /// The routers are not told yet: that takes ZDO, which comes with device interviews.
+  pub fn permitJoin(d: *Driver, seconds: u8) void {
+    switch (d.*) {
+      inline else => |*driver| driver.permitJoin(seconds),
+    }
+  }
+
   pub fn input(d: *Driver, bytes: []const u8, now: u64) void {
     switch (d.*) {
       inline else => |*driver| driver.input(bytes, now),
@@ -166,7 +185,18 @@ pub const Driver = union(Name) {
 
   pub fn nextEvent(d: *Driver) ?Event {
     return switch (d.*) {
-      .ezsp => |*driver| fromEzsp(driver.nextEvent() orelse return null),
+      .ezsp => |*driver| {
+        const dropped = driver.takeDropped();
+        if (dropped > 0) {
+          return .{
+            .log = .{
+              .level = .err,
+              .message = .init("ezsp: {d} events lost: the queue was full", .{ dropped }),
+            },
+          };
+        }
+        return fromEzsp(driver.nextEvent() orelse return null);
+      },
       .sim => |*driver| driver.nextEvent(),
     };
   }
@@ -201,6 +231,20 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
         .channel = network.parameters.channel,
         .pan_id = network.parameters.pan_id,
         .extended_pan_id = network.parameters.extended_pan_id,
+      },
+    },
+    .permit_join_done => |refused| .{
+      .permit_join_done = if (refused) |r| fromEzspFailure(.{ .refused = r }) else null,
+    },
+    .join_window => |open| .{ .join_window = open },
+    .device => |change| .{
+      .device = .{
+        .ieee = change.eui64,
+        .kind = switch (change.kind) {
+          .joined => .joined,
+          .rejoined => .rejoined,
+          .left => .left,
+        },
       },
     },
     .failed => |failure| .{ .failed = fromEzspFailure(failure) },

@@ -30,6 +30,14 @@ events: Event.Queue = .{},
 spares: Event.Queue = .{},
 /// `linkLost` found no spare event: the STOPPED event is still to be queued.
 lost_pending: bool = false,
+/// The id of the next request.
+next_request: u32 = 1,
+/// The permit-join request waiting for the driver.
+permit_join: ?u32 = null,
+/// The join window last asked for, in seconds, reported when the dongle opens it.
+window_seconds: u8 = 0,
+/// A request ended by `linkLost`, which found no spare event to report it: still to be queued.
+canceled_pending: ?u32 = null,
 
 pub const Status = enum { idle, starting, running, stopped };
 
@@ -47,8 +55,9 @@ pub const Options = struct {
 /// The names of `driver_layer.Level`, in its order.
 const LogLevelName = enum { @"error", warning, info, debug };
 
-/// Spare events kept ready: a log message and the event it explains.
-const spare_count = 2;
+/// Spare events kept ready: a log message, a request ended by the event it explains, and that
+/// event.
+const spare_count = 3;
 
 /// Creates a context. With `allocator` null, memory comes from the C library.
 pub fn create(allocator: ?CAllocator, seed: [32]u8) error{ OutOfMemory }!*Context {
@@ -163,6 +172,24 @@ pub fn start(ctx: *Context) c_int {
   return 0;
 }
 
+/// Opens the network to new devices, as `skep_permit_join`.
+pub fn permitJoin(ctx: *Context, seconds: c_uint, request: *u32) c_int {
+  if (ctx.status != .running) return err(.NETDOWN);
+  if (seconds > 254) return err(.INVAL);
+  // One at a time: a second would race the first.
+  if (ctx.permit_join != null) return err(.NOBUFS);
+  const id = ctx.next_request;
+  ctx.next_request +%= 1;
+  if (ctx.next_request == 0) {
+    ctx.next_request = 1;
+  }
+  ctx.permit_join = id;
+  ctx.window_seconds = @intCast(seconds);
+  ctx.driver.?.permitJoin(@intCast(seconds));
+  request.* = id;
+  return 0;
+}
+
 /// Stops cleanly, as `skep_stop`.
 pub fn stop(ctx: *Context) c_int {
   if (ctx.status != .starting and ctx.status != .running) return err(.NETDOWN);
@@ -183,8 +210,18 @@ pub fn linkLost(ctx: *Context) void {
   }
 }
 
-/// Queues `event` as STOPPED with `error_code`, and lets the driver go.
+/// Queues `event` as STOPPED with `error_code`, after ending pending requests, and lets the driver
+/// go.
 fn finish(ctx: *Context, event: *Event, error_code: c_int) void {
+  if (ctx.permit_join) |id| {
+    ctx.permit_join = null;
+    if (ctx.spares.pop()) |done| {
+      requestDone(done, id, err(.CANCELED));
+      ctx.events.push(done);
+    } else {
+      ctx.canceled_pending = id;
+    }
+  }
   event.type = .stopped;
   event.error_code = error_code;
   ctx.events.push(event);
@@ -231,6 +268,13 @@ pub fn nextEvent(ctx: *Context) ?*Event {
 /// is lost, and the next call goes on.
 fn process(ctx: *Context) c_int {
   ctx.fillSpares() catch return err(.NOMEM);
+  if (ctx.canceled_pending) |id| {
+    ctx.canceled_pending = null;
+    const event = ctx.spares.pop().?;
+    requestDone(event, id, err(.CANCELED));
+    ctx.events.push(event);
+    ctx.fillSpares() catch return err(.NOMEM);
+  }
   if (ctx.lost_pending) {
     ctx.lost_pending = false;
     const event = ctx.spares.pop().?;
@@ -244,19 +288,38 @@ fn process(ctx: *Context) c_int {
     switch (driver_event) {
       .ready => |ready| ctx.onReady(ready),
       .formed => |network| ctx.onFormed(network),
+      .permit_join_done => |failure| {
+        const id = ctx.permit_join orelse continue;
+        ctx.permit_join = null;
+        if (failure) |f| {
+          ctx.logMessage(.err, f.message.text());
+        }
+        const event = ctx.spares.pop().?;
+        requestDone(event, id, if (failure) |f| err(errnoOf(f.kind)) else 0);
+        ctx.events.push(event);
+      },
+      .join_window => |open| {
+        const event = ctx.spares.pop().?;
+        event.type = .permit_join;
+        event.duration = if (open) ctx.window_seconds else 0;
+        ctx.events.push(event);
+      },
+      .device => |device| switch (device.kind) {
+        .joined, .left => {
+          const event = ctx.spares.pop().?;
+          event.type = if (device.kind == .joined) .device_joined else .device_left;
+          event.device = device.ieee;
+          ctx.events.push(event);
+        },
+        // A known device keeps its setup: nothing to report.
+        .rejoined => {
+          const message: driver_layer.Message = .init("device {x:0>16} rejoined", .{ device.ieee });
+          ctx.logMessage(.debug, message.text());
+        },
+      },
       .failed => |failure| {
         ctx.logMessage(.err, failure.message.text());
-        ctx.finish(
-          ctx.spares.pop().?,
-          err(
-            switch (failure.kind) {
-              .timeout => .TIMEDOUT,
-              .protocol => .PROTO,
-              .unsupported => .PROTONOSUPPORT,
-              .refused => .IO,
-            },
-          ),
-        );
+        ctx.finish(ctx.spares.pop().?, err(errnoOf(failure.kind)));
       },
       .log => |entry| ctx.logMessage(entry.level, entry.message.text()),
     }
@@ -356,6 +419,21 @@ fn fillSpares(ctx: *Context) error{ OutOfMemory }!void {
     const event = try Event.create(ctx.c_allocator);
     ctx.spares.push(event);
   }
+}
+
+fn errnoOf(kind: driver_layer.Failure.Kind) E {
+  return switch (kind) {
+    .timeout => .TIMEDOUT,
+    .protocol => .PROTO,
+    .unsupported => .PROTONOSUPPORT,
+    .refused => .IO,
+  };
+}
+
+fn requestDone(event: *Event, id: u32, error_code: c_int) void {
+  event.type = .request_done;
+  event.request = id;
+  event.error_code = error_code;
 }
 
 pub fn err(e: E) c_int {

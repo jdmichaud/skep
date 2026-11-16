@@ -12,22 +12,40 @@ pub const Driver = struct {
   /// The coordinator's IEEE address: a locally administered one (bit 1 of the first byte), which
   /// no manufactured device carries.
   ieee: u64 = 0x0200_0000_0000_0001,
-  pending: ?driver.Event = null,
+  pending: [8]driver.Event = undefined,
+  pending_len: usize = 0,
 
   pub fn start(d: *Driver) void {
-    d.pending = .{
+    d.pending_len = 0;
+    d.post(.{
       .ready = .{
         .ieee = d.ieee,
         .network = d.network,
         .firmware = .init("simulated dongle", .{}),
       },
-    };
+    });
   }
 
   /// Forms the network: the simulated dongle holds it from now on.
   pub fn form(d: *Driver, f: driver.Form) void {
     d.network = f.network;
-    d.pending = .{ .formed = f.network };
+    d.post(.{ .formed = f.network });
+  }
+
+  pub fn permitJoin(d: *Driver, seconds: u8) void {
+    d.post(.{ .permit_join_done = null });
+    d.post(.{ .join_window = seconds > 0 });
+  }
+
+  /// A simulated device joins, rejoins or leaves. For tests.
+  pub fn device(d: *Driver, change: driver.Device) void {
+    d.post(.{ .device = change });
+  }
+
+  fn post(d: *Driver, event: driver.Event) void {
+    // Tests post few events between calls.
+    d.pending[d.pending_len] = event;
+    d.pending_len += 1;
   }
 
   pub fn input(_: *Driver, _: []const u8, _: u64) void {}
@@ -45,8 +63,15 @@ pub const Driver = struct {
   pub fn advance(_: *Driver, _: u64) void {}
 
   pub fn nextEvent(d: *Driver) ?driver.Event {
-    defer d.pending = null;
-    return d.pending;
+    if (d.pending_len == 0) return null;
+    const event = d.pending[0];
+    std.mem.copyForwards(
+      driver.Event,
+      d.pending[0..d.pending_len - 1],
+      d.pending[1..d.pending_len],
+    );
+    d.pending_len -= 1;
+    return event;
   }
 };
 

@@ -175,7 +175,13 @@ pub fn main(init: std.process.Init) !u8 {
       return 1;
     },
     // The probe neither forms networks nor sends commands it can do without.
-    .configuration_refused, .formed, .command_refused => unreachable,
+    .configuration_refused,
+    .formed,
+    .command_refused,
+    .permit_join_done,
+    .join_window,
+    .device,
+    => unreachable,
   }
 }
 
@@ -191,6 +197,8 @@ fn nextResult(driver: *Driver, out: *Io.Writer) !?ezsp.driver.Event {
         refused.command,
         refused.status.value,
       }),
+      // The probe opens no join window, so none of these comes before ready.
+      .permit_join_done, .join_window, .device => {},
       .ready, .failed, .formed => return event,
     }
   }

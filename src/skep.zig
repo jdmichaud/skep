@@ -123,6 +123,22 @@ export fn skep_event_get_log(event: *const Event, message: *[*:0]const u8) c_int
   return event.log_level;
 }
 
+export fn skep_permit_join(ctx: *Context, seconds: c_uint, request: *u32) c_int {
+  return ctx.permitJoin(seconds, request);
+}
+
+export fn skep_event_get_request(event: *const Event) u32 {
+  return event.request;
+}
+
+export fn skep_event_get_status(event: *const Event) u8 {
+  return event.status;
+}
+
+export fn skep_event_get_duration(event: *const Event) c_uint {
+  return event.duration;
+}
+
 export fn skep_get_network(ctx: *Context, channel: *u8, pan_id: *u16, extended_pan_id: *u64) c_int {
   const network = ctx.network orelse return err(.NETDOWN);
   channel.* = network.channel;
@@ -291,6 +307,59 @@ test "the ezsp driver suggests the dongle's serial settings" {
   var out: [*]const u8 = undefined;
   // A cancel byte and RST, for the dongle.
   try testing.expectEqual(5, skep_output(ctx, &out));
+}
+
+test "devices join while the window is open" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  var request: u32 = 0;
+  try testing.expectEqual(err(.NETDOWN), skep_permit_join(ctx, 60, &request));
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
+
+  try testing.expectEqual(err(.INVAL), skep_permit_join(ctx, 255, &request));
+  try testing.expectEqual(0, skep_permit_join(ctx, 60, &request));
+  try testing.expect(request != 0);
+  var second: u32 = 0;
+  try testing.expectEqual(err(.NOBUFS), skep_permit_join(ctx, 60, &second));
+  try testing.expectEqual(0, skep_advance(ctx, 0));
+  const done = skep_next_event(ctx).?;
+  defer skep_event_free(done);
+  try testing.expectEqual(@backingInt(Event.Type.request_done), skep_event_get_type(done));
+  try testing.expectEqual(request, skep_event_get_request(done));
+  try testing.expectEqual(0, skep_event_get_error(done));
+  const window = skep_next_event(ctx).?;
+  defer skep_event_free(window);
+  try testing.expectEqual(@backingInt(Event.Type.permit_join), skep_event_get_type(window));
+  try testing.expectEqual(60, skep_event_get_duration(window));
+
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .kind = .joined });
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .kind = .rejoined });
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .kind = .left });
+  try testing.expectEqual(0, skep_advance(ctx, 0));
+  const joined = skep_next_event(ctx).?;
+  defer skep_event_free(joined);
+  try testing.expectEqual(@backingInt(Event.Type.device_joined), skep_event_get_type(joined));
+  try testing.expectEqual(0x00124b0012345678, skep_event_get_device(joined));
+  // The rejoin is only logged, at debug level.
+  try testing.expectEqual(@backingInt(Event.Type.device_left), try nextEventType(ctx));
+}
+
+test "stopping ends pending requests" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
+  var request: u32 = 0;
+  try testing.expectEqual(0, skep_permit_join(ctx, 60, &request));
+  skep_link_lost(ctx);
+  const done = skep_next_event(ctx).?;
+  defer skep_event_free(done);
+  try testing.expectEqual(request, skep_event_get_request(done));
+  try testing.expectEqual(err(.CANCELED), skep_event_get_error(done));
+  const stopped = skep_next_event(ctx).?;
+  defer skep_event_free(stopped);
+  try testing.expectEqual(err(.NOTCONN), skep_event_get_error(stopped));
 }
 
 /// Starting, running and stopping with the sim driver, every allocation failing in turn.

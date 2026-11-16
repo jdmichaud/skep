@@ -37,6 +37,11 @@ next: ?*Event = null,
 /// The allocator the event came from, or null for the C library's.
 allocator: ?CAllocator,
 error_code: c_int = 0,
+/// For REQUEST_DONE: the request's id, and the device's status.
+request: u32 = 0,
+status: u8 = 0,
+/// For PERMIT_JOIN: how long the join window stays open, 0 when it closed.
+duration: c_uint = 0,
 origin: Origin = .none,
 device: u64 = 0,
 log_level: c_int = 0,
