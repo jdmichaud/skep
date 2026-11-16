@@ -545,6 +545,7 @@ test {
   _ = @import("State.zig");
   _ = @import("zcl.zig");
   _ = @import("zdo.zig");
+  _ = @import("devices.zig");
   _ = @import("driver/driver.zig");
   _ = @import("driver/ezsp/ezsp.zig");
   std.testing.refAllDecls(@This());
