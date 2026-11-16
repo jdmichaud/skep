@@ -108,7 +108,10 @@ pub const Driver = struct {
     waiting_for_network,
     reading_network,
     reading_ieee,
-    finished,
+    /// Ready: running the network the dongle holds, if any.
+    running,
+    /// Failed: `start` begins again.
+    failed,
   };
 
   pub fn init(options: link_layer.Options) Driver {
@@ -176,7 +179,7 @@ pub const Driver = struct {
 
   fn waiting(d: *const Driver) bool {
     return switch (d.step) {
-      .idle, .starting, .finished => false,
+      .idle, .starting, .running, .failed => false,
       else => true,
     };
   }
@@ -188,7 +191,7 @@ pub const Driver = struct {
   }
 
   fn fail(d: *Driver, failure: Failure) void {
-    d.step = .finished;
+    d.step = .failed;
     d.post(.{ .failed = failure });
   }
 
@@ -234,7 +237,7 @@ pub const Driver = struct {
 
   fn process(d: *Driver, now: u64) void {
     while (d.startup.link.nextEvent()) |event| {
-      if (d.step == .finished) continue;
+      if (d.step == .failed) continue;
       switch (event) {
         .frame => |bytes| d.receive(bytes, now),
         .failed => |failure| d.fail(.{ .link = failure }),
@@ -312,10 +315,10 @@ pub const Driver = struct {
       .reading_ieee => {
         if (received.id != .get_eui64) return d.fail(.bad_response);
         d.ready.ieee = command.parseEui64(received.parameters) catch return d.fail(.bad_response);
-        d.step = .finished;
+        d.step = .running;
         d.post(.{ .ready = d.ready });
       },
-      .idle, .starting, .waiting_for_network, .finished => {},
+      .idle, .starting, .waiting_for_network, .running, .failed => {},
     }
   }
 
@@ -464,4 +467,20 @@ test "a refused endpoint fails the driver" {
   ncp.respond(&hex("098001020036"));
   const failure = driver.nextEvent().?.failed;
   try testing.expectEqual(0x36, failure.add_endpoint.value);
+}
+
+test "a link failure after the start is reported" {
+  var driver: Driver = undefined;
+  var ncp = try started(&driver);
+  try configured(&ncp, &.{});
+  _ = ncp.take();
+  ncp.respond(&hex("0a8001170093"));
+  _ = ncp.take();
+  ncp.respond(&hex("0b80012600" ++ "8877665544332211"));
+  try testing.expect(driver.nextEvent().? == .ready);
+  ncp.send(.{ .err = .{ .version = 2, .code = 0x51 } });
+  try testing.expectEqual(
+    link_layer.Failure{ .ncp_error = 0x51 },
+    driver.nextEvent().?.failed.link,
+  );
 }
