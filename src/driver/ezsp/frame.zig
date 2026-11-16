@@ -31,9 +31,12 @@ pub const FrameId = enum(u16) {
   set_policy = 0x0055,
   invalid_command = 0x0058,
   set_initial_security_state = 0x0068,
+  clear_transient_link_keys = 0x006b,
+  add_transient_link_key = 0x00af,
   get_value = 0x00aa,
   set_value = 0x00ab,
   clear_key_table = 0x00b1,
+  import_transient_key = 0x0111,
   _,
 };
 

@@ -497,7 +497,9 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
 - New devices can join only during an explicit, time-limited permit
   window. Devices already in the network may rejoin at any time, for
   instance a sensor whose parent router was switched off: closing the
-  window must not cut them off.
+  window must not cut them off. Only while the window is open does the
+  trust center accept new devices and know the well-known link key they
+  join with (`ZigBeeAlliance09`); outside it, it accepts rejoins only.
 
 ## Milestones
 

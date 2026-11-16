@@ -76,6 +76,32 @@ pub fn permitJoining(out: *[1]u8, seconds: u8) []const u8 {
   return out;
 }
 
+/// The link key Zigbee 3.0 devices join with when no install code says otherwise.
+pub const well_known_link_key = "ZigBeeAlliance09".*;
+
+/// Parameters of `add_transient_link_key`, before EZSP 13: a link key for `eui64` to join with,
+/// for a while. All ones means any device.
+pub fn addTransientLinkKey(out: *[24]u8, eui64: u64, key: [16]u8) []const u8 {
+  std.mem.writeInt(u64, out[0..8], eui64, .little);
+  @memcpy(out[8..24], &key);
+  return out;
+}
+
+/// Parameters of `import_transient_key`, which replaces `add_transient_link_key` from EZSP 13. All
+/// zeros means any device. EZSP 13 takes a flags byte, which later versions dropped.
+pub fn importTransientKey(out: *[25]u8, eui64: u64, key: [16]u8, version: u8) []const u8 {
+  std.mem.writeInt(u64, out[0..8], eui64, .little);
+  @memcpy(out[8..24], &key);
+  out[24] = 0;
+  return if (version < 14) out else out[0..24];
+}
+
+/// The answer to `import_transient_key`: an sl_status_t, even with EZSP 13.
+pub fn parseImportTransientKey(parameters: []const u8) error{ TooShort }!Status {
+  var r: Reader = .{ .bytes = parameters };
+  return .{ .value = try r.int(u32), .sl = true };
+}
+
 /// What `trust_center_join_handler` reports about a device.
 pub const DeviceUpdate = enum(u8) {
   secured_rejoin = 0,
@@ -92,6 +118,9 @@ pub const TrustCenterJoin = struct {
   update: DeviceUpdate,
   decision: u8,
   parent_id: u16,
+
+  /// The trust center refused the device.
+  pub const deny_join: u8 = 2;
 
   pub fn parse(parameters: []const u8) error{ TooShort }!TrustCenterJoin {
     var r: Reader = .{ .bytes = parameters };
@@ -512,6 +541,19 @@ test "encode and parse what joining needs" {
   try testing.expectEqual(DeviceUpdate.unsecured_join, join.update);
   try testing.expect((try parseStatus(&hex("9c"), 8)).is(.network_opened));
   try testing.expect((try parseStatus(&hex("190c0000"), 14)).is(.network_closed));
+}
+
+test "a transient link key, before and after EZSP 13 and 14" {
+  var add: [24]u8 = undefined;
+  try testing.expectEqualSlices(
+    u8,
+    &hex("ffffffffffffffff" ++ "5a6967426565416c6c69616e63653039"),
+    addTransientLinkKey(&add, 0xffffffffffffffff, well_known_link_key),
+  );
+  var import: [25]u8 = undefined;
+  try testing.expectEqual(25, importTransientKey(&import, 0, well_known_link_key, 13).len);
+  try testing.expectEqual(24, importTransientKey(&import, 0, well_known_link_key, 14).len);
+  try testing.expect((try parseImportTransientKey(&hex("00000000"))).is(.ok));
 }
 
 test "parse the network parameters" {

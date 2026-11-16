@@ -66,6 +66,11 @@ attribute details come from the Zigbee2MQTT device definitions
   The LED flashes blue while the sensor is in pairing mode.
 - Binding and reporting must be configured right after the sensor joins,
   while it is still awake; afterwards it sleeps most of the time.
+- Joining skep's network (2026-11-16): it joins with the well-known link
+  key and fails, over and over, if the trust center does not know it.
+  Once joined, it obtains its own trust center link key, and reports
+  temperature and humidity to the coordinator by itself, before any
+  binding or reporting configuration.
 
 ## Aqara LED Bulb T2, E27, RGB CCT (LB-L02D)
 

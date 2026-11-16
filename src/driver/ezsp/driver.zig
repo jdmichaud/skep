@@ -33,15 +33,14 @@ const configuration = [_]struct { id: command.ConfigId, value: u16 }{
   .{ .id = .trust_center_address_cache_size, .value = 2 },
 };
 
-/// Trust center policies, as zigbee-herdsman sets them: new devices join only while the window
-/// is open, devices that lost the network key can always rejoin, and devices get the trust
-/// center link key they ask for, but no application link keys.
+/// Trust center policies: devices that lost the network key can always rejoin, and devices get
+/// the trust center link key they ask for, but no application link keys, as zigbee-herdsman sets
+/// them. New devices can join only while the window is open, when `permitJoin` allows them
+/// (zigbee-herdsman allows them from the start, and relies on the window being closed).
+const rejoins_only = command.TrustCenterDecision.allow_unsecured_rejoins;
+const joins_and_rejoins = command.TrustCenterDecision.allow_joins | rejoins_only;
 const policies = [_]struct { id: command.PolicyId, decision: u8 }{
-  .{
-    .id = .trust_center_policy,
-    .decision = command.TrustCenterDecision.allow_joins |
-      command.TrustCenterDecision.allow_unsecured_rejoins,
-  },
+  .{ .id = .trust_center_policy, .decision = rejoins_only },
   .{
     .id = .tc_key_request_policy,
     .decision = command.KeyRequestDecision.allow_tc_key_requests_and_send_current_key,
@@ -159,6 +158,8 @@ pub const Driver = struct {
   /// The last time given, for commands sent from `form`.
   now: u64 = 0,
   form_parameters: FormParameters = undefined,
+  /// What `permitJoin` asked for.
+  permit_seconds: u8 = 0,
   ready: Ready = undefined,
   policy_index: usize = 0,
   /// Events for the caller. Callbacks arrive in bursts of at most the link's receive slots, and
@@ -181,6 +182,9 @@ pub const Driver = struct {
     /// Ready: running the network the dongle holds, if any.
     running,
     // `permitJoin`:
+    adding_transient_key,
+    clearing_transient_keys,
+    setting_join_policy,
     permitting,
     // `form`:
     leaving,
@@ -284,11 +288,34 @@ pub const Driver = struct {
 
   /// Opens the network to new devices for `seconds`, or closes it with 0. Reports
   /// `permit_join_done`, then `join_window` when the NCP opened or closed it.
+  ///
+  /// Joining devices use the well-known link key, which the trust center learns as a transient
+  /// key for any device while the window is open, as zigbee-herdsman does: the trust center's own
+  /// key is random, and the network key it sends a device that cannot decrypt it is lost on it.
   pub fn permitJoin(d: *Driver, seconds: u8) void {
     std.debug.assert(d.step == .running);
-    d.step = .permitting;
-    var out: [1]u8 = undefined;
-    d.send(.permit_joining, command.permitJoining(&out, seconds), d.now);
+    d.permit_seconds = seconds;
+    const version = d.ready.version.protocol_version;
+    if (seconds == 0) {
+      d.step = .clearing_transient_keys;
+      d.send(.clear_transient_link_keys, &.{}, d.now);
+    } else if (version < 13) {
+      d.step = .adding_transient_key;
+      var out: [24]u8 = undefined;
+      d.send(
+        .add_transient_link_key,
+        command.addTransientLinkKey(&out, std.math.maxInt(u64), command.well_known_link_key),
+        d.now,
+      );
+    } else {
+      d.step = .adding_transient_key;
+      var out: [25]u8 = undefined;
+      d.send(
+        .import_transient_key,
+        command.importTransientKey(&out, 0, command.well_known_link_key, version),
+        d.now,
+      );
+    }
   }
 
   fn waiting(d: *const Driver) bool {
@@ -398,6 +425,8 @@ pub const Driver = struct {
       } else if (received.id == .trust_center_join_handler) {
         const join = command.TrustCenterJoin.parse(received.parameters) catch
           return d.fail(.bad_response);
+        // A device the trust center turned away has not joined; the callback is in the debug log.
+        if (join.update != .left and join.decision == command.TrustCenterJoin.deny_join) return;
         d.post(.{
           .device = .{
             .eui64 = join.eui64,
@@ -455,6 +484,26 @@ pub const Driver = struct {
         d.step = .initialising_network;
         var out: [2]u8 = undefined;
         d.send(.network_init, command.networkInit(&out), now);
+      },
+      .adding_transient_key => {
+        const status = if (received.id == .import_transient_key)
+          command.parseImportTransientKey(received.parameters) catch return d.fail(.bad_response)
+        else
+          d.statusOf(received, .add_transient_link_key) orelse return;
+        if (!status.is(.ok)) return d.permitJoinDone(.{ .command = received.id, .status = status });
+        d.setJoinPolicy(joins_and_rejoins, now);
+      },
+      .clearing_transient_keys => {
+        // No parameters: it cannot fail.
+        if (received.id != .clear_transient_link_keys) return d.fail(.bad_response);
+        d.setJoinPolicy(rejoins_only, now);
+      },
+      .setting_join_policy => {
+        const status = d.statusOf(received, .set_policy) orelse return;
+        if (!status.is(.ok)) return d.permitJoinDone(.{ .command = .set_policy, .status = status });
+        d.step = .permitting;
+        var out: [1]u8 = undefined;
+        d.send(.permit_joining, command.permitJoining(&out, d.permit_seconds), now);
       },
       .permitting => {
         const status = d.statusOf(received, .permit_joining) orelse return;
@@ -620,6 +669,17 @@ pub const Driver = struct {
       d.fail(.bad_response);
       return null;
     };
+  }
+
+  fn setJoinPolicy(d: *Driver, decision: u8, now: u64) void {
+    d.step = .setting_join_policy;
+    var out: [2]u8 = undefined;
+    d.send(.set_policy, command.setPolicy(&out, .trust_center_policy, decision), now);
+  }
+
+  fn permitJoinDone(d: *Driver, refused: ?Refused) void {
+    d.step = .running;
+    d.post(.{ .permit_join_done = refused });
   }
 
   fn setPolicy(d: *Driver, now: u64) void {
@@ -979,18 +1039,54 @@ test "open the join window and see a device join" {
   var driver: Driver = undefined;
   var ncp = try readyNcp(&driver, false);
   driver.permitJoin(60);
+  // EZSP 8: the well-known link key, for any device.
+  const key = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqual(@backingInt(frame.FrameId.add_transient_link_key), key[3]);
+  try testing.expectEqualSlices(u8, &hex("ffffffffffffffff") ++ "ZigBeeAlliance09", key[5..]);
+  ncp.respond(&.{ key[0], 0x80, 0x01, 0xaf, 0x00, 0x00 });
+  const policy = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqualSlices(u8, &.{ 0x00, joins_and_rejoins }, policy[5..]);
+  ncp.respond(&.{ policy[0], 0x80, 0x01, 0x55, 0x00, 0x00 });
   const sent = ncp.take() orelse return error.TestExpectedCommand;
   try testing.expectEqual(@backingInt(frame.FrameId.permit_joining), sent[3]);
   try testing.expectEqualSlices(u8, &.{ 60 }, sent[5..]);
   ncp.respond(&.{ sent[0], 0x80, 0x01, 0x22, 0x00, 0x00 });
   try testing.expectEqual(null, skipCallbacks(&driver).?.permit_join_done);
-  // NETWORK_OPENED, a device joining, NETWORK_CLOSED.
+  // NETWORK_OPENED, a device joining, a device the trust center refuses, NETWORK_CLOSED.
   ncp.respond(&hex("00900119009c"));
   ncp.respond(&hex("0090012400" ++ "3412" ++ "8877665544332211" ++ "01" ++ "00" ++ "0000"));
+  ncp.respond(&hex("0090012400" ++ "3512" ++ "9977665544332211" ++ "01" ++ "02" ++ "0000"));
   ncp.respond(&hex("00900119009d"));
   try testing.expectEqual(true, skipCallbacks(&driver).?.join_window);
   const device = skipCallbacks(&driver).?.device;
   try testing.expectEqual(0x1122334455667788, device.eui64);
   try testing.expect(device.kind == .joined);
   try testing.expectEqual(false, skipCallbacks(&driver).?.join_window);
+}
+
+test "closing the join window forgets the well-known key" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, false);
+  driver.permitJoin(0);
+  const clear = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqual(@backingInt(frame.FrameId.clear_transient_link_keys), clear[3]);
+  ncp.respond(&.{ clear[0], 0x80, 0x01, 0x6b, 0x00 });
+  const policy = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqualSlices(u8, &.{ 0x00, rejoins_only }, policy[5..]);
+  ncp.respond(&.{ policy[0], 0x80, 0x01, 0x55, 0x00, 0x00 });
+  const sent = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqualSlices(u8, &.{ 0 }, sent[5..]);
+  ncp.respond(&.{ sent[0], 0x80, 0x01, 0x22, 0x00, 0x00 });
+  try testing.expectEqual(null, skipCallbacks(&driver).?.permit_join_done);
+}
+
+test "a refused transient key is reported, and the driver goes on" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, false);
+  driver.permitJoin(60);
+  try answer(&ncp, .add_transient_link_key, 0x70);
+  const refused = skipCallbacks(&driver).?.permit_join_done.?;
+  try testing.expectEqual(frame.FrameId.add_transient_link_key, refused.command);
+  driver.permitJoin(0);
+  try testing.expect(ncp.take() != null);
 }
