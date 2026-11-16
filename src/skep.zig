@@ -333,6 +333,19 @@ export fn skep_device_get_clusters(
   return 0;
 }
 
+export fn skep_device_get_setup(ctx: *Context, ieee: u64, setup_state: *c_int) c_int {
+  const d = switch (deviceOf(ctx, ieee)) {
+    .device => |d| d,
+    .err => |e| return e,
+  };
+  setup_state.* = switch (d.progress.stage) {
+    .ready => 1,
+    .failed => 2,
+    else => 0,
+  };
+  return 0;
+}
+
 export fn skep_setup_device(ctx: *Context, ieee: u64) c_int {
   return ctx.setupDevice(ieee);
 }
@@ -872,6 +885,10 @@ test "devices are described, and requests reach them" {
     err(.NOENT),
     skep_device_get_clusters(ctx, sensor_ieee, 2, 0, &clusters, 0, &count),
   );
+  var setup_state: c_int = -1;
+  try testing.expectEqual(0, skep_device_get_setup(ctx, sensor_ieee, &setup_state));
+  try testing.expectEqual(1, setup_state);
+  try testing.expectEqual(err(.NODEV), skep_device_get_setup(ctx, 1, &setup_state));
 
   // Its model, its manufacturer, and an attribute it does not have.
   var target = std.mem.zeroes(requests.Target);

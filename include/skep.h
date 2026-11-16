@@ -722,6 +722,25 @@ int skep_device_get_clusters(skep_ctx *ctx, uint64_t device, uint8_t endpoint,
                              enum skep_cluster_side side, uint16_t *clusters, size_t capacity,
                              size_t *count);
 
+enum skep_setup {
+  /* Being interviewed and set up, or waiting for the device to wake up
+   * to go on. */
+  SKEP_SETUP_PENDING = 0,
+  /* Interviewed and set up: SKEP_EVENT_DEVICE_READY was reported. */
+  SKEP_SETUP_READY = 1,
+  /* The device refused a step: SKEP_EVENT_DEVICE_SETUP_FAILED was
+   * reported, and skep_setup_device() starts again. */
+  SKEP_SETUP_FAILED = 2,
+};
+
+/*
+ * How far the device's interview and setup got. libskep keeps it in the
+ * state, so it survives restarts.
+ *
+ * Errors: -ENODEV.
+ */
+int skep_device_get_setup(skep_ctx *ctx, uint64_t device, enum skep_setup *setup);
+
 /*
  * Set the device up again from the start, after a failed setup or when
  * the device lost its configuration. SKEP_EVENT_DEVICE_READY or

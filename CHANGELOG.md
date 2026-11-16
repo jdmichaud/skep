@@ -37,6 +37,7 @@ publishes the section of each released version as its release notes.
   `SKEP_EVENT_ATTRIBUTES`, cluster commands from devices
   `SKEP_EVENT_COMMAND`.
 - The device functions (`skep_get_devices()`, `skep_device_get_*()`,
+  `skep_device_get_setup()` among them,
   `skep_remove_device()`) and the requests (`skep_read_attributes()`,
   `skep_write_attributes()`, `skep_configure_reporting()`, `skep_bind()`,
   `skep_unbind()`, `skep_send_command()`, `skep_cancel()`), which wait
