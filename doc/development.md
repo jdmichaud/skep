@@ -32,6 +32,16 @@
   and pull request, with the Zig version of `minimum_zig_version`. On a
   tag, it also publishes the release (see below).
 
+## Talking to the dongle
+
+- `zig build probe -- <device>` resets a Silicon Labs EmberZNet dongle and
+  reports its EZSP and firmware versions, and whether it sent XON/XOFF.
+  `--trace` shows the bytes exchanged, `--baud` and `--rtscts` change the
+  serial settings. Use the stable path under `/dev/serial/by-id/`.
+- It is the minimal I/O loop around the `ezsp` driver (milestone 2), and
+  Linux only. It resets the dongle's firmware, as every host does when it
+  starts, and changes nothing on it.
+
 ## Releasing
 
 - The version in `build.zig.zon`, repeated by the `SKEP_VERSION_*`

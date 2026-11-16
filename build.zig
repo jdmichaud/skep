@@ -21,9 +21,40 @@ pub fn build(b: *std.Build) !void {
   const unit_tests = b.addTest(.{ .root_module = skep });
   test_step.dependOn(&b.addRunArtifact(unit_tests).step);
   addHeaderChecks(b, test_step, target, optimize, build_options);
+  addProbe(b, test_step, target, optimize);
   if (b.isRoot()) {
     try addFormatSteps(b);
   }
+}
+
+/// `zig build probe -- <device>` resets a Silicon Labs dongle and reports its versions: the
+/// minimal I/O loop around the ezsp driver. The tests build it too, so that it keeps compiling.
+fn addProbe(
+  b: *std.Build,
+  test_step: *std.Build.Step,
+  target: std.Build.ResolvedTarget,
+  optimize: std.lang.Optimize,
+) void {
+  const ezsp = b.createModule(.{
+    .root_source_file = b.path("src/driver/ezsp/ezsp.zig"),
+    .target = target,
+    .optimize = optimize,
+  });
+  const probe = b.addExecutable(.{
+    .name = "ezsp-probe",
+    .root_module = b.createModule(.{
+      .root_source_file = b.path("tools/ezsp-probe.zig"),
+      .target = target,
+      .optimize = optimize,
+      .imports = &.{.{ .name = "ezsp", .module = ezsp }},
+    }),
+  });
+  const run = b.addRunArtifact(probe);
+  run.addPassthruArgs();
+  b.step("probe", "Reset a Silicon Labs dongle and report its versions (-- <device>)").dependOn(
+    &run.step,
+  );
+  test_step.dependOn(&probe.step);
 }
 
 /// `zig build fmt` formats the Zig code and `zig build fmt-check` checks it, with the zigfmt pinned

@@ -1,0 +1,12 @@
+//! The ezsp driver: talks to Silicon Labs EmberZNet network co-processors over ASH and EZSP.
+
+const std = @import("std");
+
+pub const ash = @import("ash.zig");
+pub const link = @import("link.zig");
+pub const frame = @import("frame.zig");
+pub const startup = @import("startup.zig");
+
+test {
+  std.testing.refAllDecls(@This());
+}

@@ -18,5 +18,7 @@ publishes the section of each released version as its release notes.
 - EZSP frames, in the legacy and the extended format, for EZSP 13 to 19.
 - Starting an EmberZNet dongle: reset, agreeing on the EZSP version, and
   reading the firmware version.
+- `zig build probe -- <device>`, a development tool that resets an
+  EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to
   Zig.
