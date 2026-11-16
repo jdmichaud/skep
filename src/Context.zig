@@ -465,7 +465,7 @@ fn process(ctx: *Context) c_int {
       .device => |device| switch (device.kind) {
         .joined, .rejoined => {
           const changed = if (ctx.state) |*s|
-            s.addDeviceAssumeCapacity(.{ .ieee = device.ieee, .nwk = device.nwk })
+            s.noteDeviceAssumeCapacity(device.ieee, device.nwk)
           else
             false;
           if (device.kind == .joined) {
