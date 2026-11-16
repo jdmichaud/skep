@@ -37,7 +37,10 @@ publishes the section of each released version as its release notes.
 - skepd, which runs the network of a dongle through libskep: it opens
   the serial port, reopens it when it disappears, logs to stderr with
   timestamps unless journald adds them, and stops cleanly on SIGTERM or
-  SIGINT.
+  SIGINT. It keeps the state in a file (`--state`, by default
+  `state.json` in the XDG data directory or systemd's state directory),
+  replaced atomically on each change with mode 0600, and refreshes it
+  from the dongle every hour.
 - `zig build probe -- <device>`, a development tool that resets an
   EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to

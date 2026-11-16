@@ -430,10 +430,12 @@ reviewed before the library is implemented.
   (`skep_refresh_state()`), which is cheap, so that a dongle that dies
   takes at most an hour of frame counters with it.
 - Until the configuration file format is settled, its options come from
-  the command line: `--device`, `--driver`, `--log-level`,
-  `--replace-network`, `--permit-join` to open the join window once the
-  network is up, and `--baud` and `--rtscts` to override the driver's
-  serial settings.
+  the command line: `--device`, `--state` for the state file (see
+  Files), `--driver`, `--log-level`, `--replace-network`, `--permit-join`
+  to open the join window once the network is up, and `--baud` and
+  `--rtscts` to override the driver's serial settings.
+- A state file it cannot read stops it before it opens the dongle, and
+  is left as it is: replacing it would lose the network it holds.
 - Runs in the foreground and never daemonizes itself. Under systemd it
   uses `Type=notify` and reports readiness with sd_notify.
 - Logs to stderr, each line starting with the time in UTC (ISO 8601,
@@ -462,7 +464,7 @@ reviewed before the library is implemented.
 | What | User service | System service |
 |---|---|---|
 | Configuration | `$XDG_CONFIG_HOME/skep/skepd.conf` | `$CONFIGURATION_DIRECTORY/skepd.conf` (`/etc/skep`) |
-| State exported by libskep (network, keys, devices), friendly names | `$XDG_DATA_HOME/skep/` | `$STATE_DIRECTORY/` (`/var/lib/skep`) |
+| State exported by libskep (network, keys, devices), friendly names | `$XDG_DATA_HOME/skep/` (`state.json`) | `$STATE_DIRECTORY/` (`/var/lib/skep`, `state.json`) |
 | Socket | `$XDG_RUNTIME_DIR/skep/skepd.sock` | `$RUNTIME_DIRECTORY/skepd.sock` (`/run/skep`) |
 
 skepd creates files holding keys, such as the state, with mode 0600 and

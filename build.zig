@@ -40,7 +40,7 @@ pub fn build(b: *std.Build) !void {
   });
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = serial })).step);
   addProbe(b, test_step, target, optimize, serial);
-  addSkepd(b, target, optimize, skep_h, serial, library);
+  addSkepd(b, test_step, target, optimize, skep_h, serial, library);
   if (b.isRoot()) {
     try addFormatSteps(b);
   }
@@ -111,6 +111,7 @@ fn addAbiCheck(
 /// libskep's sources, which a Zig module cannot reach outside its directory.
 fn addSkepd(
   b: *std.Build,
+  test_step: *std.Build.Step,
   target: std.Build.ResolvedTarget,
   optimize: std.lang.Optimize,
   skep_h: *std.Build.Module,
@@ -129,6 +130,13 @@ fn addSkepd(
   const run = b.addRunArtifact(skepd);
   run.addPassthruArgs();
   b.step("skepd", "Run skepd (-- --device <path>)").dependOn(&run.step);
+  // The state file on its own: the rest of skepd needs a dongle.
+  const state_file = b.createModule(.{
+    .root_source_file = b.path("src/skepd/StateFile.zig"),
+    .target = target,
+    .optimize = optimize,
+  });
+  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = state_file })).step);
 }
 
 /// `zig build probe -- <device>` resets a Silicon Labs dongle and reports its versions: the

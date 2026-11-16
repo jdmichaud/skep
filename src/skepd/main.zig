@@ -1,28 +1,33 @@
 //! skepd: the daemon that runs a Zigbee network with libskep. It owns the dongle and does all of
-//! libskep's I/O: it opens the serial port, runs the poll loop, keeps time, and reopens the dongle
-//! when it disappears. It uses libskep only through skep.h, like any other program would.
+//! libskep's I/O: it opens the serial port, runs the poll loop, keeps time, reopens the dongle
+//! when it disappears, and keeps libskep's state in a file. It uses libskep only through skep.h,
+//! like any other program would.
 //!
 //! Its options come from the command line until the configuration file format is settled.
 
 const std = @import("std");
 const c = @import("skep_h");
 const serial = @import("serial");
+const StateFile = @import("StateFile.zig");
 
 const linux = std.os.linux;
 const posix = std.posix;
 const Io = std.Io;
 
 const usage =
-  \\usage: skepd --device <path> [--driver <name>] [--log-level <level>] [--replace-network]
-  \\             [--permit-join <seconds>] [--baud <rate>] [--rtscts]
+  \\usage: skepd --device <path> [--state <path>] [--driver <name>] [--log-level <level>]
+  \\             [--replace-network] [--permit-join <seconds>] [--baud <rate>] [--rtscts]
   \\
   \\Runs the Zigbee network of the dongle on <path>. Stops cleanly on SIGTERM or SIGINT.
   \\
   \\  --device <path>     the dongle's serial device, best under /dev/serial/by-id/
+  \\  --state <path>      the file keeping the network, its keys and its devices, which skepd
+  \\                      reads at start and replaces on each change; by default state.json in
+  \\                      $STATE_DIRECTORY under systemd, in $XDG_DATA_HOME/skep otherwise
   \\  --driver <name>     ezsp (default) for Silicon Labs EmberZNet dongles
   \\  --log-level <level> error, warning, info (default) or debug
-  \\  --replace-network   replace the network the dongle holds with a new one; its devices
-  \\                      must then be paired again
+  \\  --replace-network   replace the network the dongle holds with the saved one, or with a
+  \\                      new one if no state is saved; its devices must then be paired again
   \\  --permit-join <seconds>
   \\                      let new devices join for that long (at most 254) once the network
   \\                      is up
@@ -34,8 +39,13 @@ const usage =
 /// How long to wait before opening the dongle again, in milliseconds.
 const reopen_delay = 5000;
 
+/// How often to read the frame counters from the dongle into the state, in milliseconds: a dongle
+/// that dies takes at most this long of them with it.
+const refresh_interval = 3600 * 1000;
+
 const Options = struct {
   device: [:0]const u8,
+  state: ?[:0]const u8 = null,
   driver: [:0]const u8 = "ezsp",
   log_level: [:0]const u8 = "info",
   replace_network: bool = false,
@@ -63,6 +73,8 @@ fn parseOptions(args: []const [:0]const u8) ?Options {
     const value = args[i];
     if (std.mem.eql(u8, arg, "--device")) {
       device = value;
+    } else if (std.mem.eql(u8, arg, "--state")) {
+      options.state = value;
     } else if (std.mem.eql(u8, arg, "--driver")) {
       options.driver = value;
     } else if (std.mem.eql(u8, arg, "--log-level")) {
@@ -84,8 +96,12 @@ const Daemon = struct {
   log: *Io.Writer,
   /// Start log lines with the time, unless journald, which adds its own.
   timestamps: bool,
+  gpa: std.mem.Allocator,
   ctx: *c.skep_ctx,
   device: [:0]const u8,
+  state_path: [:0]const u8,
+  /// When to refresh the state from the dongle next, while the network is up.
+  refresh_at: ?u64 = null,
   baudrate: u32,
   rtscts: bool,
   /// The dongle, while it is open.
@@ -109,6 +125,68 @@ const Daemon = struct {
     }
     d.log.print("skepd: " ++ format ++ "\n", args) catch {};
     d.log.flush() catch {};
+  }
+
+  /// Loads the saved state, if there is one. Returns an exit code if skepd cannot go on.
+  fn loadState(d: *Daemon) ?u8 {
+    const data = switch (StateFile.read(d.gpa, d.state_path)) {
+      .none => {
+        d.print("no state in {s} yet: it comes from the dongle's network", .{ d.state_path });
+        return null;
+      },
+      .data => |data| data,
+      .failed => |failure| {
+        d.print("{s}: {s}: {t}", .{ d.state_path, failure.step, failure.errno });
+        return 1;
+      },
+    };
+    defer d.gpa.free(data);
+    const r = c.skep_import_state(d.ctx, data.ptr, data.len);
+    if (r == 0) {
+      d.print("state read from {s}", .{ d.state_path });
+      return null;
+    }
+    // The state is kept as it is: what it holds would be lost if it were replaced.
+    const why = switch (errnoName(r)) {
+      .INVAL => "not a state libskep can read; move it away to start without it",
+      .OPNOTSUPP => "written by a newer skep",
+      else => "cannot be read",
+    };
+    d.print("{s}: {s} ({t})", .{ d.state_path, why, errnoName(r) });
+    return 1;
+  }
+
+  /// Replaces the state file with libskep's state.
+  fn saveState(d: *Daemon) void {
+    var len: usize = 0;
+    _ = c.skep_export_state(d.ctx, null, 0, &len);
+    const buffer = d.gpa.alloc(u8, len) catch {
+      d.print("error: cannot save the state: out of memory", .{});
+      return;
+    };
+    defer d.gpa.free(buffer);
+    const r = c.skep_export_state(d.ctx, buffer.ptr, buffer.len, &len);
+    if (r != 0) {
+      d.print("error: cannot save the state: {t}", .{ errnoName(r) });
+      return;
+    }
+    if (StateFile.write(d.state_path, buffer[0..len])) |failure| {
+      d.print("error: cannot save the state in {s}: {s}: {t}", .{
+        d.state_path,
+        failure.step,
+        failure.errno,
+      });
+    }
+  }
+
+  fn refresh(d: *Daemon) void {
+    d.refresh_at = d.now() + refresh_interval;
+    var request: u32 = 0;
+    const r = c.skep_refresh_state(d.ctx, &request);
+    // -ENOBUFS: one is already under way.
+    if (r != 0 and r != -@as(c_int, @backingInt(posix.E.NOBUFS))) {
+      d.print("cannot refresh the state: {t}", .{ errnoName(r) });
+    }
   }
 
   /// Opens the dongle and starts libskep, or tries again later.
@@ -206,6 +284,7 @@ const Daemon = struct {
             pan_id,
             extended_pan_id,
           });
+          d.refresh_at = d.now() + refresh_interval;
           // Once: a dongle opened again does not reopen the window.
           if (d.permit_join) |seconds| {
             d.permit_join = null;
@@ -217,6 +296,7 @@ const Daemon = struct {
           }
         },
         c.SKEP_EVENT_STOPPED => d.stopped(c.skep_event_get_error(event)),
+        c.SKEP_EVENT_STATE_CHANGED => d.saveState(),
         c.SKEP_EVENT_PERMIT_JOIN => {
           const duration = c.skep_event_get_duration(event);
           if (duration > 0) {
@@ -251,6 +331,7 @@ const Daemon = struct {
       serial.close(fd);
     }
     d.fd = null;
+    d.refresh_at = null;
     if (d.stopping) {
       d.print("stopped", .{});
       d.exit_code = 0;
@@ -286,6 +367,9 @@ const Daemon = struct {
 
       const time = d.now();
       var deadline: ?u64 = d.reopen_at;
+      if (d.refresh_at) |t| {
+        deadline = if (deadline) |other| @min(other, t) else t;
+      }
       var libskep_deadline: u64 = 0;
       if (c.skep_next_deadline(d.ctx, &libskep_deadline) != 0) {
         deadline = if (deadline) |t| @min(t, libskep_deadline) else libskep_deadline;
@@ -320,6 +404,11 @@ const Daemon = struct {
         d.lose();
       }
       d.check(c.skep_advance(d.ctx, d.now()));
+      if (d.refresh_at) |t| {
+        if (d.now() >= t and !d.stopping) {
+          d.refresh();
+        }
+      }
       if (d.reopen_at) |t| {
         if (d.now() >= t and !d.stopping) {
           d.open();
@@ -412,6 +501,14 @@ pub fn main(init: std.process.Init) !u8 {
     return 2;
   }
 
+  const state_path = options.state orelse
+    StateFile.defaultPath(init.arena.allocator(), init.environ_map) orelse {
+    try log.writeAll(
+      "skepd: no --state, and no STATE_DIRECTORY, XDG_DATA_HOME or HOME to put it in\n",
+    );
+    return 2;
+  };
+
   // Signals arrive through a file descriptor, polled with the dongle.
   var mask = posix.sigemptyset();
   posix.sigaddset(&mask, .INT);
@@ -423,11 +520,14 @@ pub fn main(init: std.process.Init) !u8 {
     .io = io,
     .log = log,
     .timestamps = !toJournald(init.environ_map),
+    .gpa = init.gpa,
     .ctx = ctx.?,
     .device = options.device,
+    .state_path = state_path,
     .baudrate = options.baudrate orelse baudrate,
     .rtscts = options.rtscts orelse (flow_control == c.SKEP_FLOW_CONTROL_HARDWARE),
     .permit_join = options.permit_join,
   };
+  if (daemon.loadState()) |code| return code;
   return daemon.run(signals);
 }
