@@ -718,6 +718,16 @@ enum skep_cluster_side {
   SKEP_CLUSTER_INPUT = 0,
   SKEP_CLUSTER_OUTPUT = 1,
 };
+/*
+ * What an endpoint of the device is: its profile, for instance 0x0104
+ * (Home Automation), and its device type within the profile, for
+ * instance 0x0302 (temperature sensor).
+ *
+ * Errors: -ENODEV, -EAGAIN (not interviewed yet), -ENOENT (no such
+ * endpoint).
+ */
+int skep_device_get_endpoint(skep_ctx *ctx, uint64_t device, uint8_t endpoint, uint16_t *profile,
+                             uint16_t *device_type);
 int skep_device_get_clusters(skep_ctx *ctx, uint64_t device, uint8_t endpoint,
                              enum skep_cluster_side side, uint16_t *clusters, size_t capacity,
                              size_t *count);

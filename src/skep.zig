@@ -305,6 +305,24 @@ export fn skep_device_get_endpoints(
   return 0;
 }
 
+export fn skep_device_get_endpoint(
+  ctx: *Context,
+  ieee: u64,
+  endpoint: u8,
+  profile: *u16,
+  device_type: *u16,
+) c_int {
+  const d = switch (deviceOf(ctx, ieee)) {
+    .device => |d| d,
+    .err => |e| return e,
+  };
+  if (!interviewed(d)) return err(.AGAIN);
+  const e = d.endpoint(endpoint) orelse return err(.NOENT);
+  profile.* = e.profile;
+  device_type.* = e.device;
+  return 0;
+}
+
 export fn skep_device_get_clusters(
   ctx: *Context,
   ieee: u64,
@@ -884,6 +902,15 @@ test "devices are described, and requests reach them" {
   try testing.expectEqual(
     err(.NOENT),
     skep_device_get_clusters(ctx, sensor_ieee, 2, 0, &clusters, 0, &count),
+  );
+  var profile: u16 = 0;
+  var device_type: u16 = 0;
+  try testing.expectEqual(0, skep_device_get_endpoint(ctx, sensor_ieee, 1, &profile, &device_type));
+  try testing.expectEqual(0x0104, profile);
+  try testing.expectEqual(0x0302, device_type);
+  try testing.expectEqual(
+    err(.NOENT),
+    skep_device_get_endpoint(ctx, sensor_ieee, 2, &profile, &device_type),
   );
   var setup_state: c_int = -1;
   try testing.expectEqual(0, skep_device_get_setup(ctx, sensor_ieee, &setup_state));
