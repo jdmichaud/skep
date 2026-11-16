@@ -584,7 +584,6 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   driver? USB ids are not reliable for this (see
   [hardware.md](hardware.md)); product strings or probing the protocol
   may be.
-- The JSON schema of skep-protocol.
 - Wall-clock time: some devices read the current time from the
   coordinator (Time cluster). libskep only knows a monotonic clock, so the
   application would have to pass the wall-clock time as well. None of the
