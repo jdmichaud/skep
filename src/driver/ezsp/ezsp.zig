@@ -5,6 +5,7 @@ const std = @import("std");
 pub const ash = @import("ash.zig");
 pub const link = @import("link.zig");
 pub const frame = @import("frame.zig");
+pub const command = @import("command.zig");
 pub const startup = @import("startup.zig");
 
 test {

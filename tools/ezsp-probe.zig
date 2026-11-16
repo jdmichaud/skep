@@ -193,7 +193,7 @@ pub fn main(init: std.process.Init) !u8 {
   }
 }
 
-fn printVersion(out: *Io.Writer, version: ezsp.frame.Version) !void {
+fn printVersion(out: *Io.Writer, version: ezsp.command.Version) !void {
   const v = version.stack_version;
   try out.print("EZSP protocol version: {d}\n", .{ version.protocol_version });
   try out.print("stack: type {d}, version {d}.{d}.{d}.{d}\n", .{

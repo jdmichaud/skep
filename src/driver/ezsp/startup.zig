@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const ash = @import("ash.zig");
+const command = @import("command.zig");
 const frame = @import("frame.zig");
 const link_layer = @import("link.zig");
 
@@ -15,17 +16,17 @@ const link_layer = @import("link.zig");
 pub const response_timeout = link_layer.max_timeouts * link_layer.ack_timeout_max;
 
 pub const Info = struct {
-  version: frame.Version,
-  firmware: frame.VersionInfo,
+  version: command.Version,
+  firmware: command.VersionInfo,
 };
 
 pub const Failure = union(enum) {
   link: link_layer.Failure,
   /// The NCP speaks an EZSP version outside `frame.min_version` to `frame.max_version`. Its
   /// answer tells which firmware it runs, to know what to flash.
-  unsupported_version: frame.Version,
+  unsupported_version: command.Version,
   /// The NCP runs another stack than EmberZNet's mesh stack.
-  unsupported_stack: frame.Version,
+  unsupported_stack: command.Version,
   /// The NCP did not answer a command within `response_timeout`.
   response_timeout,
   /// The NCP rejected a command, with this EZSP status.
@@ -48,7 +49,7 @@ pub const Startup = struct {
   sequence: u8 = 0,
   /// When the last command was sent.
   sent_at: u64 = 0,
-  version: frame.Version = undefined,
+  version: command.Version = undefined,
   result: ?Result = null,
 
   pub fn init(options: link_layer.Options) Startup {
@@ -148,9 +149,9 @@ pub const Startup = struct {
     switch (s.step) {
       .version, .version_again => {
         if (response.id != .version) return s.finish(.{ .failed = .bad_response });
-        const version = frame.Version.parse(response.parameters) catch
+        const version = command.Version.parse(response.parameters) catch
           return s.finish(.{ .failed = .bad_response });
-        if (version.stack_type != frame.stack_type_mesh) {
+        if (version.stack_type != command.stack_type_mesh) {
           return s.finish(.{ .failed = .{ .unsupported_stack = version } });
         }
         const supported = version.protocol_version >= frame.min_version and
@@ -167,15 +168,17 @@ pub const Startup = struct {
           return s.finish(.{ .failed = .bad_response });
         }
         s.step = .version_info;
-        s.sendCommand(.get_value, &.{ @backingInt(frame.ValueId.version_info) }, now);
+        s.sendCommand(.get_value, &.{ @backingInt(command.ValueId.version_info) }, now);
       },
       .version_info => {
         if (response.id != .get_value) return s.finish(.{ .failed = .bad_response });
-        const value = frame.parseGetValue(response.parameters, s.version.protocol_version) catch
+        const value = command.parseGetValue(response.parameters, s.version.protocol_version) catch
           return s.finish(.{ .failed = .bad_response });
         if (value.status != 0) return s.finish(.{ .failed = .{ .get_value = value.status } });
-        if (value.value.len != frame.VersionInfo.len) return s.finish(.{ .failed = .bad_response });
-        const firmware = frame.VersionInfo.parse(value.value) catch unreachable;
+        if (value.value.len != command.VersionInfo.len) {
+          return s.finish(.{ .failed = .bad_response });
+        }
+        const firmware = command.VersionInfo.parse(value.value) catch unreachable;
         s.finish(.{ .done = .{ .version = s.version, .firmware = firmware } });
       },
       .idle, .resetting, .finished => {},
@@ -247,8 +250,8 @@ const Ncp = struct {
   }
 
   fn expectCommand(ncp: *Ncp, expected: []const u8) !void {
-    const command = ncp.take() orelse return error.TestExpectedCommand;
-    try testing.expectEqualSlices(u8, expected, command);
+    const taken = ncp.take() orelse return error.TestExpectedCommand;
+    try testing.expectEqualSlices(u8, expected, taken);
   }
 };
 
