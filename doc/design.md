@@ -191,10 +191,11 @@ reviewed before the library is implemented.
     move between skep, Zigbee2MQTT and ZHA, which is an escape hatch and
     a way in. JSON comes with Zig's standard library.
   - IEEE addresses and extended PAN IDs are written most significant
-    byte first, as zigpy and zigbee-herdsman's Z-Stack driver write them;
-    herdsman's `ember` driver reverses the coordinator's address, so a
-    network moved to it may need it fixed. That driver also refuses
-    backups from firmware older than EZSP 12, such as our ZBDongle-E's.
+    byte first, as zigpy and zigbee-herdsman's Z-Stack driver write them.
+    herdsman's `ember` driver writes them least significant byte first,
+    as EZSP carries them, and wants `metadata.internal.ezspVersion`, of
+    12 or more, which libskep does not write: a network moved to it needs
+    its file converted.
   - Not chosen: a compact binary state of our own, with a separate export
     to this format for moving networks: smaller, but unreadable without a
     tool, and two formats to maintain.

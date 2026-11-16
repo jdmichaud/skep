@@ -395,6 +395,7 @@ test {
   _ = @import("allocator.zig");
   _ = @import("Context.zig");
   _ = @import("Event.zig");
+  _ = @import("State.zig");
   _ = @import("driver/driver.zig");
   _ = @import("driver/ezsp/ezsp.zig");
   std.testing.refAllDecls(@This());
