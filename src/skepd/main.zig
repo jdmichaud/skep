@@ -12,6 +12,7 @@ const Names = @import("Names.zig");
 const Protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 const StateFile = @import("StateFile.zig");
+const Notifier = @import("notify.zig").Notifier;
 
 const linux = std.os.linux;
 const posix = std.posix;
@@ -116,6 +117,8 @@ const Daemon = struct {
   /// A signal asked to stop: exit once libskep has.
   stopping: bool = false,
   exit_code: ?u8 = null,
+  /// systemd, when it runs skepd as a Type=notify service.
+  notifier: Notifier,
 
   fn now(d: *const Daemon) u64 {
     const timestamp = Io.Clock.awake.now(d.io);
@@ -192,11 +195,18 @@ const Daemon = struct {
     }
   }
 
+  /// Tells systemd how skepd is doing, in a line `systemctl status` shows.
+  fn status(d: *Daemon, comptime format: []const u8, args: anytype) void {
+    var buffer: [256]u8 = undefined;
+    d.notifier.send(std.fmt.bufPrint(&buffer, "STATUS=" ++ format, args) catch return);
+  }
+
   /// Opens the dongle and starts libskep, or tries again later.
   fn open(d: *Daemon) void {
     d.reopen_at = null;
     const fd = serial.open(d.device, d.baudrate, d.rtscts) catch |e| {
       d.print("{s}: {t}, trying again in {d} s", .{ d.device, e, reopen_delay / 1000 });
+      d.status("{s}: {t}, trying again", .{ d.device, e });
       d.reopen_at = d.now() + reopen_delay;
       return;
     };
@@ -290,6 +300,7 @@ const Daemon = struct {
             pan_id,
             extended_pan_id,
           });
+          d.status("network up: channel {d}, PAN ID 0x{x:0>4}", .{ channel, pan_id });
           d.refresh_at = d.now() + refresh_interval;
         },
         c.SKEP_EVENT_STOPPED => d.stopped(c.skep_event_get_error(event)),
@@ -387,6 +398,7 @@ const Daemon = struct {
       d.exit_code = 0;
     } else if (error_code == -@as(c_int, @backingInt(posix.E.NOTCONN))) {
       d.print("{s}: lost, opening it again in {d} s", .{ d.device, reopen_delay / 1000 });
+      d.status("{s}: lost, opening it again", .{ d.device });
       d.reopen_at = d.now() + reopen_delay;
     } else {
       d.print("stopped: {t}", .{ errnoName(error_code) });
@@ -399,6 +411,7 @@ const Daemon = struct {
     if (d.stopping) return;
     d.stopping = true;
     d.print("stopping", .{});
+    d.notifier.send("STOPPING=1");
     const r = c.skep_stop(d.ctx);
     // Not started: nothing to stop.
     if (r == -@as(c_int, @backingInt(posix.E.NETDOWN))) {
@@ -673,10 +686,15 @@ pub fn main(init: std.process.Init) !u8 {
     },
     .baudrate = options.baudrate orelse baudrate,
     .rtscts = options.rtscts orelse (flow_control == c.SKEP_FLOW_CONTROL_HARDWARE),
+    .notifier = .init(init.environ_map),
   };
   defer daemon.protocol.deinit();
+  defer daemon.notifier.deinit();
   daemon.print("listening on {s}", .{ socket_path });
   if (daemon.loadState()) |code| return code;
+  // Ready once clients can connect: the network comes up when the dongle answers, which may
+  // take a while, or wait for it to be plugged in.
+  daemon.notifier.send("READY=1\nSTATUS=opening the dongle");
   return daemon.run(signals);
 }
 
@@ -701,4 +719,5 @@ test {
   _ = @import("StateFile.zig");
   _ = @import("values.zig");
   _ = @import("protocol.zig");
+  _ = @import("notify.zig");
 }
