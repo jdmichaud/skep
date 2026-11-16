@@ -48,7 +48,8 @@ publishes the section of each released version as its release notes.
   `skep_event_get_reading()` gives an attribute's, and
   `skep_device_get_readings()` lists what a device can be read for.
   skep-protocol(7) carries them, and skepd remembers the last ones, which
-  the devices' descriptions give.
+  the devices' descriptions give. It reads devices for those it has none
+  of, once the network is up and when a device is set up.
 - skep shows readings: `skep devices` sums up what each device last
   reported, `skep get` gives a device's last readings at once, even for a
   sleepy one, `skep read <device> <reading>...` asks the device, as in

@@ -48,8 +48,8 @@ temperature in °C rather than the hundredths of a degree the device sends.
 *get* _device_ [_reading_...]
 	The readings of the device, or those named: the last value it reported
 	or was read for, and how long ago. It answers at once, even for a device
-	that sleeps; skepd forgets the values when it restarts, until the
-	devices report again.
+	that sleeps. After skepd starts, a device that sleeps has no values until
+	it wakes up, which can take minutes.
 
 *rename* _device_ [_name_]
 	Give the device a name, or forget its name without one.

@@ -21,6 +21,10 @@ skepd comes back to the same network after a restart, and puts it back onto
 a new dongle when the old one dies. It refreshes the frame counters from the
 dongle every hour, and when it stops.
 
+It remembers the last readings of the devices, such as a temperature, which
+it gives clients. Once the network is up, and when a device is set up, it
+reads the devices for those it has none of.
+
 When the dongle goes away, skepd opens it again every 5 seconds until it is
 back. It runs in the foreground, and logs to standard error.
 

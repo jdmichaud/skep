@@ -330,7 +330,9 @@ read for, if any:
 ```
 
 "time" is when skepd received it, as for events. skepd keeps the last values
-in memory: after it restarts, they come back as the devices report.
+in memory. Once the network is up, and when a device is set up, it reads
+devices for the values it has none of: at once for those that do not sleep,
+when they wake up for those that do.
 
 # EVENT TYPES
 

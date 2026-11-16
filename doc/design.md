@@ -475,6 +475,16 @@ The API is in [include/skep.h](../include/skep.h).
   be read on the spot, and the last report is often what a client wants.
   In memory only: saving them would write a file on every report, for
   values the devices send again within the hour.
+  - So that there are values from the start, skepd reads devices for
+    the readings it has none of: all of them once the network is up,
+    those that do not sleep first, and a device once it is set up. At
+    most 4 reads at once, one per device, so that clients' requests find
+    room among libskep's 32 and a sleepy device does not hold up the
+    others; a read waits an hour at most for a device to wake up.
+  - In skepd, not libskep: whether to spend traffic, and a sleepy
+    device's battery, on values is the application's choice. libskep
+    gives the means: which readings a device has, and reads that wait
+    for a sleepy device.
 - A state file it cannot read stops it before it opens the dongle, and
   is left as it is: replacing it would lose the network it holds.
 - Runs in the foreground and never daemonizes itself. Under systemd it

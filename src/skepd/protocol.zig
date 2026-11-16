@@ -814,14 +814,23 @@ fn describe(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u64) Erro
 
 // libskep's events.
 
-/// Takes an event of libskep: the end of a client's request, or news for the clients that watch.
-/// Returns whether it was the end of a client's request.
+/// Takes an event of libskep: the end of a client's request or of skepd's own read, or news for
+/// the clients that watch. Returns whether it was the end of a request.
 pub fn event(p: *Protocol, e: *const c.skep_event) bool {
+  const handled = p.handleEvent(e);
+  // What the event may have made possible: a read, once the network is up, a device set up, or
+  // another read done.
+  p.readings.advance(p.ctx, p.now);
+  return handled;
+}
+
+fn handleEvent(p: *Protocol, e: *const c.skep_event) bool {
   const t = c.skep_event_get_type(e);
-  if (t == c.SKEP_EVENT_REQUEST_DONE) return p.requestDone(e);
+  if (t == c.SKEP_EVENT_REQUEST_DONE) return p.readings.done(e, p.wallTime()) or p.requestDone(e);
   switch (t) {
     c.SKEP_EVENT_STARTED => {
       p.down_error = null;
+      p.readings.readAll(p.ctx);
       var m: Message = undefined;
       m.init(p.gpa);
       defer m.deinit();
@@ -833,6 +842,7 @@ pub fn event(p: *Protocol, e: *const c.skep_event) bool {
       const error_code = c.skep_event_get_error(e);
       p.down_error = if (error_code != 0) error_code else null;
       p.window_until = null;
+      p.readings.stopped();
       var m: Message = undefined;
       m.init(p.gpa);
       defer m.deinit();
@@ -866,6 +876,9 @@ pub fn event(p: *Protocol, e: *const c.skep_event) bool {
         device,
       ) catch return false;
       p.broadcast(&m);
+      if (t == c.SKEP_EVENT_DEVICE_READY) {
+        p.readings.readDevice(p.ctx, device);
+      }
     },
     c.SKEP_EVENT_DEVICE_LEFT => {
       const device = c.skep_event_get_device(e);
@@ -1010,8 +1023,12 @@ fn readingMembers(
 
 /// Remembers the readings of an event's attributes, from a device's endpoint and cluster.
 fn remember(p: *Protocol, device: u64, endpoint: u8, cluster: u16, e: *const c.skep_event) void {
-  const time: i64 = @intCast(@divTrunc(Io.Clock.real.now(p.io).nanoseconds, std.time.ns_per_ms));
-  p.readings.remember(device, endpoint, cluster, e, time);
+  p.readings.remember(device, endpoint, cluster, e, p.wallTime());
+}
+
+/// The time in milliseconds since the epoch.
+fn wallTime(p: *Protocol) i64 {
+  return @intCast(@divTrunc(Io.Clock.real.now(p.io).nanoseconds, std.time.ns_per_ms));
 }
 
 /// "readings": what the device can be read for, with what it last reported or was read, and
