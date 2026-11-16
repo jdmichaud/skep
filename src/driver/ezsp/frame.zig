@@ -17,8 +17,17 @@ pub const max_version: u8 = 19;
 
 pub const FrameId = enum(u16) {
   version = 0x0000,
+  add_endpoint = 0x0002,
+  network_init = 0x0017,
+  network_state = 0x0018,
+  stack_status_handler = 0x0019,
+  get_eui64 = 0x0026,
+  get_network_parameters = 0x0028,
+  set_configuration_value = 0x0053,
+  set_policy = 0x0055,
   invalid_command = 0x0058,
   get_value = 0x00aa,
+  set_value = 0x00ab,
   _,
 };
 
