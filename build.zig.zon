@@ -13,6 +13,13 @@
       .hash = "zigfmt-0.2.0-pUVlTQuQBACvCtszc0bxOlQ8H5bB6tneSPWn-MUgRUMk",
       .lazy = true,
     },
+    // Renders the man pages, written in scdoc, for `zig build`. A build tool too: lazy, and
+    // only asked for when skep is the project being built.
+    .zzdoc = .{
+      .url = "git+https://github.com/rockorager/zzdoc#7bf0486bfaace525d440dccf9c91783c9af056cd",
+      .hash = "zzdoc-0.0.0-tzT1PlndAAAA7s6KI85egOQGX5c_AtCkzDluXId2vScV",
+      .lazy = true,
+    },
   },
   .paths = .{
     "build.zig",

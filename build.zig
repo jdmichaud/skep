@@ -52,6 +52,7 @@ pub fn build(b: *std.Build) !void {
   addSkepd(b, test_step, target, optimize, skep_h, serial, library);
   if (b.isRoot()) {
     try addFormatSteps(b);
+    try addManpages(b);
   }
 }
 
@@ -246,4 +247,29 @@ fn addHeaderChecks(
     }),
   });
   test_step.dependOn(&b.addRunArtifact(translated).step);
+}
+
+/// The man pages, written in scdoc in man/: `zig build` renders them with the zzdoc pinned in
+/// build.zig.zon and installs them. Only when skep is the project being built.
+fn addManpages(b: *std.Build) !void {
+  const zzdoc = try b.dependencyLazy("zzdoc", .{
+    .target = b.graph.host,
+    .optimize = .ReleaseSafe,
+  });
+  const run = b.addRunArtifact(zzdoc.artifact("zzdoc"));
+  // The build system caches directory arguments by path, not contents: render every time, which
+  // takes milliseconds.
+  run.has_side_effects = true;
+  run.addDirectoryArg2(b.path("man"), .{});
+  const rendered = run.addOutputDirectoryArg2("man", .{});
+  // One at a time: with Zig 0.17, installing a directory into a prefix that does not exist yet
+  // installs nothing.
+  for ([_][]const u8{ "man7/skep-protocol.7" }) |page| {
+    const install = b.addInstallFileWithDir(
+      rendered.path(b, page),
+      .{ .custom = b.fmt("share/man/{s}", .{ std.fs.path.dirname(page).? }) },
+      std.fs.path.basename(page),
+    );
+    b.getInstallStep().dependOn(&install.step);
+  }
 }
