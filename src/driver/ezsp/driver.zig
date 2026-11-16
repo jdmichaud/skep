@@ -179,7 +179,8 @@ pub const Driver = struct {
   sequence: u8 = 0,
   sent_at: u64 = 0,
   /// The last command is not written yet: `sent_at` is the time it was queued, which can be old
-  /// when the caller asked for it after a quiet spell, and is replaced by the time it is written.
+  /// when the caller asked for it after a quiet spell, and is replaced by the time it is written;
+  /// until then, no answer is late.
   sent_unwritten: bool = false,
   /// The network is up, as `stack_status_handler` last reported.
   network_up: bool = false,
@@ -280,7 +281,7 @@ pub const Driver = struct {
   pub fn nextDeadline(d: *const Driver) ?u64 {
     if (d.step == .starting) return d.startup.nextDeadline();
     const link_deadline = d.startup.link.nextDeadline();
-    const response_deadline: ?u64 = if (d.waiting()) d.sent_at + response_timeout else null;
+    const response_deadline: ?u64 = if (d.answerDue()) d.sent_at + response_timeout else null;
     if (link_deadline == null) return response_deadline;
     if (response_deadline == null) return link_deadline;
     return @min(link_deadline.?, response_deadline.?);
@@ -294,7 +295,7 @@ pub const Driver = struct {
     }
     d.startup.link.advance(now);
     d.process(now);
-    if (d.waiting() and now >= d.sent_at + response_timeout) {
+    if (d.answerDue() and now >= d.sent_at + response_timeout) {
       d.fail(.response_timeout);
     }
   }
@@ -364,6 +365,12 @@ pub const Driver = struct {
         d.now,
       );
     }
+  }
+
+  /// Whether the NCP owes an answer, by `sent_at` plus the response timeout: not before the
+  /// command is written, which the application may do after calling `advance`.
+  fn answerDue(d: *const Driver) bool {
+    return d.waiting() and !d.sent_unwritten;
   }
 
   fn waiting(d: *const Driver) bool {
@@ -1381,6 +1388,9 @@ test "a command asked for after a quiet spell gets its full time" {
   // An hour without a call: the driver's last time is an hour old.
   ncp.now = 3600 * 1000;
   driver.refresh();
+  // As skepd does: the loop runs once before the command is written.
+  driver.advance(ncp.now);
+  try testing.expectEqual(null, skipCallbacks(&driver));
   _ = ncp.take() orelse return error.TestExpectedCommand;
   driver.advance(ncp.now + 1);
   try testing.expectEqual(null, skipCallbacks(&driver));
