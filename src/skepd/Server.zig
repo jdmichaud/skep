@@ -28,8 +28,16 @@ pub const Client = struct {
   output: std.ArrayList(u8) = .empty,
   /// Events go to it.
   watching: bool = false,
-  /// It closed its side, sent a line too long, or did not read: dropped once its output is
-  /// written, or at once.
+  /// Requests of it still pending, which the protocol counts.
+  pending: u32 = 0,
+  /// It shut down its sending side: it makes no more requests, but still gets its answers, and
+  /// events if it watches.
+  input_closed: bool = false,
+  /// It sent a line longer than `max_line`, which the protocol answers before it closes.
+  overflowed: bool = false,
+  /// To be closed once its output is written: after it sent a line too long, for one.
+  close_when_written: bool = false,
+  /// It went away, or cannot take its output: dropped at once.
   closing: bool = false,
 
   /// The next whole line it sent, without its newline, if there is one; `consumeLine` removes
@@ -86,8 +94,8 @@ pub fn open(gpa: std.mem.Allocator, path: []const u8, errno: *linux.E) OpenError
   errdefer _ = linux.close(fd);
   const bound = linux.errno(linux.bind(fd, @ptrCast(&address), @sizeOf(linux.sockaddr.un)));
   if (bound != .SUCCESS) return fail(errno, bound);
-  // Only its owner may connect, whatever the directory's mode.
-  _ = linux.chmod(owned, 0o600);
+  // Who may connect is the directory's business: its owner, and its group for a system service.
+  _ = linux.chmod(owned, 0o660);
   const listening = linux.errno(linux.listen(fd, 16));
   if (listening != .SUCCESS) return fail(errno, listening);
   return .{ .gpa = gpa, .fd = fd, .path = owned };
@@ -137,11 +145,11 @@ pub fn accept(s: *Server) error{ OutOfMemory }!void {
   }
 }
 
-/// Reads what a client sent. A client that closed its side, or sends a line too long, is set to
-/// close.
+/// Reads what a client sent. A client that shut down its sending side has `input_closed` set; one
+/// that sends a line too long, `overflowed`.
 pub fn read(s: *Server, c: *Client) void {
   var buffer: [4096]u8 = undefined;
-  while (!c.closing) {
+  while (!c.closing and !c.input_closed and !c.overflowed) {
     const n = linux.read(c.fd, &buffer, buffer.len);
     switch (linux.errno(n)) {
       .SUCCESS => {},
@@ -153,7 +161,7 @@ pub fn read(s: *Server, c: *Client) void {
       },
     }
     if (n == 0) {
-      c.closing = true;
+      c.input_closed = true;
       return;
     }
     c.input.appendSlice(s.gpa, buffer[0..n]) catch {
@@ -162,7 +170,7 @@ pub fn read(s: *Server, c: *Client) void {
     };
     // A line too long: there is no telling where the next one starts.
     if (c.nextLine() == null and c.input.items.len >= max_line) {
-      c.closing = true;
+      c.overflowed = true;
     }
   }
 }
@@ -218,17 +226,13 @@ pub fn drop(s: *Server, c: *Client) void {
   s.gpa.destroy(c);
 }
 
-/// Disconnects the clients set to close whose output is written.
-pub fn dropClosed(s: *Server) void {
-  var i: usize = 0;
-  while (i < s.clients.items.len) {
-    const c = s.clients.items[i];
-    if (c.closing and c.output.items.len == 0) {
-      s.drop(c);
-    } else {
-      i += 1;
-    }
-  }
+/// Whether a client is done with: it must go, or it made its last request, has its answers and
+/// does not watch; and its output is written.
+pub fn finished(c: *const Client) bool {
+  if (c.closing) return true;
+  if (c.output.items.len > 0) return false;
+  return c.close_when_written or
+    (c.input_closed and c.pending == 0 and !c.watching and c.nextLine() == null);
 }
 
 const testing = std.testing;
@@ -289,11 +293,16 @@ test "clients connect, send lines and get answers" {
   const n = linux.read(fd, &answer, answer.len);
   try testing.expectEqualStrings("{\"id\": 1, \"result\": {}}\n", answer[0..n]);
 
-  // The client goes away.
-  _ = linux.close(fd);
+  // The client shuts down its sending side: no more requests, but it gets its answers.
+  _ = linux.shutdown(fd, linux.SHUT.WR);
   server.read(client);
-  try testing.expect(client.closing);
-  server.dropClosed();
+  try testing.expect(client.input_closed);
+  try testing.expect(!client.closing);
+  client.pending = 1;
+  try testing.expect(!finished(client));
+  client.pending = 0;
+  try testing.expect(finished(client));
+  server.drop(client);
   try testing.expectEqual(0, server.clients.items.len);
 
   // Another skepd on the same socket is refused.
@@ -324,5 +333,5 @@ test "a line too long closes the client" {
     written += linux.write(fd, &long, long.len);
   }
   server.read(server.clients.items[0]);
-  try testing.expect(server.clients.items[0].closing);
+  try testing.expect(server.clients.items[0].overflowed);
 }
