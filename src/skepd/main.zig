@@ -8,6 +8,9 @@
 const std = @import("std");
 const c = @import("skep_h");
 const serial = @import("serial");
+const Names = @import("Names.zig");
+const Protocol = @import("protocol.zig");
+const Server = @import("Server.zig");
 const StateFile = @import("StateFile.zig");
 
 const linux = std.os.linux;
@@ -15,7 +18,8 @@ const posix = std.posix;
 const Io = std.Io;
 
 const usage =
-  \\usage: skepd --device <path> [--state <path>] [--driver <name>] [--log-level <level>]
+  \\usage: skepd --device <path> [--state <path>] [--socket <path>] [--driver <name>]
+  \\             [--log-level <level>]
   \\             [--replace-network] [--permit-join <seconds>] [--baud <rate>] [--rtscts]
   \\
   \\Runs the Zigbee network of the dongle on <path>. Stops cleanly on SIGTERM or SIGINT.
@@ -24,6 +28,9 @@ const usage =
   \\  --state <path>      the file keeping the network, its keys and its devices, which skepd
   \\                      reads at start and replaces on each change; by default state.json in
   \\                      $STATE_DIRECTORY under systemd, in $XDG_DATA_HOME/skep otherwise
+  \\  --socket <path>     the socket clients connect to, as skep-protocol(7) says; by default
+  \\                      skepd.sock in $RUNTIME_DIRECTORY under systemd, in
+  \\                      $XDG_RUNTIME_DIR/skep otherwise
   \\  --driver <name>     ezsp (default) for Silicon Labs EmberZNet dongles
   \\  --log-level <level> error, warning, info (default) or debug
   \\  --replace-network   replace the network the dongle holds with the saved one, or with a
@@ -46,6 +53,7 @@ const refresh_interval = 3600 * 1000;
 const Options = struct {
   device: [:0]const u8,
   state: ?[:0]const u8 = null,
+  socket: ?[:0]const u8 = null,
   driver: [:0]const u8 = "ezsp",
   log_level: [:0]const u8 = "info",
   replace_network: bool = false,
@@ -73,6 +81,8 @@ fn parseOptions(args: []const [:0]const u8) ?Options {
     const value = args[i];
     if (std.mem.eql(u8, arg, "--device")) {
       device = value;
+    } else if (std.mem.eql(u8, arg, "--socket")) {
+      options.socket = value;
     } else if (std.mem.eql(u8, arg, "--state")) {
       options.state = value;
     } else if (std.mem.eql(u8, arg, "--driver")) {
@@ -100,6 +110,8 @@ const Daemon = struct {
   ctx: *c.skep_ctx,
   device: [:0]const u8,
   state_path: [:0]const u8,
+  /// Clients, and what they asked.
+  protocol: Protocol,
   /// When to refresh the state from the dongle next, while the network is up.
   refresh_at: ?u64 = null,
   baudrate: u32,
@@ -261,8 +273,11 @@ const Daemon = struct {
   }
 
   fn handleEvents(d: *Daemon) void {
+    d.protocol.now = d.now();
     while (c.skep_next_event(d.ctx)) |event| {
       defer c.skep_event_free(event);
+      // A client's request ended: its response says how.
+      if (d.protocol.event(event)) continue;
       switch (c.skep_event_get_type(event)) {
         c.SKEP_EVENT_LOG => {
           var message: [*c]const u8 = undefined;
@@ -412,11 +427,18 @@ const Daemon = struct {
   }
 
   fn run(d: *Daemon, signals: posix.fd_t) !u8 {
+    var fds: std.ArrayList(posix.pollfd) = .empty;
+    defer fds.deinit(d.gpa);
     d.open();
     while (true) {
       d.handleEvents();
       if (d.exit_code) |code| return code;
       d.writeOutput();
+      const server = &d.protocol.server;
+      for (server.clients.items) |client| {
+        Server.flush(client);
+      }
+      d.protocol.dropFinished();
 
       const time = d.now();
       var deadline: ?u64 = d.reopen_at;
@@ -433,29 +455,60 @@ const Daemon = struct {
         -1;
       var output: [*c]const u8 = undefined;
       const writing = c.skep_output(d.ctx, &output) > 0;
-      var fds = [_]posix.pollfd{
-        .{ .fd = signals, .events = posix.POLL.IN, .revents = 0 },
-        .{
-          .fd = d.fd orelse -1,
-          .events = if (writing) posix.POLL.IN | posix.POLL.OUT else posix.POLL.IN,
-          .revents = 0,
+      // Signals, the dongle, the listening socket, then the clients.
+      fds.clearRetainingCapacity();
+      try fds.appendSlice(
+        d.gpa,
+        &.{
+          .{ .fd = signals, .events = posix.POLL.IN, .revents = 0 },
+          .{
+            .fd = d.fd orelse -1,
+            .events = if (writing) posix.POLL.IN | posix.POLL.OUT else posix.POLL.IN,
+            .revents = 0,
+          },
+          .{ .fd = server.fd, .events = posix.POLL.IN, .revents = 0 },
         },
-      };
-      _ = try posix.poll(&fds, timeout);
+      );
+      for (server.clients.items) |client| {
+        var events: i16 = 0;
+        if (!client.input_closed and !client.overflowed) {
+          events |= posix.POLL.IN;
+        }
+        if (client.output.items.len > 0) {
+          events |= posix.POLL.OUT;
+        }
+        try fds.append(d.gpa, .{ .fd = client.fd, .events = events, .revents = 0 });
+      }
+      _ = try posix.poll(fds.items, timeout);
 
-      if (fds[0].revents & posix.POLL.IN != 0) {
+      if (fds.items[0].revents & posix.POLL.IN != 0) {
         var info: linux.signalfd_siginfo = undefined;
         _ = linux.read(signals, @ptrCast(&info), @sizeOf(linux.signalfd_siginfo));
         d.stop();
       }
-      if (fds[1].revents & posix.POLL.IN != 0) {
+      if (fds.items[1].revents & posix.POLL.IN != 0) {
         d.readInput();
       }
-      if (fds[1].revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0 and
+      if (fds.items[1].revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0 and
         d.fd != null) {
         d.print("{s}: went away", .{ d.device });
         d.lose();
       }
+      // The clients polled are the first ones of the list, which accepting only adds to.
+      for (fds.items[3..], 0..) |fd, i| {
+        const client = server.clients.items[i];
+        // Gone altogether, not only done sending: what it asked is canceled.
+        if (fd.revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0) {
+          client.closing = true;
+        } else if (fd.revents & posix.POLL.IN != 0) {
+          server.read(client);
+        }
+      }
+      if (fds.items[2].revents & posix.POLL.IN != 0) {
+        server.accept() catch d.print("error: accepting a client: out of memory", .{});
+      }
+      d.protocol.now = d.now();
+      d.protocol.serve();
       d.check(c.skep_advance(d.ctx, d.now()));
       if (d.refresh_at) |t| {
         if (d.now() >= t and !d.stopping) {
@@ -585,6 +638,34 @@ pub fn main(init: std.process.Init) !u8 {
     return 2;
   };
 
+  const socket_path = options.socket orelse
+    defaultSocket(init.arena.allocator(), init.environ_map) orelse {
+    try log.writeAll(
+      "skepd: no --socket, and no RUNTIME_DIRECTORY or XDG_RUNTIME_DIR to put it in\n",
+    );
+    return 2;
+  };
+  var errno: linux.E = .SUCCESS;
+  var server = Server.open(init.gpa, socket_path, &errno) catch |e| {
+    switch (e) {
+      error.InUse => try log.print("skepd: {s}: another skepd answers on it\n", .{ socket_path }),
+      error.System => try log.print("skepd: {s}: {t}\n", .{ socket_path, errno }),
+      else => try log.print("skepd: {s}: {t}\n", .{ socket_path, e }),
+    }
+    return 1;
+  };
+  errdefer server.deinit();
+  const names_path = try std.fmt.allocPrintSentinel(
+    init.arena.allocator(),
+    "{s}/names.json",
+    .{ std.fs.path.dirname(state_path) orelse "." },
+    0,
+  );
+  const names = Names.load(init.gpa, names_path) catch |e| {
+    try log.print("skepd: {s}: {t}\n", .{ names_path, e });
+    return 1;
+  };
+
   // Signals arrive through a file descriptor, polled with the dongle.
   var mask = posix.sigemptyset();
   posix.sigaddset(&mask, .INT);
@@ -600,12 +681,36 @@ pub fn main(init: std.process.Init) !u8 {
     .ctx = ctx.?,
     .device = options.device,
     .state_path = state_path,
+    .protocol = .{
+      .gpa = init.gpa,
+      .io = io,
+      .ctx = ctx.?,
+      .server = server,
+      .names = names,
+      .names_path = names_path,
+    },
     .baudrate = options.baudrate orelse baudrate,
     .rtscts = options.rtscts orelse (flow_control == c.SKEP_FLOW_CONTROL_HARDWARE),
     .permit_join = options.permit_join,
   };
+  defer daemon.protocol.deinit();
   if (daemon.loadState()) |code| return code;
   return daemon.run(signals);
+}
+
+/// Where the socket goes by default: the runtime directory systemd gives the service, or the
+/// XDG runtime directory. Null if neither is set.
+fn defaultSocket(arena: std.mem.Allocator, environ: *const std.process.Environ.Map) ?[:0]const u8 {
+  if (environ.get("RUNTIME_DIRECTORY")) |directories| {
+    var it = std.mem.splitScalar(u8, directories, ':');
+    const first = it.first();
+    if (first.len > 0) {
+      return std.fmt.allocPrintSentinel(arena, "{s}/skepd.sock", .{ first }, 0) catch null;
+    }
+  }
+  const runtime = environ.get("XDG_RUNTIME_DIR") orelse return null;
+  if (!std.fs.path.isAbsolute(runtime)) return null;
+  return std.fmt.allocPrintSentinel(arena, "{s}/skep/skepd.sock", .{ runtime }, 0) catch null;
 }
 
 test {

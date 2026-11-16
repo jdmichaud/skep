@@ -450,10 +450,14 @@ The API is in [include/skep.h](../include/skep.h).
   (`skep_refresh_state()`), which is cheap, so that a dongle that dies
   takes at most an hour of frame counters with it.
 - Until the configuration file format is settled, its options come from
-  the command line: `--device`, `--state` for the state file (see
-  Files), `--driver`, `--log-level`, `--replace-network`, `--permit-join`
-  to open the join window once the network is up, and `--baud` and
-  `--rtscts` to override the driver's serial settings.
+  the command line: `--device`, `--state` for the state file and
+  `--socket` for the socket (see Files), `--driver`, `--log-level`,
+  `--replace-network`, `--permit-join` to open the join window once the
+  network is up, and `--baud` and `--rtscts` to override the driver's
+  serial settings.
+- Device names, which clients give with skep-protocol's rename, are
+  skepd's, not libskep's: they are kept in `names.json` next to the
+  state.
 - A state file it cannot read stops it before it opens the dongle, and
   is left as it is: replacing it would lose the network it holds.
 - Runs in the foreground and never daemonizes itself. Under systemd it

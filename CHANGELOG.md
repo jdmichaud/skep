@@ -61,6 +61,12 @@ publishes the section of each released version as its release notes.
   `state.json` in the XDG data directory or systemd's state directory),
   replaced atomically on each change with mode 0600, and refreshes it
   from the dongle every hour.
+- skep-protocol(7): skepd serves clients on a Unix socket, with
+  line-delimited JSON requests, responses and events, to list, name,
+  set up and remove devices, read and write their attributes, configure
+  their reporting, bind them, send them commands, open the join window
+  and watch what happens.
+- Man pages, written in scdoc and rendered at build time by zzdoc.
 - `zig build probe -- <device>`, a development tool that resets an
   EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to
