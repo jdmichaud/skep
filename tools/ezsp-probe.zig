@@ -166,23 +166,16 @@ pub fn main(init: std.process.Init) !u8 {
           "failed: the NCP rejected a command, status {d}\n",
           .{ status },
         ),
-        .add_endpoint => |status| try out.print(
-          "failed: registering the endpoint, status 0x{x}\n",
-          .{ status.value },
-        ),
-        .network_init => |status| try out.print(
-          "failed: bringing the network up, status 0x{x}\n",
-          .{ status.value },
-        ),
-        .network_parameters => |status| try out.print(
-          "failed: reading the network, status 0x{x}\n",
-          .{ status.value },
-        ),
+        .refused => |refused| try out.print("failed: the NCP refused {t}, status 0x{x}\n", .{
+          refused.command,
+          refused.status.value,
+        }),
         .bad_response => try out.writeAll("failed: an answer that cannot be decoded\n"),
       }
       return 1;
     },
-    .configuration_refused => unreachable,
+    // The probe neither forms networks nor sends commands it can do without.
+    .configuration_refused, .formed, .command_refused => unreachable,
   }
 }
 
@@ -194,7 +187,11 @@ fn nextResult(driver: *Driver, out: *Io.Writer) !?ezsp.driver.Event {
         "warning: the firmware refused configuration value {t}, status 0x{x}\n",
         .{ refused.id, refused.status.value },
       ),
-      .ready, .failed => return event,
+      .command_refused => |refused| try out.print("warning: the NCP refused {t}, status 0x{x}\n", .{
+        refused.command,
+        refused.status.value,
+      }),
+      .ready, .failed, .formed => return event,
     }
   }
   return null;

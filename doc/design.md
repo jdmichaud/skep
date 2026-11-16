@@ -210,6 +210,14 @@ reviewed before the library is implemented.
     `-EEXIST` unless `replace-network` allows overwriting the dongle's.
     Resuming the dongle's network instead would leave every known device
     behind, and a dongle used elsewhere before is the usual cause.
+    Without an imported state, `replace-network` replaces the dongle's
+    network with a new one, which is how a dongle used elsewhere is taken
+    over.
+  - A new network gets the channel, PAN ID, extended PAN ID and network
+    key of the options, or random ones from the seed (channel 15 by
+    default). Its security follows zigbee-herdsman's: devices join with
+    the global link key, and the keys the trust center then gives them
+    are derived from a random link key of its own.
 - No threads inside libskep and no callbacks into caller code. Results
   are events, drained with `skep_next_event()`. Diagnostics are events
   too (`SKEP_EVENT_LOG`); libskep never writes to stdout or stderr, with
@@ -394,8 +402,9 @@ reviewed before the library is implemented.
   (`skep_refresh_state()`), which is cheap, so that a dongle that dies
   takes at most an hour of frame counters with it.
 - Until the configuration file format is settled, its options come from
-  the command line: `--device`, `--driver`, `--log-level`, and `--baud`
-  and `--rtscts` to override the driver's serial settings.
+  the command line: `--device`, `--driver`, `--log-level`,
+  `--replace-network`, and `--baud` and `--rtscts` to override the
+  driver's serial settings.
 - Runs in the foreground and never daemonizes itself. Under systemd it
   uses `Type=notify` and reports readiness with sd_notify.
 - Logs to stderr; journald adds timestamps. The log level is configurable.

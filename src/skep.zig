@@ -190,7 +190,7 @@ test "the sim driver resumes the network of the simulated dongle" {
   try testing.expectEqual(@backingInt(Event.Type.log), skep_event_get_type(log));
   try testing.expectEqual(2, skep_event_get_log(log, &message));
   try testing.expectEqualStrings(
-    "started: simulated dongle, network on channel 20, PAN ID 0x1a62",
+    "resumed the dongle's network: channel 20, PAN ID 0x1a62 (simulated dongle)",
     std.mem.span(message),
   );
   skep_event_free(log);
@@ -217,15 +217,52 @@ test "the sim driver resumes the network of the simulated dongle" {
   try testing.expectEqual(err(.NETDOWN), skep_stop(ctx));
 }
 
-test "a dongle without a network cannot start yet" {
+/// Starts the context and returns how the network came up.
+fn startedOrigin(ctx: *Context) !c_int {
+  try testing.expectEqual(0, skep_start(ctx));
+  for (0..10) |_| {
+    if (skep_advance(ctx, 0) != 0) return error.OutOfMemory;
+    const event = skep_next_event(ctx) orelse continue;
+    defer skep_event_free(event);
+    if (skep_event_get_type(event) == @backingInt(Event.Type.started)) {
+      return skep_event_get_network_origin(event);
+    }
+  }
+  return error.TestExpectedStarted;
+}
+
+test "a dongle without a network forms one, as the options say" {
   const ctx = try testContext(&testing.allocator);
   defer skep_free(ctx);
   try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
-  try testing.expectEqual(0, skep_start(ctx));
-  try testing.expectEqual(@backingInt(Event.Type.log), try nextEventType(ctx));
-  const stopped = skep_next_event(ctx).?;
-  defer skep_event_free(stopped);
-  try testing.expectEqual(err(.NOSYS), skep_event_get_error(stopped));
+  try testing.expectEqual(0, skep_set_option(ctx, "channel", "25"));
+  try testing.expectEqual(0, skep_set_option(ctx, "pan-id", "1a62"));
+  try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
+  var channel: u8 = 0;
+  var pan_id: u16 = 0;
+  var extended_pan_id: u64 = 0;
+  try testing.expectEqual(0, skep_get_network(ctx, &channel, &pan_id, &extended_pan_id));
+  try testing.expectEqual(25, channel);
+  try testing.expectEqual(0x1a62, pan_id);
+  try testing.expect(extended_pan_id != 0);
+  // The seed chose the extended PAN ID: the same seed chooses it again.
+  const again = try testContext(&testing.allocator);
+  defer skep_free(again);
+  try testing.expectEqual(0, skep_set_option(again, "driver", "sim"));
+  try testing.expectEqual(0, skep_set_option(again, "pan-id", "1a62"));
+  try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(again));
+  try testing.expectEqual(extended_pan_id, again.network.?.extended_pan_id);
+}
+
+test "replace-network replaces the dongle's network with a new one" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  try testing.expectEqual(0, skep_set_option(ctx, "replace-network", "yes"));
+  ctx.sim_dongle.network = .{ .channel = 20, .pan_id = 0x1a62, .extended_pan_id = 1 };
+  try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
+  try testing.expectEqual(15, ctx.network.?.channel);
+  try testing.expect(ctx.network.?.extended_pan_id != 1);
 }
 
 test "a lost link stops at once, and events outlive their context" {

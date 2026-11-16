@@ -144,11 +144,13 @@ void skep_free(skep_ctx *ctx);
  *                    Added to the saved frame counters when the network is
  *                    restored onto a dongle, to stay ahead of frames sent
  *                    after the last refresh. Default: 100000.
- *   replace-network  "yes" lets skep_start() overwrite a network found on
- *                    the dongle with the imported one. Default: "no".
+ *   replace-network  "yes" lets skep_start() replace a network found on the
+ *                    dongle: with the imported one, or with a new one when
+ *                    no state is imported. Devices of the old network must
+ *                    then be paired again. Default: "no".
  *
- * Used only when a new network is formed (no network on the dongle and no
- * imported state):
+ * Used only when a new network is formed (no imported state, and no
+ * network on the dongle or replace-network set):
  *   channel          11 to 26. Default: 15, which lies between Wi-Fi
  *                    channels 1 and 6.
  *   pan-id           16-bit PAN ID in hexadecimal. Default: random.
@@ -187,8 +189,8 @@ int skep_get_serial_defaults(const skep_ctx *ctx, unsigned *baudrate,
  *   restore it onto the dongle if the dongle holds none. If the dongle
  *   holds another network, stop with -EEXIST rather than lose either,
  *   unless the replace-network option allows overwriting it.
- * - Without a state: resume the dongle's network if it holds one,
- *   otherwise form a new network.
+ * - Without a state: resume the dongle's network if it holds one, unless
+ *   replace-network asks for a new one; otherwise form a new network.
  *
  * This only starts the work: the first bytes for the dongle are now in
  * skep_output(). Success is reported by SKEP_EVENT_STARTED, failure by

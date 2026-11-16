@@ -62,28 +62,48 @@ pub const Ready = struct {
   network: ?Network,
 };
 
+/// A command the NCP answered with a status other than success.
+pub const Refused = struct {
+  command: frame.FrameId,
+  status: command.Status,
+  /// For `set_value`, the value.
+  value: ?command.ValueId = null,
+};
+
 pub const Failure = union(enum) {
   startup: startup_layer.Failure,
   link: link_layer.Failure,
-  /// The NCP did not answer a command, or did not bring its network up, in time.
+  /// The NCP did not answer a command, or did not bring its network up or down, in time.
   response_timeout,
   /// The NCP rejected a command, with this EZSP status.
   invalid_command: u8,
-  /// The NCP refused the coordinator's endpoint.
-  add_endpoint: command.Status,
-  /// `network_init` failed for another reason than the absence of a network.
-  network_init: command.Status,
-  /// The network was up, but its parameters cannot be read.
-  network_parameters: command.Status,
+  /// The NCP refused a command the driver needs.
+  refused: Refused,
   /// A response that cannot be decoded.
   bad_response,
 };
 
+/// What `form` needs: the new network, and its keys.
+pub const FormParameters = struct {
+  channel: u8,
+  pan_id: u16,
+  extended_pan_id: u64,
+  /// In dBm.
+  tx_power: i8,
+  network_key: [16]u8,
+  /// The trust center's link key, from which the keys it gives devices are derived.
+  trust_center_link_key: [16]u8,
+};
+
 pub const Event = union(enum) {
   ready: Ready,
+  /// `form` formed the network.
+  formed: Network,
   failed: Failure,
   /// The firmware refused a configuration value and keeps its own.
   configuration_refused: struct { id: command.ConfigId, status: command.Status },
+  /// The NCP refused a command the driver can do without.
+  command_refused: Refused,
 };
 
 pub const Driver = struct {
@@ -93,8 +113,11 @@ pub const Driver = struct {
   /// Sequence number of the last command, and when it was sent.
   sequence: u8 = 0,
   sent_at: u64 = 0,
-  /// `stack_status_handler` reported the network up.
+  /// The network is up, as `stack_status_handler` last reported.
   network_up: bool = false,
+  /// The last time given, for commands sent from `form`.
+  now: u64 = 0,
+  form_parameters: FormParameters = undefined,
   ready: Ready = undefined,
   events: [configuration.len + 1]Event = undefined,
   events_len: usize = 0,
@@ -110,6 +133,16 @@ pub const Driver = struct {
     reading_ieee,
     /// Ready: running the network the dongle holds, if any.
     running,
+    // `form`:
+    leaving,
+    waiting_for_leave,
+    securing,
+    extending_security,
+    clearing_keys,
+    forming,
+    waiting_for_formed,
+    writing_tokens,
+    reading_formed,
     /// Failed: `start` begins again.
     failed,
   };
@@ -125,6 +158,7 @@ pub const Driver = struct {
   }
 
   pub fn input(d: *Driver, bytes: []const u8, now: u64) void {
+    d.now = now;
     if (d.step == .starting) {
       d.startup.input(bytes, now);
       d.afterStartup(now);
@@ -139,6 +173,7 @@ pub const Driver = struct {
   }
 
   pub fn outputDone(d: *Driver, len: usize, now: u64) void {
+    d.now = now;
     if (d.step == .starting) {
       d.startup.outputDone(len, now);
       d.afterStartup(now);
@@ -158,6 +193,7 @@ pub const Driver = struct {
   }
 
   pub fn advance(d: *Driver, now: u64) void {
+    d.now = now;
     if (d.step == .starting) {
       d.startup.advance(now);
       return d.afterStartup(now);
@@ -175,6 +211,20 @@ pub const Driver = struct {
     std.mem.copyForwards(Event, d.events[0..d.events_len - 1], d.events[1..d.events_len]);
     d.events_len -= 1;
     return event;
+  }
+
+  /// Forms a new network, once the driver is ready, leaving the dongle's network first if it holds
+  /// one. Reports `formed`, or `failed`.
+  pub fn form(d: *Driver, parameters: FormParameters) void {
+    std.debug.assert(d.step == .running);
+    d.form_parameters = parameters;
+    if (d.network_up) {
+      d.step = .leaving;
+      var out: [1]u8 = undefined;
+      d.send(.leave_network, command.leaveNetwork(&out, d.ready.version.protocol_version), d.now);
+    } else {
+      d.secure(d.now);
+    }
   }
 
   fn waiting(d: *const Driver) bool {
@@ -256,12 +306,19 @@ pub const Driver = struct {
           return d.fail(.bad_response);
         if (status.is(.network_up)) {
           d.network_up = true;
-          if (d.step == .waiting_for_network) {
-            d.readNetwork(now);
+          switch (d.step) {
+            .waiting_for_network => d.readNetwork(now),
+            .waiting_for_formed => d.writeTokens(now),
+            else => {},
+          }
+        } else if (status.is(.network_down)) {
+          d.network_up = false;
+          if (d.step == .waiting_for_leave) {
+            d.secure(now);
           }
         }
       }
-      // Other callbacks are not needed to start.
+      // Other callbacks are not needed yet.
       return;
     }
     if (received.sequence != d.sequence) return;
@@ -288,7 +345,9 @@ pub const Driver = struct {
         if (received.id != .add_endpoint) return d.fail(.bad_response);
         const status = command.parseStatus(received.parameters, version) catch
           return d.fail(.bad_response);
-        if (!status.is(.ok)) return d.fail(.{ .add_endpoint = status });
+        if (!status.is(.ok)) {
+          return d.fail(.{ .refused = .{ .command = .add_endpoint, .status = status } });
+        }
         d.step = .initialising_network;
         var out: [2]u8 = undefined;
         d.send(.network_init, command.networkInit(&out), now);
@@ -298,7 +357,9 @@ pub const Driver = struct {
         const status = command.parseStatus(received.parameters, version) catch
           return d.fail(.bad_response);
         if (status.is(.not_joined)) return d.readIeee(now);
-        if (!status.is(.ok)) return d.fail(.{ .network_init = status });
+        if (!status.is(.ok)) {
+          return d.fail(.{ .refused = .{ .command = .network_init, .status = status } });
+        }
         // The network comes up a moment later, unless it already did.
         if (d.network_up) return d.readNetwork(now);
         d.step = .waiting_for_network;
@@ -308,7 +369,11 @@ pub const Driver = struct {
         if (received.id != .get_network_parameters) return d.fail(.bad_response);
         const parsed = command.parseGetNetworkParameters(received.parameters, version) catch
           return d.fail(.bad_response);
-        if (!parsed.status.is(.ok)) return d.fail(.{ .network_parameters = parsed.status });
+        if (!parsed.status.is(.ok)) {
+          return d.fail(.{
+            .refused = .{ .command = .get_network_parameters, .status = parsed.status },
+          });
+        }
         d.ready.network = .{ .node_type = parsed.node_type, .parameters = parsed.network };
         d.readIeee(now);
       },
@@ -318,8 +383,154 @@ pub const Driver = struct {
         d.step = .running;
         d.post(.{ .ready = d.ready });
       },
-      .idle, .starting, .waiting_for_network, .running, .failed => {},
+      .leaving => {
+        const status = d.statusOf(received, .leave_network) orelse return;
+        if (!status.is(.ok)) {
+          return d.fail(.{ .refused = .{ .command = .leave_network, .status = status } });
+        }
+        // The network goes down a moment later, unless it already did.
+        if (!d.network_up) return d.secure(now);
+        d.step = .waiting_for_leave;
+        d.sent_at = now;
+      },
+      .securing => {
+        const status = d.statusOf(received, .set_initial_security_state) orelse return;
+        if (!status.is(.ok)) {
+          return d.fail(.{
+            .refused = .{ .command = .set_initial_security_state, .status = status },
+          });
+        }
+        d.step = .extending_security;
+        const mask = command.ExtendedSecurity.joiner_global_link_key |
+          command.ExtendedSecurity.nwk_leave_request_not_allowed;
+        var value: [2]u8 = undefined;
+        std.mem.writeInt(u16, &value, mask, .little);
+        var out: [4]u8 = undefined;
+        d.send(.set_value, command.setValue(&out, .extended_security_bitmask, &value), now);
+      },
+      .extending_security => {
+        const status = d.statusOf(received, .set_value) orelse return;
+        if (!status.is(.ok)) {
+          return d.fail(.{
+            .refused = .{
+              .command = .set_value,
+              .status = status,
+              .value = .extended_security_bitmask,
+            },
+          });
+        }
+        d.step = .clearing_keys;
+        d.send(.clear_key_table, &.{}, now);
+      },
+      .clearing_keys => {
+        const status = d.statusOf(received, .clear_key_table) orelse return;
+        // A new network starts without keys anyway; zigbee-herdsman also goes on.
+        if (!status.is(.ok)) {
+          d.post(.{ .command_refused = .{ .command = .clear_key_table, .status = status } });
+        }
+        d.step = .forming;
+        const p = d.form_parameters;
+        var out: [20]u8 = undefined;
+        d.send(
+          .form_network,
+          command.formNetwork(&out, .{
+            .extended_pan_id = p.extended_pan_id,
+            .pan_id = p.pan_id,
+            .tx_power = p.tx_power,
+            .channel = p.channel,
+            // MAC association.
+            .join_method = 0,
+            // The coordinator manages the network.
+            .manager_id = 0,
+            .update_id = 0,
+            // Every 802.15.4 channel of the 2.4 GHz band.
+            .channels = 0x07fff800,
+          }),
+          now,
+        );
+      },
+      .forming => {
+        const status = d.statusOf(received, .form_network) orelse return;
+        if (!status.is(.ok)) {
+          return d.fail(.{ .refused = .{ .command = .form_network, .status = status } });
+        }
+        if (d.network_up) return d.writeTokens(now);
+        d.step = .waiting_for_formed;
+        d.sent_at = now;
+      },
+      .writing_tokens => {
+        const status = d.statusOf(received, .set_value) orelse return;
+        // EmberZNet 6.10.3 refuses (0x70), and keeps the network across restarts anyway.
+        if (!status.is(.ok)) {
+          d.post(.{
+            .command_refused = .{
+              .command = .set_value,
+              .status = status,
+              .value = .stack_token_writing,
+            },
+          });
+        }
+        d.step = .reading_formed;
+        d.send(.get_network_parameters, &.{}, now);
+      },
+      .reading_formed => {
+        if (received.id != .get_network_parameters) return d.fail(.bad_response);
+        const parsed = command.parseGetNetworkParameters(received.parameters, version) catch
+          return d.fail(.bad_response);
+        if (!parsed.status.is(.ok)) {
+          return d.fail(.{
+            .refused = .{ .command = .get_network_parameters, .status = parsed.status },
+          });
+        }
+        d.step = .running;
+        d.post(.{ .formed = .{ .node_type = parsed.node_type, .parameters = parsed.network } });
+      },
+      .idle,
+      .starting,
+      .waiting_for_network,
+      .waiting_for_leave,
+      .waiting_for_formed,
+      .running,
+      .failed,
+      => {},
     }
+  }
+
+  /// The status of a response made of a status alone, to `id`; null if the driver failed instead.
+  fn statusOf(d: *Driver, received: frame.Frame, id: frame.FrameId) ?command.Status {
+    if (received.id != id) {
+      d.fail(.bad_response);
+      return null;
+    }
+    return command.parseStatus(received.parameters, d.ready.version.protocol_version) catch {
+      d.fail(.bad_response);
+      return null;
+    };
+  }
+
+  /// Sets the security of the network to form.
+  fn secure(d: *Driver, now: u64) void {
+    d.step = .securing;
+    const p = d.form_parameters;
+    const s = command.InitialSecurityState;
+    const state: s = .{
+      // As zigbee-herdsman forms networks: devices join with the global link key, and get
+      // link keys the trust center derives from its own.
+      .bitmask = s.trust_center_global_link_key | s.have_preconfigured_key | s.have_network_key |
+        s.trust_center_uses_hashed_link_key | s.require_encrypted_key,
+      .preconfigured_key = p.trust_center_link_key,
+      .network_key = p.network_key,
+      .network_key_sequence_number = 0,
+    };
+    var out: [s.len]u8 = undefined;
+    d.send(.set_initial_security_state, state.encode(&out), now);
+  }
+
+  /// Asks the NCP to keep the network in its tokens, across resets and power cycles.
+  fn writeTokens(d: *Driver, now: u64) void {
+    d.step = .writing_tokens;
+    var out: [3]u8 = undefined;
+    d.send(.set_value, command.setValue(&out, .stack_token_writing, &.{ 1 }), now);
   }
 
   fn readNetwork(d: *Driver, now: u64) void {
@@ -466,18 +677,155 @@ test "a refused endpoint fails the driver" {
   _ = ncp.take();
   ncp.respond(&hex("098001020036"));
   const failure = driver.nextEvent().?.failed;
-  try testing.expectEqual(0x36, failure.add_endpoint.value);
+  try testing.expectEqual(frame.FrameId.add_endpoint, failure.refused.command);
+  try testing.expectEqual(0x36, failure.refused.status.value);
+}
+
+/// Answers the command just sent with `status`, checking it was `id`.
+fn answer(ncp: *Ncp, id: frame.FrameId, status: u8) !void {
+  const sent = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqual(@backingInt(id), std.mem.readInt(u16, sent[3..5], .little));
+  const code = @backingInt(id);
+  ncp.respond(&.{ sent[0], 0x80, 0x01, @truncate(code), @truncate(code >> 8), status });
+}
+
+/// Takes the driver to `ready`, with or without a network on the dongle.
+fn readyNcp(driver: *Driver, network: bool) !Ncp {
+  var ncp = try started(driver);
+  try configured(&ncp, &.{});
+  if (network) {
+    try answer(&ncp, .network_init, 0x00);
+    ncp.respond(&hex("009001190090"));
+    const sent = ncp.take() orelse return error.TestExpectedCommand;
+    ncp.respond(
+      &[_]u8{ sent[0], 0x80, 0x01, 0x28, 0x00 } ++
+        hex(
+          "00" ++
+            "01" ++
+            "69fef016be984281" ++
+            "e021" ++
+            "08" ++
+            "0f" ++
+            "00" ++
+            "0000" ++
+            "00" ++
+            "00f8ff07",
+        ),
+    );
+  } else {
+    try answer(&ncp, .network_init, 0x93);
+  }
+  const sent = ncp.take() orelse return error.TestExpectedCommand;
+  ncp.respond(&[_]u8{ sent[0], 0x80, 0x01, 0x26, 0x00 } ++ hex("1de149feffb6c67c"));
+  try testing.expect(driver.nextEvent().? == .ready);
+  return ncp;
+}
+
+const form_parameters: FormParameters = .{
+  .channel = 20,
+  .pan_id = 0x1a62,
+  .extended_pan_id = 0xdddddddddddddddd,
+  .tx_power = 5,
+  .network_key = @splat(0x22),
+  .trust_center_link_key = @splat(0x11),
+};
+
+/// The steps of forming after the security state, with `refuse_clear` refusing to clear keys.
+fn formed(driver: *Driver, ncp: *Ncp, refuse_clear: bool) !void {
+  try answer(ncp, .set_value, 0x00);
+  try answer(ncp, .clear_key_table, if (refuse_clear) 0x35 else 0x00);
+  const sent = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqual(@backingInt(frame.FrameId.form_network), sent[3]);
+  var expected: [20]u8 = undefined;
+  try testing.expectEqualSlices(
+    u8,
+    command.formNetwork(&expected, .{
+      .extended_pan_id = 0xdddddddddddddddd,
+      .pan_id = 0x1a62,
+      .tx_power = 5,
+      .channel = 20,
+      .join_method = 0,
+      .manager_id = 0,
+      .update_id = 0,
+      .channels = 0x07fff800,
+    }),
+    sent[5..],
+  );
+  ncp.respond(&.{ sent[0], 0x80, 0x01, 0x1e, 0x00, 0x00 });
+  try testing.expectEqual(null, ncp.take());
+  // NETWORK_UP.
+  ncp.respond(&hex("009001190090"));
+  try answer(ncp, .set_value, 0x00);
+  const read = ncp.take() orelse return error.TestExpectedCommand;
+  ncp.respond(
+    &[_]u8{ read[0], 0x80, 0x01, 0x28, 0x00 } ++
+      hex(
+        "00" ++
+          "01" ++
+          "dddddddddddddddd" ++
+          "621a" ++
+          "05" ++
+          "14" ++
+          "00" ++
+          "0000" ++
+          "00" ++
+          "00f8ff07",
+      ),
+  );
+  _ = driver;
+}
+
+test "form a network on a dongle that holds none" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, false);
+  driver.form(form_parameters);
+  const security = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqual(@backingInt(frame.FrameId.set_initial_security_state), security[3]);
+  // The bitmask, then the trust center link key and the network key.
+  try testing.expectEqualSlices(u8, &hex("840b"), security[5..7]);
+  try testing.expectEqual(0x11, security[7]);
+  try testing.expectEqual(0x22, security[23]);
+  ncp.respond(&.{ security[0], 0x80, 0x01, 0x68, 0x00, 0x00 });
+  try formed(&driver, &ncp, true);
+  try testing.expectEqual(
+    frame.FrameId.clear_key_table,
+    driver.nextEvent().?.command_refused.command,
+  );
+  const network = driver.nextEvent().?.formed;
+  try testing.expectEqual(20, network.parameters.channel);
+  try testing.expectEqual(0x1a62, network.parameters.pan_id);
+  try testing.expectEqual(null, driver.nextDeadline());
+}
+
+test "replacing a network leaves it first" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, true);
+  driver.form(form_parameters);
+  // EZSP 8: leave_network takes no parameters.
+  const leave = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqual(5, leave.len);
+  try testing.expectEqual(@backingInt(frame.FrameId.leave_network), leave[3]);
+  ncp.respond(&.{ leave[0], 0x80, 0x01, 0x20, 0x00, 0x00 });
+  try testing.expectEqual(null, ncp.take());
+  // NETWORK_DOWN.
+  ncp.respond(&hex("009001190091"));
+  try answer(&ncp, .set_initial_security_state, 0x00);
+  try formed(&driver, &ncp, false);
+  try testing.expect(driver.nextEvent().? == .formed);
+}
+
+test "a refused security state fails the driver" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, false);
+  driver.form(form_parameters);
+  try answer(&ncp, .set_initial_security_state, 0x94);
+  const failure = driver.nextEvent().?.failed;
+  try testing.expectEqual(frame.FrameId.set_initial_security_state, failure.refused.command);
 }
 
 test "a link failure after the start is reported" {
   var driver: Driver = undefined;
-  var ncp = try started(&driver);
-  try configured(&ncp, &.{});
-  _ = ncp.take();
-  ncp.respond(&hex("0a8001170093"));
-  _ = ncp.take();
-  ncp.respond(&hex("0b80012600" ++ "8877665544332211"));
-  try testing.expect(driver.nextEvent().? == .ready);
+  var ncp = try readyNcp(&driver, false);
   ncp.send(.{ .err = .{ .version = 2, .code = 0x51 } });
   try testing.expectEqual(
     link_layer.Failure{ .ncp_error = 0x51 },

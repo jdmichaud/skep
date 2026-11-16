@@ -13,14 +13,16 @@ const posix = std.posix;
 const Io = std.Io;
 
 const usage =
-  \\usage: skepd --device <path> [--driver <name>] [--log-level <level>] [--baud <rate>]
-  \\             [--rtscts]
+  \\usage: skepd --device <path> [--driver <name>] [--log-level <level>] [--replace-network]
+  \\             [--baud <rate>] [--rtscts]
   \\
   \\Runs the Zigbee network of the dongle on <path>. Stops cleanly on SIGTERM or SIGINT.
   \\
   \\  --device <path>     the dongle's serial device, best under /dev/serial/by-id/
   \\  --driver <name>     ezsp (default) for Silicon Labs EmberZNet dongles
   \\  --log-level <level> error, warning, info (default) or debug
+  \\  --replace-network   replace the network the dongle holds with a new one; its devices
+  \\                      must then be paired again
   \\  --baud <rate>       the serial speed, if not the driver's usual one
   \\  --rtscts            hardware flow control, if not the driver's usual one
   \\
@@ -33,6 +35,7 @@ const Options = struct {
   device: [:0]const u8,
   driver: [:0]const u8 = "ezsp",
   log_level: [:0]const u8 = "info",
+  replace_network: bool = false,
   baudrate: ?u32 = null,
   rtscts: ?bool = null,
 };
@@ -45,6 +48,10 @@ fn parseOptions(args: []const [:0]const u8) ?Options {
     const arg = args[i];
     if (std.mem.eql(u8, arg, "--rtscts")) {
       options.rtscts = true;
+      continue;
+    }
+    if (std.mem.eql(u8, arg, "--replace-network")) {
+      options.replace_network = true;
       continue;
     }
     i += 1;
@@ -306,6 +313,7 @@ pub fn main(init: std.process.Init) !u8 {
   for ([_][2][:0]const u8{
     .{ "driver", options.driver },
     .{ "log-level", options.log_level },
+    .{ "replace-network", if (options.replace_network) "yes" else "no" },
   }) |option| {
     const r = c.skep_set_option(ctx, option[0].ptr, option[1].ptr);
     if (r != 0) {

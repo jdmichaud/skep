@@ -72,8 +72,18 @@ pub const Failure = struct {
   };
 };
 
+/// What `form` needs: the network, and its keys.
+pub const Form = struct {
+  network: Network,
+  network_key: [16]u8,
+  /// The trust center's link key, from which the keys it gives devices are derived.
+  trust_center_link_key: [16]u8,
+};
+
 pub const Event = union(enum) {
   ready: Ready,
+  /// `form` formed the network.
+  formed: Network,
   failed: Failure,
   log: struct { level: Level, message: Message },
 };
@@ -105,6 +115,22 @@ pub const Driver = union(Name) {
   pub fn start(d: *Driver) void {
     switch (d.*) {
       inline else => |*driver| driver.start(),
+    }
+  }
+
+  /// Forms a new network once the driver is ready, replacing the dongle's if it holds one.
+  pub fn form(d: *Driver, f: Form) void {
+    switch (d.*) {
+      .ezsp => |*driver| driver.form(.{
+        .channel = f.network.channel,
+        .pan_id = f.network.pan_id,
+        .extended_pan_id = f.network.extended_pan_id,
+        // zigbee-herdsman's default.
+        .tx_power = 5,
+        .network_key = f.network_key,
+        .trust_center_link_key = f.trust_center_link_key,
+      }),
+      .sim => |*driver| driver.form(f),
     }
   }
 
@@ -170,7 +196,29 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
         }),
       },
     },
+    .formed => |network| .{
+      .formed = .{
+        .channel = network.parameters.channel,
+        .pan_id = network.parameters.pan_id,
+        .extended_pan_id = network.parameters.extended_pan_id,
+      },
+    },
     .failed => |failure| .{ .failed = fromEzspFailure(failure) },
+    .command_refused => |refused| .{
+      .log = if (refused.value == .stack_token_writing) .{
+        // The network is kept all the same, as far as we have seen.
+        .level = .info,
+        .message = .init("ezsp: the dongle refused to start writing its tokens (status 0x{x})", .{
+          refused.status.value,
+        }),
+      } else .{
+        .level = .warning,
+        .message = .init("ezsp: the dongle refused {t} (status 0x{x}), which is not needed", .{
+          refused.command,
+          refused.status.value,
+        }),
+      },
+    },
     .configuration_refused => |refused| .{
       .log = .{
         .level = .warning,
@@ -223,29 +271,28 @@ fn fromEzspFailure(failure: ezsp.driver.Failure) Failure {
     .link => |link| fromLinkFailure(link),
     .response_timeout => .{
       .kind = .timeout,
-      .message = .init("ezsp: the dongle did not answer, or did not bring its network up", .{}),
+      .message = .init(
+        "ezsp: the dongle did not answer, or did not bring its network up or down",
+        .{},
+      ),
     },
     .invalid_command => |status| .{
       .kind = .protocol,
       .message = .init("ezsp: the dongle rejected a command (status 0x{x})", .{ status }),
     },
-    .add_endpoint => |status| .{
+    .refused => |refused| .{
       .kind = .refused,
-      .message = .init("ezsp: the dongle refused the coordinator's endpoint (status 0x{x})", .{
-        status.value,
-      }),
-    },
-    .network_init => |status| .{
-      .kind = .refused,
-      .message = .init("ezsp: the dongle could not bring its network up (status 0x{x})", .{
-        status.value,
-      }),
-    },
-    .network_parameters => |status| .{
-      .kind = .refused,
-      .message = .init("ezsp: the dongle did not give its network parameters (status 0x{x})", .{
-        status.value,
-      }),
+      .message = if (refused.value) |value|
+        .init("ezsp: the dongle refused {t} of {t} (status 0x{x})", .{
+          refused.command,
+          value,
+          refused.status.value,
+        })
+      else
+        .init("ezsp: the dongle refused {t} (status 0x{x})", .{
+          refused.command,
+          refused.status.value,
+        }),
     },
     .bad_response => .{
       .kind = .protocol,

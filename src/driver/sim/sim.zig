@@ -24,6 +24,12 @@ pub const Driver = struct {
     };
   }
 
+  /// Forms the network: the simulated dongle holds it from now on.
+  pub fn form(d: *Driver, f: driver.Form) void {
+    d.network = f.network;
+    d.pending = .{ .formed = f.network };
+  }
+
   pub fn input(_: *Driver, _: []const u8, _: u64) void {}
 
   pub fn output(_: *const Driver) []const u8 {

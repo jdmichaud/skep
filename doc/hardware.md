@@ -40,6 +40,11 @@ attribute details come from the Zigbee2MQTT device definitions
   (see design.md); Zigbee2MQTT's `ember` driver needs EmberZNet 7.4 or
   newer. `universal-silabs-flasher --device <path> probe` also reports
   the running firmware, and the same tool flashes a new one.
+- After forming a network, EmberZNet 6.10.3 refuses `set_value` of
+  `STACK_TOKEN_WRITING` (status 0x70), which zigbee-herdsman sends to
+  make sure the network is saved; the network is kept across restarts
+  anyway. The network it held as delivered, of unknown origin, was
+  replaced by skep's on 2026-11-16.
 - Linux pitfall: brltty claims some USB serial ids, including `10c4:ea60`,
   and takes the port away. Remove it if `/dev/ttyUSB0` appears and then
   vanishes.

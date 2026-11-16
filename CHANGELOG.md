@@ -22,8 +22,9 @@ publishes the section of each released version as its release notes.
 - libskep as a static and a shared library (soname `libskep.so.0`),
   installed with its headers and `libskep.pc`.
 - The core of the C API: contexts with the application's allocator and
-  seed, options, the I/O loop, events, and starting on a dongle that
-  holds a network.
+  seed, options, the I/O loop and events. Starting resumes the dongle's
+  network, or forms a new one, also in place of the dongle's with the
+  `replace-network` option.
 - skepd, which runs the network of a dongle through libskep: it opens
   the serial port, reopens it when it disappears, logs to stderr, and
   stops cleanly on SIGTERM or SIGINT.

@@ -243,6 +243,7 @@ fn process(ctx: *Context) c_int {
     const driver_event = d.nextEvent() orelse break;
     switch (driver_event) {
       .ready => |ready| ctx.onReady(ready),
+      .formed => |network| ctx.onFormed(network),
       .failed => |failure| {
         ctx.logMessage(.err, failure.message.text());
         ctx.finish(
@@ -266,23 +267,74 @@ fn process(ctx: *Context) c_int {
 
 fn onReady(ctx: *Context, r: driver_layer.Ready) void {
   ctx.ieee = r.ieee;
-  const network = r.network orelse {
-    // Forming a network comes next; until then, a dongle without one cannot start.
-    ctx.logMessage(.err, "the dongle holds no network, and forming one is not implemented yet");
-    ctx.finish(ctx.spares.pop().?, err(.NOSYS));
-    return;
-  };
+  if (r.network) |network| {
+    if (!ctx.options.replace_network) {
+      const message: driver_layer.Message = .init(
+        "resumed the dongle's network: channel {d}, PAN ID 0x{x:0>4} ({s})",
+        .{ network.channel, network.pan_id, r.firmware.text() },
+      );
+      ctx.logMessage(.info, message.text());
+      return ctx.started(network, .resumed);
+    }
+  }
+  const f = ctx.newNetwork();
+  const message: driver_layer.Message = if (r.network) |old|
+    .init(
+      "replacing the dongle's network (PAN ID 0x{x:0>4}) with a new one on channel {d} ({s})",
+      .{ old.pan_id, f.network.channel, r.firmware.text() },
+    )
+  else
+    .init("forming a new network on channel {d} ({s})", .{ f.network.channel, r.firmware.text() });
+  ctx.logMessage(.info, message.text());
+  ctx.driver.?.form(f);
+}
+
+fn onFormed(ctx: *Context, network: driver_layer.Network) void {
   const message: driver_layer.Message = .init(
-    "started: {s}, network on channel {d}, PAN ID 0x{x:0>4}",
-    .{ r.firmware.text(), network.channel, network.pan_id },
+    "formed a new network: channel {d}, PAN ID 0x{x:0>4}, extended PAN ID 0x{x:0>16}",
+    .{ network.channel, network.pan_id, network.extended_pan_id },
   );
   ctx.logMessage(.info, message.text());
+  ctx.started(network, .formed);
+}
+
+fn started(ctx: *Context, network: driver_layer.Network, origin: Event.Origin) void {
   ctx.network = network;
   ctx.status = .running;
   const event = ctx.spares.pop().?;
   event.type = .started;
-  event.origin = .resumed;
+  event.origin = origin;
   ctx.events.push(event);
+}
+
+/// The parameters of a new network: the options, or values drawn from the seeded generator.
+fn newNetwork(ctx: *Context) driver_layer.Form {
+  const random = ctx.random.random();
+  const o = ctx.options;
+  var f: driver_layer.Form = .{
+    .network = .{
+      .channel = o.channel,
+      // 0xffff addresses every PAN.
+      .pan_id = o.pan_id orelse while (true) {
+        const pan_id = random.int(u16);
+        if (pan_id != 0xffff) break pan_id;
+      },
+      // 0 and all ones are reserved.
+      .extended_pan_id = o.extended_pan_id orelse while (true) {
+        const extended = random.int(u64);
+        if (extended != 0 and extended != std.math.maxInt(u64)) break extended;
+      },
+    },
+    .network_key = undefined,
+    .trust_center_link_key = undefined,
+  };
+  if (o.network_key) |key| {
+    f.network_key = key;
+  } else {
+    random.bytes(&f.network_key);
+  }
+  random.bytes(&f.trust_center_link_key);
+  return f;
 }
 
 /// Queues a log message if the log level lets it through. Uses a spare event.

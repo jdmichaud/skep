@@ -45,6 +45,9 @@ int main(void) {
   enum skep_flow_control flow_control = SKEP_FLOW_CONTROL_NONE;
   const char *message = NULL;
   skep_event *event;
+  uint8_t channel = 0;
+  uint16_t pan_id = 0;
+  uint64_t extended_pan_id = 0;
 
   CHECK(skep_version() ==
         (uint32_t)(SKEP_VERSION_MAJOR << 16 | SKEP_VERSION_MINOR << 8 | SKEP_VERSION_PATCH));
@@ -57,19 +60,32 @@ int main(void) {
   CHECK(skep_get_serial_defaults(ctx, &baudrate, &flow_control) == 0);
   CHECK(baudrate == 115200 && flow_control == SKEP_FLOW_CONTROL_SOFTWARE);
 
-  /* The simulated dongle holds no network, and forming one is not implemented yet. */
+  /* The simulated dongle holds no network: libskep forms one, with the options given. */
   CHECK(skep_set_option(ctx, "driver", "sim") == 0);
   CHECK(skep_set_option(ctx, "log-level", "debug") == 0);
+  CHECK(skep_set_option(ctx, "channel", "20") == 0);
   CHECK(skep_start(ctx) == 0);
   CHECK(skep_advance(ctx, 0) == 0);
   event = skep_next_event(ctx);
   CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_LOG);
-  CHECK(skep_event_get_log(event, &message) == 0 && strstr(message, "no network") != NULL);
+  CHECK(skep_event_get_log(event, &message) == 2 && strstr(message, "forming") != NULL);
   skep_event_free(event);
   event = skep_next_event(ctx);
-  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_STOPPED);
-  CHECK(skep_event_get_error(event) == -ENOSYS && skep_event_get_device(event) == 0);
+  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_LOG);
+  skep_event_free(event);
+  event = skep_next_event(ctx);
+  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_STARTED);
+  CHECK(skep_event_get_network_origin(event) == SKEP_NETWORK_FORMED);
+  CHECK(skep_event_get_device(event) == 0);
+  skep_event_free(event);
+  CHECK(skep_get_network(ctx, &channel, &pan_id, &extended_pan_id) == 0 && channel == 20);
   CHECK(skep_next_event(ctx) == NULL);
+
+  CHECK(skep_stop(ctx) == 0);
+  CHECK(skep_advance(ctx, 0) == 0);
+  event = skep_next_event(ctx);
+  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_STOPPED);
+  CHECK(skep_event_get_error(event) == 0);
 
   /* Events outlive their context. */
   skep_free(ctx);
