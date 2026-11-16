@@ -140,13 +140,15 @@ fn addSkepd(
   const run = b.addRunArtifact(skepd);
   run.addPassthruArgs();
   b.step("skepd", "Run skepd (-- --device <path>)").dependOn(&run.step);
-  // The state file on its own: the rest of skepd needs a dongle.
-  const state_file = b.createModule(.{
-    .root_source_file = b.path("src/skepd/StateFile.zig"),
-    .target = target,
-    .optimize = optimize,
-  });
-  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = state_file })).step);
+  // The parts of skepd that need no dongle, on their own.
+  for ([_][]const u8{ "src/skepd/StateFile.zig", "src/skepd/Server.zig" }) |file| {
+    const part = b.createModule(.{
+      .root_source_file = b.path(file),
+      .target = target,
+      .optimize = optimize,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = part })).step);
+  }
 }
 
 /// `zig build probe -- <device>` resets a Silicon Labs dongle and reports its versions: the
