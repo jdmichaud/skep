@@ -177,9 +177,27 @@ reviewed before the library is implemented.
   asleep is not sent outdated settings first.
 - State: what must survive a restart or a new dongle (network parameters,
   keys and security counters, device registry) is exported and imported
-  as opaque bytes (`skep_export_state()`, `skep_import_state()`).
+  with `skep_export_state()` and `skep_import_state()`.
   `SKEP_EVENT_STATE_CHANGED` says when to save it. libskep reads states
   written by any older version.
+  - The state is a JSON document in the Open Coordinator Backup format
+    (`zigpy/open-coordinator-backup`, version 1), which zigpy and
+    zigbee-herdsman read and write: the network, its key and frame
+    counter, the trust center link key (under `stack_specific`), and
+    the devices with their link keys. What libskep knows beyond it,
+    devices' descriptors, endpoints, clusters and setup progress among
+    others, is in a top-level `skep` object with a version of its own.
+  - Why: the state can be read with `cat` and `jq`, and a network can
+    move between skep, Zigbee2MQTT and ZHA, which is an escape hatch and
+    a way in. JSON comes with Zig's standard library.
+  - IEEE addresses and extended PAN IDs are written most significant
+    byte first, as zigpy and zigbee-herdsman's Z-Stack driver write them;
+    herdsman's `ember` driver reverses the coordinator's address, so a
+    network moved to it may need it fixed. That driver also refuses
+    backups from firmware older than EZSP 12, such as our ZBDongle-E's.
+  - Not chosen: a compact binary state of our own, with a separate export
+    to this format for moving networks: smaller, but unreadable without a
+    tool, and two formats to maintain.
   - The keys alone are not enough to move a network to a new dongle.
     Devices drop frames whose counter is not above the last one they saw
     from the sender (replay protection), so the state holds the frame
@@ -523,12 +541,6 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   [hardware.md](hardware.md)); product strings or probing the protocol
   may be.
 - The JSON schema of skep-protocol.
-- Format of the exported state: compact binary, or text that a human can
-  inspect (it holds the network key either way). A candidate is the Open
-  Coordinator Backup format, a JSON file that zigpy and zigbee-herdsman
-  both read and write: networks could then move between skep, ZHA and
-  Zigbee2MQTT. It does not hold what libskep knows about devices, which
-  would have to extend it or be stored next to it.
 - Wall-clock time: some devices read the current time from the
   coordinator (Time cluster). libskep only knows a monotonic clock, so the
   application would have to pass the wall-clock time as well. None of the

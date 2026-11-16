@@ -582,7 +582,11 @@ const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
  * libskep never stores it itself; the caller does, and must keep it
  * private (it holds keys, so mode 0600 for a file).
  *
- * The state is opaque bytes. A libskep version reads the state written by
+ * The state is a JSON document in the Open Coordinator Backup format,
+ * which zigpy and zigbee-herdsman also read and write, with what libskep
+ * knows beyond it in a top-level "skep" object. Applications store it as
+ * it is; reading it is fine, but the "skep" object is libskep's and
+ * changes between versions. A libskep version reads the state written by
  * any older version.
  */
 
