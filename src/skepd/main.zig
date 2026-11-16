@@ -607,3 +607,10 @@ pub fn main(init: std.process.Init) !u8 {
   if (daemon.loadState()) |code| return code;
   return daemon.run(signals);
 }
+
+test {
+  _ = @import("Names.zig");
+  _ = @import("Server.zig");
+  _ = @import("StateFile.zig");
+  _ = @import("values.zig");
+}
