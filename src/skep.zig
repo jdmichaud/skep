@@ -10,6 +10,7 @@ pub const version: std.SemanticVersion = std.SemanticVersion.parse(build_options
   @compileError("invalid version in build.zig.zon");
 
 test {
+  _ = @import("allocator.zig");
   _ = @import("driver/ezsp/ezsp.zig");
   std.testing.refAllDecls(@This());
 }
