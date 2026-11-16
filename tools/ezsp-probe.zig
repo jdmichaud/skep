@@ -1,4 +1,5 @@
-//! ezsp-probe: resets a Silicon Labs EmberZNet dongle and reports its EZSP and firmware versions.
+//! ezsp-probe: starts a Silicon Labs EmberZNet dongle as the ezsp driver does, and reports its
+//! versions, its IEEE address and the network it holds.
 //!
 //!     zig build probe -- <device> [--baud <rate>] [--rtscts] [--trace]
 //!
@@ -11,7 +12,7 @@ const ezsp = @import("ezsp");
 const linux = std.os.linux;
 const posix = std.posix;
 const Io = std.Io;
-const Startup = ezsp.startup.Startup;
+const Driver = ezsp.driver.Driver;
 
 const usage =
   \\usage: ezsp-probe <device> [--baud <rate>] [--rtscts] [--trace]
@@ -103,18 +104,19 @@ pub fn main(init: std.process.Init) !u8 {
     return 1;
   };
 
-  var startup: Startup = .init(.{ .software_flow_control = !options.rtscts });
+  var driver: Driver = .init(.{ .software_flow_control = !options.rtscts });
   const start = milliseconds(io);
-  startup.start();
-  while (startup.result == null) {
-    try write(fd, &startup, io, if (options.trace) err else null, start);
+  driver.start();
+  const result = while (true) {
+    if (try nextResult(&driver, out)) |event| break event;
+    try write(fd, &driver, io, if (options.trace) err else null, start);
 
     const now = milliseconds(io);
     var timeout: i32 = -1;
-    if (startup.nextDeadline()) |deadline| {
+    if (driver.nextDeadline()) |deadline| {
       timeout = if (deadline <= now) 0 else @intCast(@min(deadline - now, std.math.maxInt(i32)));
     }
-    const events: i16 = if (startup.output().len > 0)
+    const events: i16 = if (driver.output().len > 0)
       posix.POLL.IN | posix.POLL.OUT
     else
       posix.POLL.IN;
@@ -132,7 +134,7 @@ pub fn main(init: std.process.Init) !u8 {
           if (options.trace) {
             try trace(err, "<", buffer[0..rc], milliseconds(io) - start);
           }
-          startup.input(buffer[0..rc], milliseconds(io));
+          driver.input(buffer[0..rc], milliseconds(io));
         },
         .AGAIN, .INTR => {},
         else => |e| {
@@ -141,15 +143,15 @@ pub fn main(init: std.process.Init) !u8 {
         },
       }
     }
-    startup.advance(milliseconds(io));
-  }
+    driver.advance(milliseconds(io));
+  };
 
   try out.print("device: {s}\n", .{ options.device });
-  try out.print("XON/XOFF received: {d}\n", .{ startup.link.flow_control_bytes });
-  switch (startup.result.?) {
-    .done => |info| {
-      try printVersion(out, info.version);
-      const f = info.firmware;
+  try out.print("XON/XOFF received: {d}\n", .{ driver.startup.link.flow_control_bytes });
+  switch (result) {
+    .ready => |ready| {
+      try printVersion(out, ready.version);
+      const f = ready.firmware;
       try out.print("firmware: {d}.{d}.{d}.{d}, build {d}, {s}\n", .{
         f.major,
         f.minor,
@@ -158,38 +160,95 @@ pub fn main(init: std.process.Init) !u8 {
         f.build,
         if (f.type == 0xaa) "general availability" else "pre-release",
       });
+      try out.print("IEEE address: {x:0>16}\n", .{ ready.ieee });
+      if (ready.network) |network| {
+        const p = network.parameters;
+        try out.print(
+          "network: {t}, PAN ID 0x{x:0>4}, extended PAN ID 0x{x:0>16}, channel {d}, ",
+          .{
+            network.node_type,
+            p.pan_id,
+            p.extended_pan_id,
+            p.channel,
+          },
+        );
+        try out.print("transmit power {d} dBm, update id {d}\n", .{ p.tx_power, p.update_id });
+      } else {
+        try out.writeAll("network: none\n");
+      }
       return 0;
     },
     .failed => |failure| {
       switch (failure) {
+        .startup => |startup| try printStartupFailure(out, startup),
         .link => |link| try out.print("failed: ASH link: {any}\n", .{ link }),
-        .unsupported_version => |version| {
-          try printVersion(out, version);
-          try out.print("failed: EZSP {d} is not supported, only {d} to {d}\n", .{
-            version.protocol_version,
-            ezsp.frame.min_version,
-            ezsp.frame.max_version,
-          });
-        },
-        .unsupported_stack => |version| {
-          try printVersion(out, version);
-          try out.print("failed: stack type {d} is not EmberZNet's mesh stack\n", .{
-            version.stack_type,
-          });
-        },
-        .response_timeout => try out.writeAll("failed: the NCP did not answer a command\n"),
+        .response_timeout => try out.writeAll(
+          "failed: the NCP did not answer, or its network did not come up\n",
+        ),
         .invalid_command => |status| try out.print(
           "failed: the NCP rejected a command, status {d}\n",
           .{ status },
         ),
-        .get_value => |status| try out.print(
-          "failed: reading the firmware version, status {d}\n",
-          .{ status },
+        .add_endpoint => |status| try out.print(
+          "failed: registering the endpoint, status 0x{x}\n",
+          .{ status.value },
+        ),
+        .network_init => |status| try out.print(
+          "failed: bringing the network up, status 0x{x}\n",
+          .{ status.value },
+        ),
+        .network_parameters => |status| try out.print(
+          "failed: reading the network, status 0x{x}\n",
+          .{ status.value },
         ),
         .bad_response => try out.writeAll("failed: an answer that cannot be decoded\n"),
       }
       return 1;
     },
+    .configuration_refused => unreachable,
+  }
+}
+
+/// The driver's final event, if it came. Refused configuration values are only reported.
+fn nextResult(driver: *Driver, out: *Io.Writer) !?ezsp.driver.Event {
+  while (driver.nextEvent()) |event| {
+    switch (event) {
+      .configuration_refused => |refused| try out.print(
+        "warning: the firmware refused configuration value {t}, status 0x{x}\n",
+        .{ refused.id, refused.status.value },
+      ),
+      .ready, .failed => return event,
+    }
+  }
+  return null;
+}
+
+fn printStartupFailure(out: *Io.Writer, failure: ezsp.startup.Failure) !void {
+  switch (failure) {
+    .link => |link| try out.print("failed: ASH link: {any}\n", .{ link }),
+    .unsupported_version => |version| {
+      try printVersion(out, version);
+      try out.print("failed: EZSP {d} is not supported, only {d} to {d}\n", .{
+        version.protocol_version,
+        ezsp.frame.min_version,
+        ezsp.frame.max_version,
+      });
+    },
+    .unsupported_stack => |version| {
+      try printVersion(out, version);
+      try out.print("failed: stack type {d} is not EmberZNet's mesh stack\n", .{
+        version.stack_type,
+      });
+    },
+    .response_timeout => try out.writeAll("failed: the NCP did not answer a command\n"),
+    .invalid_command => |status| try out.print(
+      "failed: the NCP rejected a command, status {d}\n",
+      .{ status },
+    ),
+    .get_value => |status| try out.print("failed: reading the firmware version, status {d}\n", .{
+      status,
+    }),
+    .bad_response => try out.writeAll("failed: an answer that cannot be decoded\n"),
   }
 }
 
@@ -225,9 +284,9 @@ fn configure(fd: posix.fd_t, options: Options) !void {
   _ = linux.ioctl(fd, linux.T.CFLSH, 0);
 }
 
-fn write(fd: posix.fd_t, startup: *Startup, io: Io, tracer: ?*Io.Writer, start: u64) !void {
+fn write(fd: posix.fd_t, driver: *Driver, io: Io, tracer: ?*Io.Writer, start: u64) !void {
   while (true) {
-    const pending = startup.output();
+    const pending = driver.output();
     if (pending.len == 0) return;
     const rc = linux.write(fd, pending.ptr, pending.len);
     switch (linux.errno(rc)) {
@@ -235,7 +294,7 @@ fn write(fd: posix.fd_t, startup: *Startup, io: Io, tracer: ?*Io.Writer, start: 
         if (tracer) |w| {
           try trace(w, ">", pending[0..rc], milliseconds(io) - start);
         }
-        startup.outputDone(rc, milliseconds(io));
+        driver.outputDone(rc, milliseconds(io));
       },
       .AGAIN => return,
       .INTR => {},

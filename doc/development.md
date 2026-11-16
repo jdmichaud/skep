@@ -34,13 +34,15 @@
 
 ## Talking to the dongle
 
-- `zig build probe -- <device>` resets a Silicon Labs EmberZNet dongle and
-  reports its EZSP and firmware versions, and whether it sent XON/XOFF.
+- `zig build probe -- <device>` starts a Silicon Labs EmberZNet dongle as
+  the `ezsp` driver does, and reports its EZSP and firmware versions,
+  whether it sent XON/XOFF, its IEEE address and the network it holds.
   `--trace` shows the bytes exchanged, `--baud` and `--rtscts` change the
   serial settings. Use the stable path under `/dev/serial/by-id/`.
 - It is the minimal I/O loop around the `ezsp` driver (milestone 2), and
-  Linux only. It resets the dongle's firmware, as every host does when it
-  starts, and changes nothing on it.
+  Linux only. Like every host when it starts, it resets the dongle's
+  firmware and brings up the network the dongle holds, which the dongle
+  then keeps running; it changes nothing stored on it.
 
 ## Releasing
 
