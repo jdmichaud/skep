@@ -101,6 +101,38 @@ pub const Form = struct {
   restore: bool = false,
 };
 
+/// An APS frame to or from a device: its header, and its payload.
+pub const Frame = struct {
+  /// For a message to send, the network address of its destination, or a broadcast address with
+  /// `broadcast`; for a message received, its sender's.
+  address: u16,
+  broadcast: bool = false,
+  profile: u16,
+  cluster: u16,
+  source_endpoint: u8,
+  destination_endpoint: u8,
+  /// Matches `send_done` and `delivered` with the message sent.
+  tag: u8 = 0,
+  /// Of a message received: the quality of the last hop.
+  lqi: u8 = 0,
+  rssi: i8 = 0,
+  len: u8 = 0,
+  payload: [max_payload_len]u8 = undefined,
+
+  /// Longest payload: what fits a Zigbee frame, with room to spare.
+  pub const max_payload_len = 127;
+
+  pub fn bytes(m: *const Frame) []const u8 {
+    return m.payload[0..m.len];
+  }
+
+  /// Sets the payload. It must fit.
+  pub fn setPayload(m: *Frame, payload: []const u8) void {
+    m.len = @intCast(payload.len);
+    @memcpy(m.payload[0..payload.len], payload);
+  }
+};
+
 /// A device the trust center saw join, rejoin or leave.
 pub const Device = struct {
   ieee: u64,
@@ -120,6 +152,12 @@ pub const Event = union(enum) {
   /// The join window opened (true) or closed.
   join_window: bool,
   device: Device,
+  /// `send` is done: null if the dongle took the message, why not otherwise.
+  send_done: struct { tag: u8, failure: ?Failure },
+  /// What became of a message the dongle took: delivered (acknowledged, for a unicast), or not.
+  delivered: struct { tag: u8, ok: bool },
+  /// A frame for the coordinator.
+  message: Frame,
   failed: Failure,
   log: struct { level: Level, message: Message },
 };
@@ -177,6 +215,30 @@ pub const Driver = union(Name) {
           null,
       }),
       .sim => |*driver| driver.form(f),
+    }
+  }
+
+  /// Sends a message, once the network is up. Reports `send_done`, then `delivered`.
+  pub fn send(d: *Driver, message: *const Frame) void {
+    switch (d.*) {
+      .ezsp => |*driver| {
+        var m: ezsp.driver.Message = .{
+          .address = message.address,
+          .broadcast = message.broadcast,
+          .aps = .{
+            .profile = message.profile,
+            .cluster = message.cluster,
+            .source_endpoint = message.source_endpoint,
+            .destination_endpoint = message.destination_endpoint,
+            .options = if (message.broadcast) 0 else ezsp.command.ApsFrame.unicast_options,
+          },
+          .tag = message.tag,
+          .len = message.len,
+        };
+        @memcpy(m.payload[0..m.len], message.bytes());
+        driver.sendMessage(&m);
+      },
+      .sim => |*driver| driver.send(message),
     }
   }
 
@@ -267,6 +329,29 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
       .permit_join_done = if (refused) |r| fromEzspFailure(.{ .refused = r }) else null,
     },
     .join_window => |open| .{ .join_window = open },
+    .send_done => |done| .{
+      .send_done = .{
+        .tag = done.tag,
+        .failure = if (done.refused) |r| fromEzspFailure(.{ .refused = r }) else null,
+      },
+    },
+    .delivered => |delivered| .{
+      .delivered = .{ .tag = delivered.tag, .ok = delivered.status.is(.ok) },
+    },
+    .message => |m| blk: {
+      var message: Frame = .{
+        .address = m.address,
+        .broadcast = m.broadcast,
+        .profile = m.aps.profile,
+        .cluster = m.aps.cluster,
+        .source_endpoint = m.aps.source_endpoint,
+        .destination_endpoint = m.aps.destination_endpoint,
+        .lqi = m.lqi,
+        .rssi = m.rssi,
+      };
+      message.setPayload(m.bytes());
+      break :blk .{ .message = message };
+    },
     .callback => |callback| .{
       .log = .{
         .level = .debug,

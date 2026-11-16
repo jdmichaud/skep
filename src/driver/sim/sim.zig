@@ -14,8 +14,11 @@ pub const Driver = struct {
   /// The coordinator's IEEE address: a locally administered one (bit 1 of the first byte), which
   /// no manufactured device carries.
   ieee: u64 = 0x0200_0000_0000_0001,
-  pending: [8]driver.Event = undefined,
+  pending: [32]driver.Event = undefined,
   pending_len: usize = 0,
+  /// The messages sent, the last ones if more were.
+  sent: [16]driver.Frame = undefined,
+  sent_len: usize = 0,
 
   pub fn start(d: *Driver) void {
     d.pending_len = 0;
@@ -46,6 +49,23 @@ pub const Driver = struct {
   pub fn permitJoin(d: *Driver, seconds: u8) void {
     d.post(.{ .permit_join_done = null });
     d.post(.{ .join_window = seconds > 0 });
+  }
+
+  /// Takes the message; it is delivered at once.
+  pub fn send(d: *Driver, message: *const driver.Frame) void {
+    if (d.sent_len == d.sent.len) {
+      std.mem.copyForwards(driver.Frame, d.sent[0..d.sent.len - 1], d.sent[1..]);
+      d.sent_len -= 1;
+    }
+    d.sent[d.sent_len] = message.*;
+    d.sent_len += 1;
+    d.post(.{ .send_done = .{ .tag = message.tag, .failure = null } });
+    d.post(.{ .delivered = .{ .tag = message.tag, .ok = true } });
+  }
+
+  /// A message comes in from a device. For tests.
+  pub fn receive(d: *Driver, message: driver.Frame) void {
+    d.post(.{ .message = message });
   }
 
   /// A simulated device joins, rejoins or leaves. For tests.

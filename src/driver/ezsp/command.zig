@@ -80,6 +80,179 @@ pub fn permitJoining(out: *[1]u8, seconds: u8) []const u8 {
   return out;
 }
 
+/// The APS header of a message, as EZSP carries it.
+pub const ApsFrame = struct {
+  profile: u16,
+  cluster: u16,
+  source_endpoint: u8,
+  destination_endpoint: u8,
+  options: u16,
+  group: u16 = 0,
+  sequence: u8 = 0,
+
+  pub const len = 11;
+
+  // Bits of the options.
+  /// Retry until the destination acknowledges.
+  pub const retry: u16 = 0x0040;
+  pub const enable_route_discovery: u16 = 0x0100;
+  pub const enable_address_discovery: u16 = 0x1000;
+  /// zigbee-herdsman's options for unicasts.
+  pub const unicast_options = retry | enable_route_discovery | enable_address_discovery;
+
+  fn write(a: ApsFrame, w: *Writer) void {
+    w.int(u16, a.profile);
+    w.int(u16, a.cluster);
+    w.int(u8, a.source_endpoint);
+    w.int(u8, a.destination_endpoint);
+    w.int(u16, a.options);
+    w.int(u16, a.group);
+    w.int(u8, a.sequence);
+  }
+
+  fn read(r: *Reader) error{ TooShort }!ApsFrame {
+    return .{
+      .profile = try r.int(u16),
+      .cluster = try r.int(u16),
+      .source_endpoint = try r.int(u8),
+      .destination_endpoint = try r.int(u8),
+      .options = try r.int(u16),
+      .group = try r.int(u16),
+      .sequence = try r.int(u8),
+    };
+  }
+};
+
+/// Longest message payload: its length is a byte.
+pub const max_payload_len = 255;
+
+/// Parameters of `send_unicast`, sent straight to a network address. `out` holds 18 bytes more
+/// than the payload. The message tag is a byte before EZSP 14, two from 14.
+pub fn sendUnicast(
+  out: []u8,
+  destination: u16,
+  aps: ApsFrame,
+  tag: u8,
+  payload: []const u8,
+  version: u8,
+) []const u8 {
+  var w: Writer = .{ .buffer = out };
+  w.int(u8, 0x00); // EMBER_OUTGOING_DIRECT
+  w.int(u16, destination);
+  aps.write(&w);
+  if (version < 14) {
+    w.int(u8, tag);
+  } else {
+    w.int(u16, tag);
+  }
+  w.int(u8, @intCast(payload.len));
+  @memcpy(out[w.len..][0..payload.len], payload);
+  w.len += payload.len;
+  return w.written();
+}
+
+/// Parameters of `send_broadcast`, to a broadcast address such as 0xfffc (routers). `out` holds
+/// 21 bytes more than the payload. EZSP 14 adds an alias and a network sequence, unused here.
+pub fn sendBroadcast(
+  out: []u8,
+  destination: u16,
+  aps: ApsFrame,
+  radius: u8,
+  tag: u8,
+  payload: []const u8,
+  version: u8,
+) []const u8 {
+  var w: Writer = .{ .buffer = out };
+  if (version < 14) {
+    w.int(u16, destination);
+  } else {
+    w.int(u16, 0); // alias
+    w.int(u16, destination);
+    w.int(u8, 0); // network sequence
+  }
+  aps.write(&w);
+  w.int(u8, radius);
+  if (version < 14) {
+    w.int(u8, tag);
+  } else {
+    w.int(u16, tag);
+  }
+  w.int(u8, @intCast(payload.len));
+  @memcpy(out[w.len..][0..payload.len], payload);
+  w.len += payload.len;
+  return w.written();
+}
+
+/// The answer to `send_unicast` and `send_broadcast`: whether the NCP took the message.
+pub fn parseSend(parameters: []const u8, version: u8) error{ TooShort }!Status {
+  var r: Reader = .{ .bytes = parameters };
+  return r.statusOf(version);
+}
+
+/// `incoming_message_handler`: a message for the coordinator.
+pub const IncomingMessage = struct {
+  /// 0 unicast, 1 unicast reply, 2 multicast, 3 multicast loopback, 4 broadcast, 5 broadcast
+  /// loopback.
+  type: u8,
+  aps: ApsFrame,
+  lqi: u8,
+  rssi: i8,
+  sender: u16,
+  payload: []const u8,
+
+  /// Before EZSP 14, the link quality and the sender come before the payload; from 14, in a
+  /// packet info structure that also has the sender's IEEE address.
+  pub fn parse(parameters: []const u8, version: u8) error{ TooShort }!IncomingMessage {
+    var r: Reader = .{ .bytes = parameters };
+    var m: IncomingMessage = undefined;
+    m.type = try r.int(u8);
+    m.aps = try ApsFrame.read(&r);
+    if (version < 14) {
+      m.lqi = try r.int(u8);
+      m.rssi = @bitCast(try r.int(u8));
+      m.sender = try r.int(u16);
+      _ = try r.slice(2); // binding and address table indexes
+    } else {
+      m.sender = try r.int(u16);
+      _ = try r.slice(8 + 2); // IEEE address, binding and address table indexes
+      m.lqi = try r.int(u8);
+      m.rssi = @bitCast(try r.int(u8));
+      _ = try r.int(u32); // timestamp
+    }
+    const len = try r.int(u8);
+    m.payload = try r.slice(len);
+    return m;
+  }
+};
+
+/// `message_sent_handler`: what became of a message the coordinator sent.
+pub const MessageSent = struct {
+  destination: u16,
+  aps: ApsFrame,
+  tag: u8,
+  status: Status,
+
+  /// Before EZSP 14 the status comes after the tag; from 14 it comes first, and the tag is two
+  /// bytes.
+  pub fn parse(parameters: []const u8, version: u8) error{ TooShort }!MessageSent {
+    var r: Reader = .{ .bytes = parameters };
+    var m: MessageSent = undefined;
+    if (version >= 14) {
+      m.status = .{ .value = try r.int(u32), .sl = true };
+    }
+    _ = try r.int(u8); // type
+    m.destination = try r.int(u16);
+    m.aps = try ApsFrame.read(&r);
+    if (version < 14) {
+      m.tag = try r.int(u8);
+      m.status = try r.statusOf(version);
+    } else {
+      m.tag = @truncate(try r.int(u16));
+    }
+    return m;
+  }
+};
+
 /// A key and what goes with it: how keys are read before EZSP 13 (`get_key`).
 pub const KeyStruct = struct {
   key: [16]u8,
@@ -687,6 +860,154 @@ test "keys, before and since EZSP 13" {
   try testing.expectEqual(12345, info.frame_counter);
 }
 
+test "messages, before and since EZSP 14" {
+  const aps: ApsFrame = .{
+    .profile = 0x0104,
+    .cluster = 0x0006,
+    .source_endpoint = 1,
+    .destination_endpoint = 1,
+    .options = ApsFrame.unicast_options,
+  };
+  var out: [40]u8 = undefined;
+  try testing.expectEqualSlices(
+    u8,
+    &hex(
+      "00" ++
+        "7371" ++
+        "0401" ++
+        "0600" ++
+        "01" ++
+        "01" ++
+        "4011" ++
+        "0000" ++
+        "00" ++
+        "07" ++
+        "03" ++
+        "011200",
+    ),
+    sendUnicast(&out, 0x7173, aps, 7, &hex("011200"), 8),
+  );
+  try testing.expectEqualSlices(
+    u8,
+    &hex(
+      "00" ++
+        "7371" ++
+        "0401" ++
+        "0600" ++
+        "01" ++
+        "01" ++
+        "4011" ++
+        "0000" ++
+        "00" ++
+        "0700" ++
+        "03" ++
+        "011200",
+    ),
+    sendUnicast(&out, 0x7173, aps, 7, &hex("011200"), 14),
+  );
+  try testing.expectEqualSlices(
+    u8,
+    &hex(
+      "fcff" ++
+        "0000" ++
+        "3600" ++
+        "00" ++
+        "00" ++
+        "0000" ++
+        "0000" ++
+        "00" ++
+        "1e" ++
+        "08" ++
+        "02" ++
+        "00fe",
+    ),
+    sendBroadcast(
+      &out,
+      0xfffc,
+      .{
+        .profile = 0,
+        .cluster = 0x0036,
+        .source_endpoint = 0,
+        .destination_endpoint = 0,
+        .options = 0,
+      },
+      30,
+      8,
+      &hex("00fe"),
+      8,
+    ),
+  );
+  try testing.expectEqual(
+    7 + 11 + 2 + 2,
+    sendBroadcast(
+      &out,
+      0xfffc,
+      .{
+        .profile = 0,
+        .cluster = 0x0036,
+        .source_endpoint = 0,
+        .destination_endpoint = 0,
+        .options = 0,
+      },
+      30,
+      8,
+      &hex("00fe"),
+      14,
+    ).len,
+  );
+
+  // From the plug: its On/Off attribute, on.
+  const report = try IncomingMessage.parse(
+    &hex(
+      "00" ++
+        "04010600010140010000d9" ++
+        "ff" ++
+        "ee" ++
+        "7371" ++
+        "ffff" ++
+        "07" ++
+        "08d90a00001001",
+    ),
+    8,
+  );
+  try testing.expectEqual(0x0006, report.aps.cluster);
+  try testing.expectEqual(0x7173, report.sender);
+  try testing.expectEqual(-18, report.rssi);
+  try testing.expectEqualSlices(u8, &hex("08d90a00001001"), report.payload);
+  const v14 = try IncomingMessage.parse(
+    &hex(
+      "00" ++
+        "04010600010140010000d9" ++
+        "7371" ++
+        "971700060eb4ffff" ++
+        "ffff" ++
+        "ff" ++
+        "ee" ++
+        "00000000" ++
+        "01" ++
+        "08",
+    ),
+    14,
+  );
+  try testing.expectEqual(0x7173, v14.sender);
+  try testing.expectEqual(-18, v14.rssi);
+  try testing.expectEqualSlices(u8, &hex("08"), v14.payload);
+
+  const sent = try MessageSent.parse(
+    &hex("00" ++ "7371" ++ "04010600010140110000" ++ "21" ++ "07" ++ "66" ++ "03" ++ "011200"),
+    8,
+  );
+  try testing.expectEqual(0x7173, sent.destination);
+  try testing.expectEqual(7, sent.tag);
+  try testing.expectEqual(0x66, sent.status.value);
+  const sent14 = try MessageSent.parse(
+    &hex("00000000" ++ "00" ++ "7371" ++ "04010600010140110000" ++ "21" ++ "0700" ++ "00"),
+    14,
+  );
+  try testing.expectEqual(7, sent14.tag);
+  try testing.expect(sent14.status.is(.ok));
+}
+
 test "parse the network parameters" {
   const parsed = try parseGetNetworkParameters(
     &hex(
@@ -737,6 +1058,8 @@ fn fuzzParse(_: void, smith: *testing.Smith) !void {
   _ = KeyStruct.parse(bytes[0..len], version) catch {};
   _ = parseExportKey(bytes[0..len], version) catch {};
   _ = NetworkKeyInfo.parse(bytes[0..len]) catch {};
+  _ = IncomingMessage.parse(bytes[0..len], version) catch {};
+  _ = MessageSent.parse(bytes[0..len], version) catch {};
   const value = parseGetValue(bytes[0..len], version) catch return;
   _ = VersionInfo.parse(value.value) catch {};
 }

@@ -497,6 +497,8 @@ fn process(ctx: *Context) c_int {
         ctx.finish(err(errnoOf(failure.kind)));
       },
       .log => |entry| ctx.logMessage(entry.level, entry.message.text()),
+      // Nothing sends or listens yet.
+      .send_done, .delivered, .message => {},
     }
     ctx.fillSpares() catch return err(.NOMEM);
   }

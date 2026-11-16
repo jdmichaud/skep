@@ -158,8 +158,37 @@ pub const Event = union(enum) {
   configuration_refused: struct { id: command.ConfigId, status: command.Status },
   /// The NCP refused a command the driver can do without.
   command_refused: Refused,
+  /// `send` is done: null if the NCP took the message, what it refused otherwise.
+  send_done: struct { tag: u8, refused: ?Refused },
+  /// What became of a message the NCP took: delivered (acknowledged, for a unicast), or not.
+  delivered: struct { tag: u8, status: command.Status },
+  /// A message for the coordinator.
+  message: Message,
   /// A callback, as received, for the debug log.
   callback: Callback,
+};
+
+/// A message, to send or received, with its payload copied.
+pub const Message = struct {
+  /// For a message to send, a unicast to a network address, or a broadcast to one of the
+  /// broadcast addresses; for a message received, the sender.
+  address: u16,
+  broadcast: bool = false,
+  aps: command.ApsFrame,
+  /// Matches `send_done` and `delivered` with the message sent.
+  tag: u8 = 0,
+  /// Of a message received.
+  lqi: u8 = 0,
+  rssi: i8 = 0,
+  len: u8 = 0,
+  payload: [max_payload_len]u8 = undefined,
+
+  /// Longest payload: what fits a Zigbee frame, with room to spare.
+  pub const max_payload_len = 127;
+
+  pub fn bytes(m: *const Message) []const u8 {
+    return m.payload[0..m.len];
+  }
 };
 
 /// A callback, copied.
@@ -191,6 +220,8 @@ pub const Driver = struct {
   form_parameters: FormParameters = undefined,
   /// What `permitJoin` asked for.
   permit_seconds: u8 = 0,
+  /// The tag of the message `send` is sending.
+  sending_tag: u8 = 0,
   ready: Ready = undefined,
   policy_index: usize = 0,
   /// Restarting after a saved network was put back: the network the NCP then resumes is reported
@@ -228,6 +259,8 @@ pub const Driver = struct {
     clearing_transient_keys,
     setting_join_policy,
     permitting,
+    // `send`:
+    sending,
     // `form`:
     leaving,
     waiting_for_leave,
@@ -330,6 +363,46 @@ pub const Driver = struct {
       d.send(.leave_network, command.leaveNetwork(&out, d.ready.version.protocol_version), d.now);
     } else {
       d.restoreFrameCounter(d.now);
+    }
+  }
+
+  /// Sends a message, once the network is up. Reports `send_done`, then `delivered` once the
+  /// message was delivered or given up on.
+  pub fn sendMessage(d: *Driver, message: *const Message) void {
+    std.debug.assert(d.step == .running);
+    d.sending_tag = message.tag;
+    d.step = .sending;
+    const version = d.ready.version.protocol_version;
+    var out: [21 + Message.max_payload_len]u8 = undefined;
+    if (message.broadcast) {
+      // The default radius of the network.
+      const radius = 0;
+      d.send(
+        .send_broadcast,
+        command.sendBroadcast(
+          &out,
+          message.address,
+          message.aps,
+          radius,
+          message.tag,
+          message.bytes(),
+          version,
+        ),
+        d.now,
+      );
+    } else {
+      d.send(
+        .send_unicast,
+        command.sendUnicast(
+          &out,
+          message.address,
+          message.aps,
+          message.tag,
+          message.bytes(),
+          version,
+        ),
+        d.now,
+      );
     }
   }
 
@@ -483,6 +556,24 @@ pub const Driver = struct {
         } else if (status.is(.network_closed)) {
           d.post(.{ .join_window = false });
         }
+      } else if (received.id == .incoming_message_handler) {
+        const m = command.IncomingMessage.parse(received.parameters, version) catch
+          return d.fail(.bad_response);
+        if (m.payload.len > Message.max_payload_len) return;
+        var message: Message = .{
+          .address = m.sender,
+          .broadcast = m.type >= 2,
+          .aps = m.aps,
+          .lqi = m.lqi,
+          .rssi = m.rssi,
+          .len = @intCast(m.payload.len),
+        };
+        @memcpy(message.payload[0..message.len], m.payload);
+        d.post(.{ .message = message });
+      } else if (received.id == .message_sent_handler) {
+        const sent = command.MessageSent.parse(received.parameters, version) catch
+          return d.fail(.bad_response);
+        d.post(.{ .delivered = .{ .tag = sent.tag, .status = sent.status } });
       } else if (received.id == .trust_center_join_handler) {
         const join = command.TrustCenterJoin.parse(received.parameters) catch
           return d.fail(.bad_response);
@@ -565,6 +656,20 @@ pub const Driver = struct {
         d.step = .permitting;
         var out: [1]u8 = undefined;
         d.send(.permit_joining, command.permitJoining(&out, d.permit_seconds), now);
+      },
+      .sending => {
+        if (received.id != .send_unicast and received.id != .send_broadcast) {
+          return d.fail(.bad_response);
+        }
+        const status = command.parseSend(received.parameters, version) catch
+          return d.fail(.bad_response);
+        d.step = .running;
+        d.post(.{
+          .send_done = .{
+            .tag = d.sending_tag,
+            .refused = if (status.is(.ok)) null else .{ .command = received.id, .status = status },
+          },
+        });
       },
       .permitting => {
         const status = d.statusOf(received, .permit_joining) orelse return;
@@ -1495,6 +1600,91 @@ test "a command asked for after a quiet spell gets its full time" {
   driver.advance(ncp.now + 1);
   try testing.expectEqual(null, skipCallbacks(&driver));
   try testing.expectEqual(ncp.now, driver.sent_at);
+}
+
+test "messages go out, and come in" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, true);
+  var message: Message = .{
+    .address = 0x7173,
+    .aps = .{
+      .profile = 0x0104,
+      .cluster = 0x0006,
+      .source_endpoint = 1,
+      .destination_endpoint = 1,
+      .options = command.ApsFrame.unicast_options,
+    },
+    .tag = 9,
+    .len = 3,
+  };
+  @memcpy(message.payload[0..3], &hex("010000"));
+  driver.sendMessage(&message);
+  const unicast = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqualSlices(u8, &hex("3400" ++ "00" ++ "7371"), unicast[3..8]);
+  try testing.expectEqualSlices(u8, &hex("09" ++ "03" ++ "010000"), unicast[unicast.len - 5..]);
+  // EZSP 8: a status, and the APS sequence number.
+  ncp.respond(&.{ unicast[0], 0x80, 0x01, 0x34, 0x00, 0x00, 0x2a });
+  const done = skipCallbacks(&driver).?.send_done;
+  try testing.expectEqual(9, done.tag);
+  try testing.expectEqual(null, done.refused);
+  // Delivered, then the plug answers with a Default Response.
+  ncp.respond(
+    &hex(
+      "0090013f00" ++
+        "00" ++
+        "7371" ++
+        "04010600010140110000" ++
+        "2a" ++
+        "09" ++
+        "00" ++
+        "03" ++
+        "010000",
+    ),
+  );
+  ncp.respond(
+    &hex(
+      "0090014500" ++
+        "00" ++
+        "04010600010140010000d9" ++
+        "ff" ++
+        "ee" ++
+        "7371" ++
+        "ffff" ++
+        "05" ++
+        "1800" ++
+        "0b0000",
+    ),
+  );
+  const delivered = skipCallbacks(&driver).?.delivered;
+  try testing.expectEqual(9, delivered.tag);
+  try testing.expect(delivered.status.is(.ok));
+  const received = skipCallbacks(&driver).?.message;
+  try testing.expectEqual(0x7173, received.address);
+  try testing.expectEqual(0x0006, received.aps.cluster);
+  try testing.expectEqualSlices(u8, &hex("18000b0000"), received.bytes());
+
+  // A broadcast to the routers.
+  var broadcast: Message = .{
+    .address = 0xfffc,
+    .broadcast = true,
+    .aps = .{
+      .profile = 0,
+      .cluster = 0x0036,
+      .source_endpoint = 0,
+      .destination_endpoint = 0,
+      .options = 0,
+    },
+    .tag = 10,
+    .len = 3,
+  };
+  @memcpy(broadcast.payload[0..3], &hex("013c01"));
+  driver.sendMessage(&broadcast);
+  const sent = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqualSlices(u8, &hex("3600" ++ "fcff"), sent[3..7]);
+  ncp.respond(&.{ sent[0], 0x80, 0x01, 0x36, 0x00, 0x70, 0x00 });
+  const refused = skipCallbacks(&driver).?.send_done;
+  try testing.expectEqual(10, refused.tag);
+  try testing.expectEqual(0x70, refused.refused.?.status.value);
 }
 
 test "a refused security state fails the driver" {

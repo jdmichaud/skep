@@ -196,6 +196,9 @@ pub fn main(init: std.process.Init) !u8 {
     .join_window,
     .device,
     .callback,
+    .send_done,
+    .delivered,
+    .message,
     => unreachable,
   }
 }
@@ -213,7 +216,7 @@ fn nextResult(driver: *Driver, out: *Io.Writer) !?ezsp.driver.Event {
         refused.status.value,
       }),
       // The probe opens no join window, so none of these comes before ready.
-      .permit_join_done, .join_window, .device, .callback => {},
+      .permit_join_done, .join_window, .device, .callback, .send_done, .delivered, .message => {},
       .ready, .failed, .formed, .refreshed => return event,
     }
   }
