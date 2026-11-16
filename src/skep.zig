@@ -543,6 +543,7 @@ test {
   _ = @import("Context.zig");
   _ = @import("Event.zig");
   _ = @import("State.zig");
+  _ = @import("zcl.zig");
   _ = @import("driver/driver.zig");
   _ = @import("driver/ezsp/ezsp.zig");
   std.testing.refAllDecls(@This());
