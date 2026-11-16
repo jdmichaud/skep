@@ -66,7 +66,11 @@ publishes the section of each released version as its release notes.
   set up and remove devices, read and write their attributes, configure
   their reporting, bind them, send them commands, open the join window
   and watch what happens.
-- Man pages, written in scdoc and rendered at build time by zzdoc.
+- skep, the command-line client of skepd: `skep devices`, `skep permit`,
+  `skep rename`, `skep read`, `skep on` and the others, and `skep watch`
+  for events, in words or, with `--json`, as skepd sends them.
+- Man pages, written in scdoc and rendered at build time by zzdoc:
+  skep(1) and skep-protocol(7).
 - `zig build probe -- <device>`, a development tool that resets an
   EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to

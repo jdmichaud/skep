@@ -50,6 +50,7 @@ pub fn build(b: *std.Build) !void {
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = serial })).step);
   addProbe(b, test_step, target, optimize, serial);
   addSkepd(b, test_step, target, optimize, skep_h, serial, library);
+  addSkep(b, test_step, target, optimize, build_options);
   if (b.isRoot()) {
     try addFormatSteps(b);
     try addManpages(b);
@@ -259,7 +260,7 @@ fn addManpages(b: *std.Build) !void {
   const rendered = run.addOutputDirectoryArg2("man", .{});
   // One at a time: with Zig 0.17, installing a directory into a prefix that does not exist yet
   // installs nothing.
-  for ([_][]const u8{ "man7/skep-protocol.7" }) |page| {
+  for ([_][]const u8{ "man1/skep.1", "man7/skep-protocol.7" }) |page| {
     const install = b.addInstallFileWithDir(
       rendered.path(b, page),
       .{ .custom = b.fmt("share/man/{s}", .{ std.fs.path.dirname(page).? }) },
@@ -267,4 +268,27 @@ fn addManpages(b: *std.Build) !void {
     );
     b.getInstallStep().dependOn(&install.step);
   }
+}
+
+/// skep, the command-line client of skepd: a program of its own, which talks to skepd's socket and
+/// knows nothing of libskep. `zig build skep -- <command>` runs it.
+fn addSkep(
+  b: *std.Build,
+  test_step: *std.Build.Step,
+  target: std.Build.ResolvedTarget,
+  optimize: std.lang.Optimize,
+  build_options: *std.Build.Step.Options,
+) void {
+  const module = b.createModule(.{
+    .root_source_file = b.path("src/skep/main.zig"),
+    .target = target,
+    .optimize = optimize,
+  });
+  module.addOptions("build_options", build_options);
+  const skep = b.addExecutable(.{ .name = "skep", .root_module = module });
+  b.installArtifact(skep);
+  const run = b.addRunArtifact(skep);
+  run.addPassthruArgs();
+  b.step("skep", "Run skep (-- <command>)").dependOn(&run.step);
+  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = module })).step);
 }

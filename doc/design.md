@@ -477,8 +477,10 @@ The API is in [include/skep.h](../include/skep.h).
 ## skep
 
 - A thin client of the skepd socket; it contains no Zigbee logic.
-- Subcommands such as `skep permit 60`, `skep devices`, `skep rename`,
-  `skep watch`. The exact set is settled in skep(1).
+- Subcommands follow the protocol's methods, `skep permit 60`, `skep
+  devices`, `skep rename`, `skep read`, `skep watch` and the others,
+  with `on`, `off` and `toggle` for the On/Off cluster; skep(1) lists
+  them.
 - `--help` and `--version`; data on stdout, diagnostics on stderr. Human
   readable output by default, `--json` for scripts. Exit status 0 on
   success, 1 on failure, 2 on usage errors.
