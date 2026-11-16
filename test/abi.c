@@ -41,6 +41,9 @@ int main(void) {
   struct skep_allocator allocator = { .alloc = counting_alloc, .free = counting_free };
   uint8_t seed[SKEP_SEED_SIZE] = { 0 };
   skep_ctx *ctx = NULL;
+  skep_ctx *other = NULL;
+  uint8_t *state = NULL;
+  size_t state_len = 0;
   unsigned baudrate = 0;
   enum skep_flow_control flow_control = SKEP_FLOW_CONTROL_NONE;
   const char *message = NULL;
@@ -80,7 +83,23 @@ int main(void) {
   CHECK(skep_event_get_device(event) == 0);
   skep_event_free(event);
   CHECK(skep_get_network(ctx, &channel, &pan_id, &extended_pan_id) == 0 && channel == 20);
+  event = skep_next_event(ctx);
+  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_STATE_CHANGED);
+  skep_event_free(event);
   CHECK(skep_next_event(ctx) == NULL);
+
+  /* The state: first its length, then the state itself, a JSON document. */
+  CHECK(skep_export_state(ctx, NULL, 0, &state_len) == -ENOBUFS && state_len > 0);
+  state = malloc(state_len);
+  CHECK(state != NULL);
+  CHECK(skep_export_state(ctx, state, state_len, &state_len) == 0 && state[0] == '{');
+  CHECK(skep_import_state(ctx, state, state_len) == -EBUSY);
+  CHECK(skep_refresh_state(ctx, &request) == 0 && request != 0);
+  CHECK(skep_advance(ctx, 0) == 0);
+  event = skep_next_event(ctx);
+  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_REQUEST_DONE);
+  CHECK(skep_event_get_request(event) == request && skep_event_get_error(event) == 0);
+  skep_event_free(event);
 
   CHECK(skep_permit_join(ctx, 255, &request) == -EINVAL);
   CHECK(skep_permit_join(ctx, 60, &request) == 0 && request != 0);
@@ -100,6 +119,14 @@ int main(void) {
   event = skep_next_event(ctx);
   CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_STOPPED);
   CHECK(skep_event_get_error(event) == 0);
+
+  /* The state outlives the network, and goes to another context. */
+  CHECK(skep_export_state(ctx, state, state_len, &state_len) == 0);
+  CHECK(skep_new(&allocator, seed, &other) == 0);
+  CHECK(skep_import_state(other, state, state_len) == 0);
+  CHECK(skep_import_state(other, state, state_len / 2) == -EINVAL);
+  skep_free(other);
+  free(state);
 
   /* Events outlive their context. */
   skep_free(ctx);

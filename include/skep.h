@@ -185,10 +185,13 @@ int skep_get_serial_defaults(const skep_ctx *ctx, unsigned *baudrate,
 
 /*
  * Bring the network up, once the caller has opened the dongle.
- * - With an imported state: resume its network if the dongle holds it,
- *   restore it onto the dongle if the dongle holds none. If the dongle
- *   holds another network, stop with -EEXIST rather than lose either,
- *   unless the replace-network option allows overwriting it.
+ * - With an imported state: resume its network if the dongle holds it
+ *   (the same extended PAN ID and network key), restore it onto the
+ *   dongle if the dongle holds none. If the dongle holds another network,
+ *   stop with -EEXIST rather than lose either, unless the replace-network
+ *   option allows overwriting it. The state of the last network started
+ *   counts as imported, so a context that stops and starts again comes
+ *   back to the same network.
  * - Without a state: resume the dongle's network if it holds one, unless
  *   replace-network asks for a new one; otherwise form a new network.
  *
@@ -206,9 +209,10 @@ int skep_start(skep_ctx *ctx);
  * from the dongle (see skep_refresh_state()), then report
  * SKEP_EVENT_STOPPED. Keep running the loop until then, and save the
  * state after SKEP_EVENT_STATE_CHANGED as usual. The network stays on the
- * dongle and is resumed by the next skep_start().
+ * dongle and is resumed by the next skep_start(). Calling it again while
+ * stopping does nothing.
  *
- * Errors: -ENETDOWN (not started).
+ * Errors: -ENOMEM, -ENETDOWN (not started).
  */
 int skep_stop(skep_ctx *ctx);
 
@@ -591,11 +595,13 @@ const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
  */
 
 /*
- * Copy the current state into buf (size bytes). Stores the length of the
- * state in *len; if buf is too small, nothing is copied and -ENOBUFS is
- * returned, so a first call with size 0 tells how much room is needed.
+ * Copy the current state into buf (size bytes): text, without a
+ * terminating NUL. Stores the length of the state in *len; if buf is too
+ * small, nothing is copied and -ENOBUFS is returned, so a first call with
+ * buf NULL and size 0 tells how much room is needed.
  *
- * Errors: -ENOBUFS, -ENODATA (no network yet: nothing worth saving).
+ * Errors: -ENOBUFS, -ENODATA (no network yet: nothing worth saving),
+ * -EINVAL (buf NULL with a size).
  */
 int skep_export_state(skep_ctx *ctx, uint8_t *buf, size_t size, size_t *len);
 
@@ -607,15 +613,15 @@ int skep_export_state(skep_ctx *ctx, uint8_t *buf, size_t size, size_t *len);
  * refresh them by itself: the application decides when, for instance
  * every hour and right before moving the network to another dongle.
  *
- * Errors: -ENETDOWN.
+ * Errors: -ENETDOWN, -ENOBUFS (a refresh is already pending).
  */
 int skep_refresh_state(skep_ctx *ctx, uint32_t *request);
 
 /*
  * Load a state saved by skep_export_state(). Only before skep_start().
  *
- * Errors: -EBUSY (already started), -EINVAL (not a valid state),
- * -ENOTSUP (written by a newer libskep).
+ * Errors: -ENOMEM, -EBUSY (already started), -EINVAL (not a valid
+ * state), -ENOTSUP (written by a newer libskep).
  */
 int skep_import_state(skep_ctx *ctx, const uint8_t *data, size_t len);
 

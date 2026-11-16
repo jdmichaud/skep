@@ -140,6 +140,20 @@ export fn skep_event_get_duration(event: *const Event) c_uint {
   return event.duration;
 }
 
+export fn skep_export_state(ctx: *const Context, buf: ?[*]u8, size: usize, len: *usize) c_int {
+  const out: []u8 = if (buf) |b| b[0..size] else if (size == 0) &.{} else return err(.INVAL);
+  return ctx.exportState(out, len);
+}
+
+export fn skep_refresh_state(ctx: *Context, request: *u32) c_int {
+  return ctx.refreshState(request);
+}
+
+export fn skep_import_state(ctx: *Context, data: ?[*]const u8, len: usize) c_int {
+  const bytes: []const u8 = if (data) |d| d[0..len] else if (len == 0) &.{} else return err(.INVAL);
+  return ctx.importState(bytes);
+}
+
 export fn skep_get_network(ctx: *Context, channel: *u8, pan_id: *u16, extended_pan_id: *u64) c_int {
   const network = ctx.network orelse return err(.NETDOWN);
   channel.* = network.channel;
@@ -224,9 +238,16 @@ test "the sim driver resumes the network of the simulated dongle" {
   var extended_pan_id: u64 = 0;
   try testing.expectEqual(0, skep_get_network(ctx, &channel, &pan_id, &extended_pan_id));
   try testing.expectEqual(20, channel);
+  // The state comes from the dongle's network.
+  try testing.expectEqual(@backingInt(Event.Type.state_changed), try nextEventType(ctx));
 
+  // Stopping refreshes the state first: the dongle's counters moved.
+  ctx.driver.?.sim.network.?.security.network_frame_counter = 1234;
   try testing.expectEqual(0, skep_stop(ctx));
+  try testing.expectEqual(0, skep_stop(ctx));
+  try testing.expectEqual(@backingInt(Event.Type.state_changed), try nextEventType(ctx));
   try testing.expectEqual(@backingInt(Event.Type.stopped), try nextEventType(ctx));
+  try testing.expectEqual(1234, ctx.state.?.network_frame_counter);
   try testing.expectEqual(
     err(.NETDOWN),
     skep_get_network(ctx, &channel, &pan_id, &extended_pan_id),
@@ -292,6 +313,7 @@ test "a lost link stops at once, and events outlive their context" {
   ctx.sim_dongle.network = sim.testNetwork(.{ .channel = 15, .pan_id = 1, .extended_pan_id = 1 });
   try testing.expectEqual(0, skep_start(ctx));
   try testing.expectEqual(@backingInt(Event.Type.started), try nextEventType(ctx));
+  try testing.expectEqual(@backingInt(Event.Type.state_changed), try nextEventType(ctx));
   skep_link_lost(ctx);
   const stopped = skep_next_event(ctx).?;
   skep_free(ctx);
@@ -321,6 +343,7 @@ test "devices join while the window is open" {
   try testing.expectEqual(err(.NETDOWN), skep_permit_join(ctx, 60, &request));
   try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
   try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
+  try testing.expectEqual(@backingInt(Event.Type.state_changed), try nextEventType(ctx));
 
   try testing.expectEqual(err(.INVAL), skep_permit_join(ctx, 255, &request));
   try testing.expectEqual(0, skep_permit_join(ctx, 60, &request));
@@ -346,8 +369,105 @@ test "devices join while the window is open" {
   defer skep_event_free(joined);
   try testing.expectEqual(@backingInt(Event.Type.device_joined), skep_event_get_type(joined));
   try testing.expectEqual(0x00124b0012345678, skep_event_get_device(joined));
-  // The rejoin is only logged, at debug level.
+  // The new device is in the state; the rejoin, with the same address, is only logged.
+  try testing.expectEqual(@backingInt(Event.Type.state_changed), try nextEventType(ctx));
   try testing.expectEqual(@backingInt(Event.Type.device_left), try nextEventType(ctx));
+}
+
+/// Exports the state into a buffer of the testing allocator.
+fn exportState(ctx: *Context) ![]u8 {
+  var len: usize = 0;
+  try testing.expectEqual(err(.NOBUFS), skep_export_state(ctx, null, 0, &len));
+  const buf = try testing.allocator.alloc(u8, len);
+  errdefer testing.allocator.free(buf);
+  try testing.expectEqual(0, skep_export_state(ctx, buf.ptr, buf.len, &len));
+  try testing.expectEqual(buf.len, len);
+  return buf;
+}
+
+/// The events up to the next of type `wanted`, which is returned: null if there is none.
+fn nextOfType(ctx: *Context, wanted: Event.Type) !?*Event {
+  for (0..10) |_| {
+    if (skep_advance(ctx, 0) != 0) return error.OutOfMemory;
+    const event = skep_next_event(ctx) orelse return null;
+    if (skep_event_get_type(event) == @backingInt(wanted)) return event;
+    skep_event_free(event);
+  }
+  return null;
+}
+
+test "the state is exported, and brings the network back onto a new dongle" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  var len: usize = 0;
+  try testing.expectEqual(err(.NODATA), skep_export_state(ctx, null, 0, &len));
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
+  try testing.expectEqual(@backingInt(Event.Type.state_changed), try nextEventType(ctx));
+  var request: u32 = 0;
+  try testing.expectEqual(0, skep_permit_join(ctx, 60, &request));
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .joined });
+  skep_event_free((try nextOfType(ctx, .state_changed)).?);
+  try testing.expectEqual(null, try nextEventType(ctx));
+  // A refresh reports the counters that moved, then ends.
+  ctx.driver.?.sim.network.?.security.network_frame_counter = 5000;
+  ctx.driver.?.sim.network.?.security.trust_center_frame_counter = 70;
+  try testing.expectEqual(0, skep_refresh_state(ctx, &request));
+  var second: u32 = 0;
+  try testing.expectEqual(err(.NOBUFS), skep_refresh_state(ctx, &second));
+  try testing.expectEqual(@backingInt(Event.Type.state_changed), try nextEventType(ctx));
+  const done = skep_next_event(ctx).?;
+  try testing.expectEqual(request, skep_event_get_request(done));
+  skep_event_free(done);
+  const saved = try exportState(ctx);
+  defer testing.allocator.free(saved);
+  try testing.expect(std.mem.indexOf(u8, saved, "\"frame_counter\": 5000") != null);
+  try testing.expect(std.mem.indexOf(u8, saved, "\"ieee_address\": \"00124b0012345678\"") != null);
+
+  // A new dongle, of another IEEE address and without a network.
+  const new = try testContext(&testing.allocator);
+  defer skep_free(new);
+  try testing.expectEqual(0, skep_set_option(new, "driver", "sim"));
+  try testing.expectEqual(err(.INVAL), skep_import_state(new, saved.ptr, saved.len - 10));
+  try testing.expectEqual(0, skep_import_state(new, saved.ptr, saved.len));
+  new.sim_dongle.ieee = 0x0200_0000_0000_0002;
+  try testing.expectEqual(@backingInt(Event.Origin.restored), try startedOrigin(new));
+  try testing.expectEqual(err(.BUSY), skep_import_state(new, saved.ptr, saved.len));
+  const network = new.driver.?.sim.network.?;
+  try testing.expectEqual(ctx.network.?, network.network);
+  try testing.expectEqual(ctx.state.?.network_key, network.security.network_key);
+  // The counters, with the margin for frames sent since the state was saved.
+  try testing.expectEqual(5000 + 100000, network.security.network_frame_counter);
+  try testing.expectEqual(70 + 100000, network.security.trust_center_frame_counter);
+  try testing.expectEqual(0x00124b0012345678, new.state.?.devices.items[0].ieee);
+  try testing.expectEqual(0x0200_0000_0000_0002, new.state.?.coordinator_ieee);
+}
+
+test "a dongle holding another network is not overwritten without replace-network" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
+  const saved = try exportState(ctx);
+  defer testing.allocator.free(saved);
+
+  const other = try testContext(&testing.allocator);
+  defer skep_free(other);
+  try testing.expectEqual(0, skep_set_option(other, "driver", "sim"));
+  try testing.expectEqual(0, skep_import_state(other, saved.ptr, saved.len));
+  other.sim_dongle.network = sim.testNetwork(.{
+    .channel = 20,
+    .pan_id = 0x1a62,
+    .extended_pan_id = 1,
+  });
+  try testing.expectEqual(0, skep_start(other));
+  const stopped = (try nextOfType(other, .stopped)).?;
+  defer skep_event_free(stopped);
+  try testing.expectEqual(err(.EXIST), skep_event_get_error(stopped));
+
+  try testing.expectEqual(0, skep_set_option(other, "replace-network", "yes"));
+  try testing.expectEqual(@backingInt(Event.Origin.restored), try startedOrigin(other));
+  try testing.expectEqual(ctx.network.?, other.network.?);
 }
 
 test "stopping ends pending requests" {
@@ -357,34 +477,61 @@ test "stopping ends pending requests" {
   try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
   var request: u32 = 0;
   try testing.expectEqual(0, skep_permit_join(ctx, 60, &request));
+  var refresh: u32 = 0;
+  try testing.expectEqual(0, skep_refresh_state(ctx, &refresh));
+  // Gone before the driver reported anything.
+  while (skep_next_event(ctx)) |event| {
+    skep_event_free(event);
+  }
   skep_link_lost(ctx);
-  const done = skep_next_event(ctx).?;
-  defer skep_event_free(done);
-  try testing.expectEqual(request, skep_event_get_request(done));
-  try testing.expectEqual(err(.CANCELED), skep_event_get_error(done));
+  for ([_]u32{ request, refresh }) |id| {
+    const done = skep_next_event(ctx).?;
+    defer skep_event_free(done);
+    try testing.expectEqual(id, skep_event_get_request(done));
+    try testing.expectEqual(err(.CANCELED), skep_event_get_error(done));
+  }
   const stopped = skep_next_event(ctx).?;
   defer skep_event_free(stopped);
   try testing.expectEqual(err(.NOTCONN), skep_event_get_error(stopped));
 }
 
-/// Starting, running and stopping with the sim driver, every allocation failing in turn.
+/// Starting, running and stopping with the sim driver, then moving the network to another
+/// simulated dongle, every allocation failing in turn.
 fn startAndStop(allocator: std.mem.Allocator) !void {
   const ctx = try testContext(&allocator);
   defer skep_free(ctx);
   if (skep_set_option(ctx, "driver", "sim") != 0) return error.TestUnexpectedResult;
   ctx.sim_dongle.network = sim.testNetwork(.{ .channel = 15, .pan_id = 1, .extended_pan_id = 1 });
   if (skep_start(ctx) != 0) return error.TestUnexpectedResult;
+  try waitFor(ctx, .started);
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .joined });
+  try waitFor(ctx, .device_joined);
+  if (skep_stop(ctx) != 0) return error.OutOfMemory;
+  try waitFor(ctx, .stopped);
+
+  var len: usize = 0;
+  _ = skep_export_state(ctx, null, 0, &len);
+  const saved = try allocator.alloc(u8, len);
+  defer allocator.free(saved);
+  if (skep_export_state(ctx, saved.ptr, saved.len, &len) != 0) return error.TestUnexpectedResult;
+  const new = try testContext(&allocator);
+  defer skep_free(new);
+  if (skep_set_option(new, "driver", "sim") != 0) return error.TestUnexpectedResult;
+  const imported = skep_import_state(new, saved.ptr, saved.len);
+  if (imported == err(.NOMEM)) return error.OutOfMemory;
+  if (imported != 0) return error.TestUnexpectedResult;
+  if (skep_start(new) != 0) return error.TestUnexpectedResult;
+  try waitFor(new, .started);
+  if (new.state.?.devices.items.len != 1) return error.TestUnexpectedResult;
+}
+
+/// Runs the loop until an event of type `wanted`.
+fn waitFor(ctx: *Context, wanted: Event.Type) !void {
   for (0..10) |_| {
     const event_type = try nextEventType(ctx) orelse continue;
-    if (event_type == @backingInt(Event.Type.started)) break;
-  } else {
-    return error.TestExpectedStarted;
+    if (event_type == @backingInt(wanted)) return;
   }
-  if (skep_stop(ctx) != 0) return error.OutOfMemory;
-  while (try nextEventType(ctx)) |event_type| {
-    if (event_type == @backingInt(Event.Type.stopped)) return;
-  }
-  return error.TestExpectedStopped;
+  return error.TestExpectedEvent;
 }
 
 test "running out of memory loses nothing" {

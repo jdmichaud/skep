@@ -26,6 +26,14 @@ publishes the section of each released version as its release notes.
   network, or forms a new one, also in place of the dongle's with the
   `replace-network` option. `skep_permit_join()` opens the join window,
   and events report it, and the devices that join or leave.
+- The state: `skep_export_state()` and `skep_import_state()` save and
+  load the network, its keys and frame counters, and its devices as an
+  Open Coordinator Backup, the JSON format of zigpy and zigbee-herdsman;
+  `skep_refresh_state()` reads the counters from the dongle again, as
+  `skep_stop()` now does before stopping, and `SKEP_EVENT_STATE_CHANGED`
+  says when to save. With a state, starting resumes its network, puts
+  it back onto a dongle that holds none, and refuses to overwrite
+  another network without `replace-network`.
 - skepd, which runs the network of a dongle through libskep: it opens
   the serial port, reopens it when it disappears, logs to stderr with
   timestamps unless journald adds them, and stops cleanly on SIGTERM or

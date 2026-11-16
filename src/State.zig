@@ -37,6 +37,18 @@ pub const format_version = 1;
 /// The version of the "skep" object.
 pub const skep_version = 1;
 
+/// The state of a network just up, without devices yet.
+pub fn init(coordinator_ieee: u64, h: driver.Held) State {
+  var s: State = .{
+    .coordinator_ieee = coordinator_ieee,
+    .network = h.network,
+    .network_key = h.security.network_key,
+    .trust_center_link_key = h.security.trust_center_link_key,
+  };
+  _ = s.update(coordinator_ieee, h);
+  return s;
+}
+
 pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
   s.devices.deinit(gpa);
 }
@@ -72,16 +84,21 @@ pub fn update(s: *State, coordinator_ieee: u64, h: driver.Held) bool {
   return !std.meta.eql(before, s.*);
 }
 
-/// Records a device that joined or rejoined. Returns whether anything changed. Does not allocate
-/// when `devices` has room for one more.
+/// Records a device that joined or rejoined. Returns whether anything changed.
 pub fn addDevice(s: *State, gpa: std.mem.Allocator, device: Device) error{ OutOfMemory }!bool {
+  try s.devices.ensureUnusedCapacity(gpa, 1);
+  return s.addDeviceAssumeCapacity(device);
+}
+
+/// `addDevice`, once `devices` has room for one more.
+pub fn addDeviceAssumeCapacity(s: *State, device: Device) bool {
   for (s.devices.items) |*known| {
     if (known.ieee != device.ieee) continue;
     if (std.meta.eql(known.*, device)) return false;
     known.* = device;
     return true;
   }
-  try s.devices.append(gpa, device);
+  s.devices.appendAssumeCapacity(device);
   return true;
 }
 

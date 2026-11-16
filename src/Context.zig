@@ -6,6 +6,7 @@
 const std = @import("std");
 const CAllocator = @import("allocator.zig").CAllocator;
 const Event = @import("Event.zig");
+const State = @import("State.zig");
 const driver_layer = @import("driver/driver.zig");
 const sim = @import("driver/sim/sim.zig");
 
@@ -24,22 +25,44 @@ driver: ?driver_layer.Driver = null,
 sim_dongle: sim.Driver = .{},
 ieee: u64 = 0,
 network: ?driver_layer.Network = null,
+/// What must survive a restart: imported, or taken from the network once up. Kept across stops,
+/// so that the next start comes back to the same network.
+state: ?State = null,
+/// The network being formed is the state's, put back onto the dongle.
+restoring: bool = false,
 events: Event.Queue = .{},
 /// Events allocated ahead, so that taking an event from the driver never loses it to a failed
 /// allocation, and `linkLost` can report without allocating.
 spares: Event.Queue = .{},
-/// `linkLost` found no spare event: the STOPPED event is still to be queued.
-lost_pending: bool = false,
 /// The id of the next request.
 next_request: u32 = 1,
-/// The permit-join request waiting for the driver.
-permit_join: ?u32 = null,
+/// What the driver was asked to do and has not done, in order: one thing at a time, the first
+/// being under way when `busy`.
+ops: [max_ops]Op = undefined,
+ops_len: usize = 0,
+busy: bool = false,
+/// `stop` was called: once the driver is idle, the state is refreshed, then the context stops.
+stopping: bool = false,
 /// The join window last asked for, in seconds, reported when the dongle opens it.
 window_seconds: u8 = 0,
-/// A request ended by `linkLost`, which found no spare event to report it: still to be queued.
-canceled_pending: ?u32 = null,
+/// Requests ended without a spare event to report them, by `linkLost`: still to be queued.
+canceled_pending: [max_ops]u32 = undefined,
+canceled_len: usize = 0,
+/// The error of a STOPPED event still to be queued, after the canceled requests.
+stopped_pending: ?c_int = null,
 
 pub const Status = enum { idle, starting, running, stopped };
+
+/// Something the driver is asked to do.
+const Op = struct {
+  kind: enum { permit_join, refresh },
+  /// The request it ends; null once canceled, and for the refresh `stop` makes.
+  request: ?u32,
+  seconds: u8 = 0,
+};
+
+/// One join window and one refresh at a time.
+const max_ops = 2;
 
 pub const Options = struct {
   driver: ?driver_layer.Name = null,
@@ -55,9 +78,9 @@ pub const Options = struct {
 /// The names of `driver_layer.Level`, in its order.
 const LogLevelName = enum { @"error", warning, info, debug };
 
-/// Spare events kept ready: a log message, a request ended by the event it explains, and that
-/// event.
-const spare_count = 3;
+/// Spare events kept ready, as many as a driver event can lead to: a failure is logged, ends
+/// both requests and stops the context.
+const spare_count = 2 + max_ops;
 
 /// Creates a context. With `allocator` null, memory comes from the C library.
 pub fn create(allocator: ?CAllocator, seed: [32]u8) error{ OutOfMemory }!*Context {
@@ -75,6 +98,9 @@ pub fn create(allocator: ?CAllocator, seed: [32]u8) error{ OutOfMemory }!*Contex
 }
 
 pub fn destroy(ctx: *Context) void {
+  if (ctx.state) |*s| {
+    s.deinit(ctx.gpa);
+  }
   ctx.events.destroyAll();
   ctx.spares.destroyAll();
   var copy = ctx.c_allocator;
@@ -174,60 +200,168 @@ pub fn start(ctx: *Context) c_int {
 
 /// Opens the network to new devices, as `skep_permit_join`.
 pub fn permitJoin(ctx: *Context, seconds: c_uint, request: *u32) c_int {
-  if (ctx.status != .running) return err(.NETDOWN);
+  if (ctx.status != .running or ctx.stopping) return err(.NETDOWN);
   if (seconds > 254) return err(.INVAL);
   // One at a time: a second would race the first.
-  if (ctx.permit_join != null) return err(.NOBUFS);
+  if (ctx.pending(.permit_join)) return err(.NOBUFS);
+  const id = ctx.newRequest();
+  ctx.push(.{ .kind = .permit_join, .request = id, .seconds = @intCast(seconds) });
+  request.* = id;
+  return 0;
+}
+
+/// Reads the security counters from the dongle again, as `skep_refresh_state`.
+pub fn refreshState(ctx: *Context, request: *u32) c_int {
+  if (ctx.status != .running or ctx.stopping) return err(.NETDOWN);
+  if (ctx.pending(.refresh)) return err(.NOBUFS);
+  const id = ctx.newRequest();
+  ctx.push(.{ .kind = .refresh, .request = id });
+  request.* = id;
+  return 0;
+}
+
+/// Copies the state as JSON into `buf`, as `skep_export_state`.
+pub fn exportState(ctx: *const Context, buf: []u8, len: *usize) c_int {
+  const s = if (ctx.state) |*s| s else return err(.NODATA);
+  len.* = s.writtenLen();
+  if (buf.len < len.*) return err(.NOBUFS);
+  var w: std.Io.Writer = .fixed(buf);
+  s.write(&w) catch unreachable;
+  return 0;
+}
+
+/// Loads a state, as `skep_import_state`.
+pub fn importState(ctx: *Context, bytes: []const u8) c_int {
+  if (ctx.status == .starting or ctx.status == .running) return err(.BUSY);
+  const s = State.parse(ctx.gpa, bytes) catch |e| return switch (e) {
+    error.Invalid => err(.INVAL),
+    error.NotSupported => err(.OPNOTSUPP),
+    error.OutOfMemory => err(.NOMEM),
+  };
+  if (ctx.state) |*old| {
+    old.deinit(ctx.gpa);
+  }
+  ctx.state = s;
+  return 0;
+}
+
+fn newRequest(ctx: *Context) u32 {
   const id = ctx.next_request;
   ctx.next_request +%= 1;
   if (ctx.next_request == 0) {
     ctx.next_request = 1;
   }
-  ctx.permit_join = id;
-  ctx.window_seconds = @intCast(seconds);
-  ctx.driver.?.permitJoin(@intCast(seconds));
-  request.* = id;
-  return 0;
+  return id;
 }
 
-/// Stops cleanly, as `skep_stop`.
+/// Whether the driver has been asked to do `kind` and has not done it.
+fn pending(ctx: *const Context, kind: @FieldType(Op, "kind")) bool {
+  for (ctx.ops[0..ctx.ops_len]) |op| {
+    if (op.kind == kind) return true;
+  }
+  return false;
+}
+
+fn push(ctx: *Context, op: Op) void {
+  ctx.ops[ctx.ops_len] = op;
+  ctx.ops_len += 1;
+  ctx.kick();
+}
+
+/// Starts the next thing for the driver to do, if it is idle: what was asked for, or the refresh
+/// before stopping.
+fn kick(ctx: *Context) void {
+  if (ctx.busy) return;
+  if (ctx.ops_len == 0) {
+    if (!ctx.stopping) return;
+    ctx.ops[0] = .{ .kind = .refresh, .request = null };
+    ctx.ops_len = 1;
+  }
+  const op = ctx.ops[0];
+  ctx.busy = true;
+  const d = &ctx.driver.?;
+  switch (op.kind) {
+    .permit_join => {
+      ctx.window_seconds = op.seconds;
+      d.permitJoin(op.seconds);
+    },
+    .refresh => d.refresh(),
+  }
+}
+
+/// The driver did the first thing asked of it.
+fn done(ctx: *Context) Op {
+  const op = ctx.ops[0];
+  std.mem.copyForwards(Op, ctx.ops[0..ctx.ops_len - 1], ctx.ops[1..ctx.ops_len]);
+  ctx.ops_len -= 1;
+  ctx.busy = false;
+  return op;
+}
+
+/// Stops cleanly, as `skep_stop`: once the driver is idle, the state is refreshed, then the
+/// context stops.
 pub fn stop(ctx: *Context) c_int {
   if (ctx.status != .starting and ctx.status != .running) return err(.NETDOWN);
-  const event = ctx.takeSpare() catch return err(.NOMEM);
-  ctx.finish(event, 0);
+  if (ctx.stopping) return 0;
+  // Enough for the canceled requests and STOPPED.
+  ctx.fillSpares() catch return err(.NOMEM);
+  // A network still starting has no state to refresh.
+  if (ctx.status == .starting) {
+    ctx.finish(0);
+    return 0;
+  }
+  ctx.cancelRequests();
+  // What the driver has not started is dropped; what it has started, it finishes.
+  ctx.ops_len = if (ctx.busy) 1 else 0;
+  ctx.stopping = true;
+  ctx.kick();
   return 0;
 }
 
-/// The dongle is gone, as `skep_link_lost`. Never fails: a spare event reports it.
+/// The dongle is gone, as `skep_link_lost`. Never fails: spare events report it, or are queued
+/// by the next call that can allocate them.
 pub fn linkLost(ctx: *Context) void {
   if (ctx.status != .starting and ctx.status != .running) return;
-  if (ctx.spares.pop()) |event| {
-    ctx.finish(event, err(.NOTCONN));
-  } else {
-    ctx.driver = null;
-    ctx.status = .stopped;
-    ctx.lost_pending = true;
-  }
+  ctx.finish(err(.NOTCONN));
 }
 
-/// Queues `event` as STOPPED with `error_code`, after ending pending requests, and lets the driver
-/// go.
-fn finish(ctx: *Context, event: *Event, error_code: c_int) void {
-  if (ctx.permit_join) |id| {
-    ctx.permit_join = null;
-    if (ctx.spares.pop()) |done| {
-      requestDone(done, id, err(.CANCELED));
-      ctx.events.push(done);
+/// Ends pending requests, queues STOPPED with `error_code`, and lets the driver go.
+fn finish(ctx: *Context, error_code: c_int) void {
+  ctx.cancelRequests();
+  // After the canceled requests, which may still wait for events.
+  if (ctx.canceled_len == 0) {
+    if (ctx.spares.pop()) |event| {
+      event.type = .stopped;
+      event.error_code = error_code;
+      ctx.events.push(event);
     } else {
-      ctx.canceled_pending = id;
+      ctx.stopped_pending = error_code;
     }
+  } else {
+    ctx.stopped_pending = error_code;
   }
-  event.type = .stopped;
-  event.error_code = error_code;
-  ctx.events.push(event);
+  ctx.ops_len = 0;
+  ctx.busy = false;
+  ctx.stopping = false;
+  ctx.restoring = false;
   ctx.driver = null;
   ctx.status = .stopped;
   ctx.network = null;
+}
+
+/// Ends with -ECANCELED the requests the driver has not done, which it then does for no one.
+fn cancelRequests(ctx: *Context) void {
+  for (ctx.ops[0..ctx.ops_len]) |*op| {
+    const id = op.request orelse continue;
+    op.request = null;
+    if (ctx.spares.pop()) |event| {
+      requestDone(event, id, err(.CANCELED));
+      ctx.events.push(event);
+    } else {
+      ctx.canceled_pending[ctx.canceled_len] = id;
+      ctx.canceled_len += 1;
+    }
+  }
 }
 
 pub fn input(ctx: *Context, bytes: []const u8, now: u64) c_int {
@@ -268,37 +402,59 @@ pub fn nextEvent(ctx: *Context) ?*Event {
 /// is lost, and the next call goes on.
 fn process(ctx: *Context) c_int {
   ctx.fillSpares() catch return err(.NOMEM);
-  if (ctx.canceled_pending) |id| {
-    ctx.canceled_pending = null;
+  // As many spares as there are events pending.
+  for (ctx.canceled_pending[0..ctx.canceled_len]) |id| {
     const event = ctx.spares.pop().?;
     requestDone(event, id, err(.CANCELED));
     ctx.events.push(event);
-    ctx.fillSpares() catch return err(.NOMEM);
   }
-  if (ctx.lost_pending) {
-    ctx.lost_pending = false;
+  ctx.canceled_len = 0;
+  if (ctx.stopped_pending) |error_code| {
+    ctx.stopped_pending = null;
     const event = ctx.spares.pop().?;
     event.type = .stopped;
-    event.error_code = err(.NOTCONN);
+    event.error_code = error_code;
     ctx.events.push(event);
-    ctx.fillSpares() catch return err(.NOMEM);
   }
+  ctx.fillSpares() catch return err(.NOMEM);
   while (ctx.driver) |*d| {
+    // Room for a device that joins, so that recording it cannot fail once its event is taken.
+    if (ctx.state) |*s| {
+      s.devices.ensureUnusedCapacity(ctx.gpa, 1) catch return err(.NOMEM);
+    }
     const driver_event = d.nextEvent() orelse break;
     switch (driver_event) {
       .ready => |ready| ctx.onReady(ready),
-      .formed => |held| ctx.onFormed(held.network),
-      // Nothing asks for it yet.
-      .refreshed => {},
+      .formed => |held| ctx.onFormed(held),
+      .refreshed => |held| {
+        const op = ctx.done();
+        ctx.network = held.network;
+        if (ctx.state.?.update(ctx.ieee, held)) {
+          ctx.stateChanged();
+        }
+        if (op.request) |id| {
+          const event = ctx.spares.pop().?;
+          requestDone(event, id, 0);
+          ctx.events.push(event);
+        }
+        // Any refresh will do for stopping.
+        if (ctx.stopping) {
+          ctx.finish(0);
+        } else {
+          ctx.kick();
+        }
+      },
       .permit_join_done => |failure| {
-        const id = ctx.permit_join orelse continue;
-        ctx.permit_join = null;
+        const op = ctx.done();
         if (failure) |f| {
           ctx.logMessage(.err, f.message.text());
         }
-        const event = ctx.spares.pop().?;
-        requestDone(event, id, if (failure) |f| err(errnoOf(f.kind)) else 0);
-        ctx.events.push(event);
+        if (op.request) |id| {
+          const event = ctx.spares.pop().?;
+          requestDone(event, id, if (failure) |f| err(errnoOf(f.kind)) else 0);
+          ctx.events.push(event);
+        }
+        ctx.kick();
       },
       .join_window => |open| {
         const event = ctx.spares.pop().?;
@@ -307,21 +463,38 @@ fn process(ctx: *Context) c_int {
         ctx.events.push(event);
       },
       .device => |device| switch (device.kind) {
-        .joined, .left => {
+        .joined, .rejoined => {
+          const changed = if (ctx.state) |*s|
+            s.addDeviceAssumeCapacity(.{ .ieee = device.ieee, .nwk = device.nwk })
+          else
+            false;
+          if (device.kind == .joined) {
+            const event = ctx.spares.pop().?;
+            event.type = .device_joined;
+            event.device = device.ieee;
+            ctx.events.push(event);
+          } else {
+            // A known device keeps its setup: nothing to report.
+            const message: driver_layer.Message = .init("device {x:0>16} rejoined", .{
+              device.ieee,
+            });
+            ctx.logMessage(.debug, message.text());
+          }
+          if (changed) {
+            ctx.stateChanged();
+          }
+        },
+        // libskep keeps a device that left: it may come back.
+        .left => {
           const event = ctx.spares.pop().?;
-          event.type = if (device.kind == .joined) .device_joined else .device_left;
+          event.type = .device_left;
           event.device = device.ieee;
           ctx.events.push(event);
-        },
-        // A known device keeps its setup: nothing to report.
-        .rejoined => {
-          const message: driver_layer.Message = .init("device {x:0>16} rejoined", .{ device.ieee });
-          ctx.logMessage(.debug, message.text());
         },
       },
       .failed => |failure| {
         ctx.logMessage(.err, failure.message.text());
-        ctx.finish(ctx.spares.pop().?, err(errnoOf(failure.kind)));
+        ctx.finish(err(errnoOf(failure.kind)));
       },
       .log => |entry| ctx.logMessage(entry.level, entry.message.text()),
     }
@@ -332,6 +505,7 @@ fn process(ctx: *Context) c_int {
 
 fn onReady(ctx: *Context, r: driver_layer.Ready) void {
   ctx.ieee = r.ieee;
+  if (ctx.state) |*s| return ctx.readyWithState(s, r);
   if (r.network) |held| {
     const network = held.network;
     if (!ctx.options.replace_network) {
@@ -340,7 +514,7 @@ fn onReady(ctx: *Context, r: driver_layer.Ready) void {
         .{ network.channel, network.pan_id, r.firmware.text() },
       );
       ctx.logMessage(.info, message.text());
-      return ctx.started(network, .resumed);
+      return ctx.started(held, .resumed);
     }
   }
   const f = ctx.newNetwork();
@@ -355,21 +529,113 @@ fn onReady(ctx: *Context, r: driver_layer.Ready) void {
   ctx.driver.?.form(f);
 }
 
-fn onFormed(ctx: *Context, network: driver_layer.Network) void {
-  const message: driver_layer.Message = .init(
-    "formed a new network: channel {d}, PAN ID 0x{x:0>4}, extended PAN ID 0x{x:0>16}",
-    .{ network.channel, network.pan_id, network.extended_pan_id },
-  );
+/// The dongle is ready, and a state says which network to run: the dongle's if it is the same,
+/// the state's put back otherwise, but only over another network if replace-network allows.
+fn readyWithState(ctx: *Context, s: *State, r: driver_layer.Ready) void {
+  if (r.network) |held| {
+    const same_network = held.network.extended_pan_id == s.network.extended_pan_id;
+    if (same_network and std.mem.eql(u8, &held.security.network_key, &s.network_key)) {
+      const message: driver_layer.Message = .init(
+        "resumed the dongle's network: channel {d}, PAN ID 0x{x:0>4} ({s})",
+        .{ held.network.channel, held.network.pan_id, r.firmware.text() },
+      );
+      ctx.logMessage(.info, message.text());
+      return ctx.started(held, .resumed);
+    }
+    if (!ctx.options.replace_network) {
+      const message: driver_layer.Message = if (same_network)
+        .init(
+          "the dongle's network has the saved extended PAN ID but another network key; " ++
+            "replace-network lets the saved network replace it",
+          .{},
+        )
+      else
+        .init(
+          "the dongle holds another network (extended PAN ID 0x{x:0>16}) than the saved " ++
+            "one (0x{x:0>16}); replace-network lets the saved network replace it",
+          .{ held.network.extended_pan_id, s.network.extended_pan_id },
+        );
+      ctx.logMessage(.err, message.text());
+      return ctx.finish(err(.EXIST));
+    }
+  }
+  var trust_center_link_key: [16]u8 = undefined;
+  if (s.trust_center_link_key) |key| {
+    trust_center_link_key = key;
+  } else {
+    ctx.random.random().bytes(&trust_center_link_key);
+    ctx.logMessage(
+      .warning,
+      "the state holds no trust center link key: the dongle gets a new one, which devices " ++
+        "paired before do not share",
+    );
+  }
+  var held = s.held(trust_center_link_key);
+  // Ahead of the frames sent since the state was last refreshed.
+  const margin = ctx.options.frame_counter_margin;
+  held.security.network_frame_counter +|= margin;
+  held.security.trust_center_frame_counter = s.trust_center_frame_counter +| margin;
+  const message: driver_layer.Message = if (r.network) |old|
+    .init(
+      "replacing the dongle's network (PAN ID 0x{x:0>4}) with the saved one: channel {d}, " ++
+        "PAN ID 0x{x:0>4} ({s})",
+      .{ old.network.pan_id, s.network.channel, s.network.pan_id, r.firmware.text() },
+    )
+  else
+    .init("putting the saved network back onto the dongle: channel {d}, PAN ID 0x{x:0>4} ({s})", .{
+      s.network.channel,
+      s.network.pan_id,
+      r.firmware.text(),
+    });
   ctx.logMessage(.info, message.text());
-  ctx.started(network, .formed);
+  if (s.coordinator_ieee != r.ieee) {
+    const warning: driver_layer.Message = .init(
+      "the dongle's IEEE address {x:0>16} is not the saved coordinator's {x:0>16}: devices " ++
+        "that check it may have to be paired again",
+      .{ r.ieee, s.coordinator_ieee },
+    );
+    ctx.logMessage(.warning, warning.text());
+  }
+  ctx.restoring = true;
+  ctx.driver.?.form(.{ .network = held.network, .security = held.security, .restore = true });
 }
 
-fn started(ctx: *Context, network: driver_layer.Network, origin: Event.Origin) void {
-  ctx.network = network;
+fn onFormed(ctx: *Context, held: driver_layer.Held) void {
+  const network = held.network;
+  const message: driver_layer.Message = .init(
+    "{s}: channel {d}, PAN ID 0x{x:0>4}, extended PAN ID 0x{x:0>16}",
+    .{
+      if (ctx.restoring) "put the saved network back" else "formed a new network",
+      network.channel,
+      network.pan_id,
+      network.extended_pan_id,
+    },
+  );
+  ctx.logMessage(.info, message.text());
+  ctx.started(held, if (ctx.restoring) .restored else .formed);
+}
+
+/// The network is up: reports it, and takes it into the state.
+fn started(ctx: *Context, held: driver_layer.Held, origin: Event.Origin) void {
+  ctx.network = held.network;
   ctx.status = .running;
+  ctx.restoring = false;
+  const changed = if (ctx.state) |*s| s.update(ctx.ieee, held) else blk: {
+    ctx.state = .init(ctx.ieee, held);
+    break :blk true;
+  };
   const event = ctx.spares.pop().?;
   event.type = .started;
   event.origin = origin;
+  ctx.events.push(event);
+  if (changed) {
+    ctx.stateChanged();
+  }
+}
+
+fn stateChanged(ctx: *Context) void {
+  const event = ctx.spares.pop().?;
+  event.type = .state_changed;
   ctx.events.push(event);
 }
 
@@ -409,11 +675,6 @@ fn logMessage(ctx: *Context, level: driver_layer.Level, message: []const u8) voi
   event.type = .log;
   event.setLog(@backingInt(level), message);
   ctx.events.push(event);
-}
-
-fn takeSpare(ctx: *Context) error{ OutOfMemory }!*Event {
-  try ctx.fillSpares();
-  return ctx.spares.pop().?;
 }
 
 fn fillSpares(ctx: *Context) error{ OutOfMemory }!void {

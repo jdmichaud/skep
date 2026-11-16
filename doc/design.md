@@ -204,9 +204,10 @@ reviewed before the library is implemented.
     from the sender (replay protection), so the state holds the frame
     counters of the network key and of every link key. Devices also know
     the coordinator by its IEEE address, so the state holds it too, and
-    the driver gives it to the new dongle where the firmware allows
+    the driver is to give it to the new dongle where the firmware allows
     (EmberZNet keeps a "restored EUI64" token for this purpose, which
-    zigbee-herdsman uses).
+    zigbee-herdsman uses). That is not done yet: libskep warns that
+    devices may have to be paired again.
   - The counters advance inside the dongle with every frame it sends, so
     an exported state is only as current as its last refresh from the
     dongle (`skep_refresh_state()`). When to refresh is policy, not
@@ -224,7 +225,15 @@ reviewed before the library is implemented.
     own saved counter at every boot. The margin costs nothing, the
     counters having four billion values, and it can be raised to
     restore an old backup.
-  - When the dongle holds a network other than the imported one, the
+  - Putting a network back follows zigbee-herdsman: the network frame
+    counter is set before the security state, which is told to keep it,
+    and the trust center's once the network is formed. A dongle that
+    refuses a counter is logged as a warning, not a failure. A state
+    without a trust center link key, as one written for Z-Stack, gets a
+    new one, which devices paired before do not share.
+  - The dongle holds the imported network when it has the same extended
+    PAN ID and network key; its channel, PAN ID and counters, newer than
+    the state's, then update it. When it holds another network, the
     imported one wins, but not silently: `skep_start()` stops with
     `-EEXIST` unless `replace-network` allows overwriting the dongle's.
     Resuming the dongle's network instead would leave every known device
