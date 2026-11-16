@@ -14,6 +14,8 @@ pub fn build(b: *std.Build) !void {
     .root_source_file = b.path("src/skep.zig"),
     .target = target,
     .optimize = optimize,
+    // Without an allocator from the application, memory comes from malloc().
+    .link_libc = true,
   });
   skep.addOptions("build_options", build_options);
 

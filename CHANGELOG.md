@@ -19,6 +19,9 @@ publishes the section of each released version as its release notes.
 - Starting an EmberZNet dongle: reset, agreeing on the EZSP version,
   reading the firmware version, configuring it and bringing up the
   network it holds.
+- The core of the C API: contexts with the application's allocator and
+  seed, options, the I/O loop, events, and starting on a dongle that
+  holds a network.
 - `zig build probe -- <device>`, a development tool that resets an
   EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to
