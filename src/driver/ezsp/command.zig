@@ -8,6 +8,10 @@ pub const ValueId = enum(u8) {
   stack_token_writing = 0x07,
   extended_security_bitmask = 0x0a,
   version_info = 0x11,
+  /// The outgoing frame counter of the network key, 4 bytes.
+  nwk_frame_counter = 0x23,
+  /// The outgoing frame counter of the trust center link key, 4 bytes.
+  aps_frame_counter = 0x24,
   _,
 };
 
@@ -75,6 +79,87 @@ pub fn permitJoining(out: *[1]u8, seconds: u8) []const u8 {
   out[0] = seconds;
   return out;
 }
+
+/// A key and what goes with it: how keys are read before EZSP 13 (`get_key`).
+pub const KeyStruct = struct {
+  key: [16]u8,
+  outgoing_frame_counter: u32,
+  sequence_number: u8,
+
+  pub const Type = enum(u8) { trust_center_link_key = 0x01, current_network_key = 0x03 };
+
+  /// The answer to `get_key`: a status, then the key and what goes with it.
+  pub fn parse(parameters: []const u8, version: u8) error{ TooShort }!struct {
+    status: Status,
+    key: KeyStruct,
+  } {
+    var r: Reader = .{ .bytes = parameters };
+    const status = try r.statusOf(version);
+    _ = try r.int(u16); // bitmask
+    _ = try r.int(u8); // type
+    var key: KeyStruct = .{
+      .key = undefined,
+      .outgoing_frame_counter = undefined,
+      .sequence_number = undefined,
+    };
+    @memcpy(&key.key, try r.slice(16));
+    key.outgoing_frame_counter = try r.int(u32);
+    _ = try r.int(u32); // incoming frame counter
+    key.sequence_number = try r.int(u8);
+    _ = try r.slice(8); // partner
+    return .{ .status = status, .key = key };
+  }
+};
+
+/// Which key `export_key` exports, from EZSP 13 (Silicon Labs' security manager).
+pub const SecManKeyType = enum(u8) { network = 1, trust_center_link = 2 };
+
+/// Parameters of `export_key`: a security manager context naming the key, the first of its kind.
+pub fn exportKey(out: *[18]u8, key_type: SecManKeyType) []const u8 {
+  out.* = @splat(0);
+  out[0] = @backingInt(key_type);
+  return out;
+}
+
+/// The answer to `export_key`: the key then the status with EZSP 13, the status, the key and the
+/// context since EZSP 14.
+pub fn parseExportKey(parameters: []const u8, version: u8) error{ TooShort }!struct {
+  status: Status,
+  key: [16]u8,
+} {
+  var r: Reader = .{ .bytes = parameters };
+  var key: [16]u8 = undefined;
+  if (version < 14) {
+    @memcpy(&key, try r.slice(16));
+    return .{ .status = .{ .value = try r.int(u32), .sl = true }, .key = key };
+  }
+  const status = try r.int(u32);
+  @memcpy(&key, try r.slice(16));
+  return .{ .status = .{ .value = status, .sl = true }, .key = key };
+}
+
+/// The answer to `get_network_key_info`, from EZSP 13.
+pub const NetworkKeyInfo = struct {
+  status: Status,
+  key_set: bool,
+  sequence_number: u8,
+  frame_counter: u32,
+
+  pub fn parse(parameters: []const u8) error{ TooShort }!NetworkKeyInfo {
+    var r: Reader = .{ .bytes = parameters };
+    const status = try r.int(u32);
+    const key_set = try r.int(u8) != 0;
+    _ = try r.int(u8); // alternate key set
+    const sequence_number = try r.int(u8);
+    _ = try r.int(u8); // alternate key sequence number
+    return .{
+      .status = .{ .value = status, .sl = true },
+      .key_set = key_set,
+      .sequence_number = sequence_number,
+      .frame_counter = try r.int(u32),
+    };
+  }
+};
 
 /// The link key Zigbee 3.0 devices join with when no install code says otherwise.
 pub const well_known_link_key = "ZigBeeAlliance09".*;
@@ -556,6 +641,52 @@ test "a transient link key, before and after EZSP 13 and 14" {
   try testing.expect((try parseImportTransientKey(&hex("00000000"))).is(.ok));
 }
 
+test "keys, before and since EZSP 13" {
+  // get_key: status, bitmask, type, key, outgoing and incoming counters, sequence, partner.
+  const old = try KeyStruct.parse(
+    &hex(
+      "00" ++
+        "0000" ++
+        "03" ++
+        "00112233445566778899aabbccddeeff" ++
+        "39300000" ++
+        "00000000" ++
+        "02" ++
+        "0000000000000000",
+    ),
+    8,
+  );
+  try testing.expect(old.status.is(.ok));
+  try testing.expectEqual(0x00, old.key.key[0]);
+  try testing.expectEqual(0xff, old.key.key[15]);
+  try testing.expectEqual(12345, old.key.outgoing_frame_counter);
+  try testing.expectEqual(2, old.key.sequence_number);
+
+  var context: [18]u8 = undefined;
+  try testing.expectEqualSlices(
+    u8,
+    &hex("02" ++ "0000000000000000000000000000000000"),
+    exportKey(&context, .trust_center_link),
+  );
+  const v13 = try parseExportKey(&hex("00112233445566778899aabbccddeeff" ++ "00000000"), 13);
+  try testing.expect(v13.status.is(.ok));
+  try testing.expectEqual(0xff, v13.key[15]);
+  const v14 = try parseExportKey(
+    &hex(
+      "00000000" ++ "00112233445566778899aabbccddeeff" ++ "020000000000000000000000000000000000",
+    ),
+    14,
+  );
+  try testing.expectEqual(0xff, v14.key[15]);
+
+  const info = try NetworkKeyInfo.parse(
+    &hex("00000000" ++ "01" ++ "00" ++ "03" ++ "00" ++ "39300000"),
+  );
+  try testing.expect(info.key_set);
+  try testing.expectEqual(3, info.sequence_number);
+  try testing.expectEqual(12345, info.frame_counter);
+}
+
 test "parse the network parameters" {
   const parsed = try parseGetNetworkParameters(
     &hex(
@@ -603,6 +734,9 @@ fn fuzzParse(_: void, smith: *testing.Smith) !void {
   _ = parseGetNetworkParameters(bytes[0..len], version) catch {};
   _ = parseEui64(bytes[0..len]) catch {};
   _ = TrustCenterJoin.parse(bytes[0..len]) catch {};
+  _ = KeyStruct.parse(bytes[0..len], version) catch {};
+  _ = parseExportKey(bytes[0..len], version) catch {};
+  _ = NetworkKeyInfo.parse(bytes[0..len]) catch {};
   const value = parseGetValue(bytes[0..len], version) catch return;
   _ = VersionInfo.parse(value.value) catch {};
 }
