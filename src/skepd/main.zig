@@ -311,6 +311,38 @@ const Daemon = struct {
         c.SKEP_EVENT_DEVICE_LEFT => d.print("device left: {x:0>16}", .{
           c.skep_event_get_device(event),
         }),
+        c.SKEP_EVENT_DEVICE_READY => {
+          const device = c.skep_event_get_device(event);
+          var manufacturer: [64]u8 = @splat(0);
+          var model: [64]u8 = @splat(0);
+          _ = c.skep_device_get_manufacturer(d.ctx, device, &manufacturer, manufacturer.len);
+          _ = c.skep_device_get_model(d.ctx, device, &model, model.len);
+          d.print("device ready: {x:0>16} ({s}, {s})", .{
+            device,
+            std.mem.sliceTo(&manufacturer, 0),
+            std.mem.sliceTo(&model, 0),
+          });
+        },
+        c.SKEP_EVENT_DEVICE_SETUP_FAILED => d.print(
+          "device {x:0>16}: setup failed: error {d}, status 0x{x:0>2}",
+          .{
+            c.skep_event_get_device(event),
+            c.skep_event_get_error(event),
+            c.skep_event_get_status(event),
+          },
+        ),
+        c.SKEP_EVENT_ATTRIBUTES => d.printAttributes(event),
+        c.SKEP_EVENT_COMMAND => {
+          var len: usize = 0;
+          _ = c.skep_event_get_payload(event, &len);
+          d.print("{x:0>16} {d}/0x{x:0>4}: command 0x{x:0>2}, {d} bytes", .{
+            c.skep_event_get_device(event),
+            c.skep_event_get_endpoint(event),
+            c.skep_event_get_cluster(event),
+            c.skep_event_get_command(event),
+            len,
+          });
+        },
         c.SKEP_EVENT_REQUEST_DONE => {
           const error_code = c.skep_event_get_error(event);
           if (error_code != 0) {
@@ -323,6 +355,27 @@ const Daemon = struct {
         // Events of types skepd does not know are ignored, as skep.h asks.
         else => {},
       }
+    }
+  }
+
+  /// One line per attribute reported: device, endpoint and cluster, attribute, value.
+  fn printAttributes(d: *Daemon, event: *const c.skep_event) void {
+    const device = c.skep_event_get_device(event);
+    const endpoint = c.skep_event_get_endpoint(event);
+    const cluster = c.skep_event_get_cluster(event);
+    for (0..c.skep_event_get_attribute_count(event)) |i| {
+      var a: c.struct_skep_attribute = undefined;
+      if (c.skep_event_get_attribute(event, i, &a) != 0) continue;
+      var buffer: [96]u8 = undefined;
+      var w: Io.Writer = .fixed(&buffer);
+      writeValue(&w, a.value) catch {};
+      d.print("{x:0>16} {d}/0x{x:0>4}: 0x{x:0>4} = {s}", .{
+        device,
+        endpoint,
+        cluster,
+        a.id,
+        w.buffered(),
+      });
     }
   }
 
@@ -417,6 +470,29 @@ const Daemon = struct {
     }
   }
 };
+
+/// A ZCL value, as its type says, followed by its type.
+fn writeValue(w: *Io.Writer, v: c.struct_skep_value) !void {
+  switch (v.type) {
+    c.SKEP_TYPE_INT8,
+    c.SKEP_TYPE_INT16,
+    c.SKEP_TYPE_INT24,
+    c.SKEP_TYPE_INT32,
+    c.SKEP_TYPE_INT64,
+    => try w.print("{d}", .{ v.v.i }),
+    c.SKEP_TYPE_SEMI, c.SKEP_TYPE_SINGLE, c.SKEP_TYPE_DOUBLE => try w.print("{d}", .{ v.v.f }),
+    c.SKEP_TYPE_CHAR_STRING => {
+      const bytes = if (v.v.bytes.data) |data| data[0..v.v.bytes.len] else "";
+      try w.print("\"{s}\"", .{ bytes });
+    },
+    c.SKEP_TYPE_OCTET_STRING, c.SKEP_TYPE_ARRAY, c.SKEP_TYPE_STRUCT, c.SKEP_TYPE_KEY128 => {
+      const bytes = if (v.v.bytes.data) |data| data[0..v.v.bytes.len] else "";
+      try w.print("{x}", .{ bytes });
+    },
+    else => try w.print("{d}", .{ v.v.u }),
+  }
+  try w.print(" (type 0x{x:0>2})", .{ v.type });
+}
 
 /// The current time in UTC, as ISO 8601 with milliseconds, and a space.
 fn writeTimestamp(w: *Io.Writer, io: Io) !void {
