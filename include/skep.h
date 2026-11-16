@@ -689,7 +689,8 @@ int skep_device_get_node(skep_ctx *ctx, uint64_t device, enum skep_node_type *ty
 /*
  * Current network (short) address of the device.
  *
- * Errors: -ENODEV.
+ * Errors: -ENODEV, -EAGAIN (not known yet: a device of an imported state
+ * that has not been heard from).
  */
 int skep_device_get_short_address(skep_ctx *ctx, uint64_t device, uint16_t *address);
 
@@ -765,8 +766,9 @@ int skep_remove_device(skep_ctx *ctx, uint64_t device, uint64_t deadline, uint32
  * struct before setting the fields you use.
  *
  * Errors of all requests: -ENODEV (unknown device), -ENETDOWN,
- * -EINVAL (including a reserved field that is not 0), -ENOBUFS (too many
- * requests pending).
+ * -EINVAL (including a reserved field that is not 0, a value that does
+ * not fit its type, and more than 16 attributes), -ENOBUFS (too many
+ * requests pending, 32 at most).
  */
 
 #define SKEP_NO_DEADLINE UINT64_MAX

@@ -26,6 +26,22 @@ publishes the section of each released version as its release notes.
   network, or forms a new one, also in place of the dongle's with the
   `replace-network` option. `skep_permit_join()` opens the join window,
   and events report it, and the devices that join or leave.
+- Devices: those that join are interviewed (node descriptor, endpoints,
+  clusters, manufacturer and model) and set up from their entry in the
+  device tables, binding clusters and configuring reporting, which the
+  ThirdReality Temperature and Humidity Sensor Lite (3RTHS0224Z) and
+  Smart Plug E2 (3RSPE01044BZ) have. A sleepy device's setup waits for it
+  to wake up. `SKEP_EVENT_DEVICE_READY` and
+  `SKEP_EVENT_DEVICE_SETUP_FAILED` tell how it went, `skep_setup_device()`
+  starts it again, and the state keeps it. Reports become
+  `SKEP_EVENT_ATTRIBUTES`, cluster commands from devices
+  `SKEP_EVENT_COMMAND`.
+- The device functions (`skep_get_devices()`, `skep_device_get_*()`,
+  `skep_remove_device()`) and the requests (`skep_read_attributes()`,
+  `skep_write_attributes()`, `skep_configure_reporting()`, `skep_bind()`,
+  `skep_unbind()`, `skep_send_command()`, `skep_cancel()`), which wait
+  for sleepy devices to wake up.
+- Opening or closing the join window tells the routers too.
 - The state: `skep_export_state()` and `skep_import_state()` save and
   load the network, its keys and frame counters, and its devices as an
   Open Coordinator Backup, the JSON format of zigpy and zigbee-herdsman;

@@ -31,6 +31,16 @@ pub fn build(b: *std.Build) !void {
     .optimize = optimize,
   }).createModule();
   addHeaderChecks(b, test_step, target, optimize, build_options, skep_h);
+  // The structs of skep.h against libskep's.
+  const layout = b.createModule(.{
+    .root_source_file = b.path("src/abi_test.zig"),
+    .target = target,
+    .optimize = optimize,
+    .link_libc = true,
+    .imports = &.{.{ .name = "skep_h", .module = skep_h }},
+  });
+  layout.addOptions("build_options", build_options);
+  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = layout })).step);
   addAbiCheck(b, test_step, target, optimize, library);
   // Opening a dongle's serial port, for the programs that do.
   const serial = b.createModule(.{

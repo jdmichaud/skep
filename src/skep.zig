@@ -10,6 +10,9 @@ const CAllocator = @import("allocator.zig").CAllocator;
 const Context = @import("Context.zig");
 const Event = @import("Event.zig");
 const State = @import("State.zig");
+const requests = @import("requests.zig");
+const setup = @import("setup.zig");
+const zcl = @import("zcl.zig");
 const sim = @import("driver/sim/sim.zig");
 
 /// Version of libskep, taken from `.version` in `build.zig.zon`.
@@ -153,6 +156,264 @@ export fn skep_refresh_state(ctx: *Context, request: *u32) c_int {
 export fn skep_import_state(ctx: *Context, data: ?[*]const u8, len: usize) c_int {
   const bytes: []const u8 = if (data) |d| d[0..len] else if (len == 0) &.{} else return err(.INVAL);
   return ctx.importState(bytes);
+}
+
+export fn skep_event_get_endpoint(event: *const Event) u8 {
+  return event.endpoint;
+}
+
+export fn skep_event_get_cluster(event: *const Event) u16 {
+  return event.cluster;
+}
+
+export fn skep_event_get_manufacturer_code(event: *const Event) u16 {
+  return event.manufacturer_code;
+}
+
+export fn skep_event_get_attribute_count(event: *const Event) usize {
+  return event.attribute_count;
+}
+
+export fn skep_event_get_attribute(
+  event: *const Event,
+  index: usize,
+  attribute: *Event.Attribute,
+) c_int {
+  if (index >= event.attribute_count) return err(.INVAL);
+  attribute.* = event.attributes[index];
+  return 0;
+}
+
+export fn skep_event_get_command(event: *const Event) u8 {
+  return event.command;
+}
+
+// libskep decodes the arguments of no command yet: the payload holds them.
+export fn skep_event_get_argument_count(_: *const Event, _: *usize) c_int {
+  return err(.OPNOTSUPP);
+}
+
+export fn skep_event_get_argument(_: *const Event, _: usize, _: *zcl.Value) c_int {
+  return err(.OPNOTSUPP);
+}
+
+export fn skep_event_get_payload(event: *const Event, len: *usize) [*]const u8 {
+  len.* = event.payload_len;
+  return &event.payload;
+}
+
+export fn skep_get_devices(ctx: *Context, devices: ?[*]u64, capacity: usize, count: *usize) c_int {
+  const known = if (ctx.state) |*s| s.devices.items else &.{};
+  count.* = known.len;
+  if (capacity > 0) {
+    const out = devices orelse return err(.INVAL);
+    for (known[0..@min(capacity, known.len)], 0..) |d, i| {
+      out[i] = d.ieee;
+    }
+  }
+  return 0;
+}
+
+/// The device of IEEE address `ieee`, or a negative errno value.
+fn deviceOf(ctx: *Context, ieee: u64) union(enum) { device: *State.Device, err: c_int } {
+  const s = if (ctx.state) |*s| s else return .{ .err = err(.NODEV) };
+  return .{ .device = s.device(ieee) orelse return .{ .err = err(.NODEV) } };
+}
+
+export fn skep_device_get_node(
+  ctx: *Context,
+  ieee: u64,
+  node_type: *c_int,
+  manufacturer_code: *u16,
+  rx_on_when_idle: *c_int,
+) c_int {
+  const d = switch (deviceOf(ctx, ieee)) {
+    .device => |d| d,
+    .err => |e| return e,
+  };
+  const node = d.node orelse return err(.AGAIN);
+  node_type.* = @backingInt(node.type);
+  manufacturer_code.* = node.manufacturer_code;
+  rx_on_when_idle.* = @intFromBool(node.rx_on_when_idle);
+  return 0;
+}
+
+export fn skep_device_get_short_address(ctx: *Context, ieee: u64, address: *u16) c_int {
+  const d = switch (deviceOf(ctx, ieee)) {
+    .device => |d| d,
+    .err => |e| return e,
+  };
+  address.* = d.nwk orelse return err(.AGAIN);
+  return 0;
+}
+
+/// Copies a string of a device into `buf`, NUL-terminated and cut short if needed, and returns
+/// its full length.
+fn copyText(text: ?[]const u8, buf: ?[*]u8, size: usize) c_int {
+  const t = text orelse return err(.AGAIN);
+  if (size > 0) {
+    const out = buf orelse return err(.INVAL);
+    const len = @min(t.len, size - 1);
+    @memcpy(out[0..len], t[0..len]);
+    out[len] = 0;
+  }
+  return @intCast(t.len);
+}
+
+export fn skep_device_get_manufacturer(ctx: *Context, ieee: u64, buf: ?[*]u8, size: usize) c_int {
+  return switch (deviceOf(ctx, ieee)) {
+    .device => |d| copyText(d.manufacturer, buf, size),
+    .err => |e| e,
+  };
+}
+
+export fn skep_device_get_model(ctx: *Context, ieee: u64, buf: ?[*]u8, size: usize) c_int {
+  return switch (deviceOf(ctx, ieee)) {
+    .device => |d| copyText(d.model, buf, size),
+    .err => |e| e,
+  };
+}
+
+/// Whether the device's endpoints are known yet.
+fn interviewed(d: *const State.Device) bool {
+  return switch (d.progress.stage) {
+    .node, .endpoints => d.endpoints.len > 0,
+    else => true,
+  };
+}
+
+export fn skep_device_get_endpoints(
+  ctx: *Context,
+  ieee: u64,
+  endpoints: ?[*]u8,
+  capacity: usize,
+  count: *usize,
+) c_int {
+  const d = switch (deviceOf(ctx, ieee)) {
+    .device => |d| d,
+    .err => |e| return e,
+  };
+  if (!interviewed(d)) return err(.AGAIN);
+  count.* = d.endpoints.len;
+  if (capacity > 0) {
+    const out = endpoints orelse return err(.INVAL);
+    for (d.endpoints[0..@min(capacity, d.endpoints.len)], 0..) |e, i| {
+      out[i] = e.id;
+    }
+  }
+  return 0;
+}
+
+export fn skep_device_get_clusters(
+  ctx: *Context,
+  ieee: u64,
+  endpoint: u8,
+  side: c_int,
+  clusters: ?[*]u16,
+  capacity: usize,
+  count: *usize,
+) c_int {
+  const d = switch (deviceOf(ctx, ieee)) {
+    .device => |d| d,
+    .err => |e| return e,
+  };
+  if (!interviewed(d)) return err(.AGAIN);
+  const e = d.endpoint(endpoint) orelse return err(.NOENT);
+  const list = switch (side) {
+    0 => e.input_clusters,
+    1 => e.output_clusters,
+    else => return err(.INVAL),
+  };
+  count.* = list.len;
+  if (capacity > 0) {
+    const out = clusters orelse return err(.INVAL);
+    @memcpy(out[0..@min(capacity, list.len)], list[0..@min(capacity, list.len)]);
+  }
+  return 0;
+}
+
+export fn skep_setup_device(ctx: *Context, ieee: u64) c_int {
+  return ctx.setupDevice(ieee);
+}
+
+export fn skep_remove_device(ctx: *Context, ieee: u64, deadline: u64, request: *u32) c_int {
+  return requests.remove(ctx, ieee, deadline, request);
+}
+
+export fn skep_read_attributes(
+  ctx: *Context,
+  target: *const requests.Target,
+  ids: ?[*]const u16,
+  count: usize,
+  deadline: u64,
+  request: *u32,
+) c_int {
+  const list = if (ids) |i| i[0..count] else return err(.INVAL);
+  return requests.read(ctx, target, list, deadline, request);
+}
+
+export fn skep_write_attributes(
+  ctx: *Context,
+  target: *const requests.Target,
+  attributes: ?[*]const Event.Attribute,
+  count: usize,
+  deadline: u64,
+  request: *u32,
+) c_int {
+  const list = if (attributes) |a| a[0..count] else return err(.INVAL);
+  return requests.write(ctx, target, list, deadline, request);
+}
+
+export fn skep_configure_reporting(
+  ctx: *Context,
+  target: *const requests.Target,
+  reporting: ?[*]const requests.Reporting,
+  count: usize,
+  deadline: u64,
+  request: *u32,
+) c_int {
+  const list = if (reporting) |r| r[0..count] else return err(.INVAL);
+  return requests.configure(ctx, target, list, deadline, request);
+}
+
+export fn skep_bind(
+  ctx: *Context,
+  target: *const requests.Target,
+  deadline: u64,
+  request: *u32,
+) c_int {
+  return requests.bind(ctx, target, false, deadline, request);
+}
+
+export fn skep_unbind(
+  ctx: *Context,
+  target: *const requests.Target,
+  deadline: u64,
+  request: *u32,
+) c_int {
+  return requests.bind(ctx, target, true, deadline, request);
+}
+
+export fn skep_send_command(
+  ctx: *Context,
+  target: *const requests.Target,
+  command: u8,
+  arguments: ?[*]const zcl.Value,
+  count: usize,
+  deadline: u64,
+  request: *u32,
+) c_int {
+  const list: []const zcl.Value = if (arguments) |a|
+    a[0..count]
+  else if (count == 0)
+    &.{}
+  else
+    return err(.INVAL);
+  return requests.command(ctx, target, command, list, deadline, request);
+}
+
+export fn skep_cancel(ctx: *Context, request: u32) c_int {
+  return ctx.cancel(request);
 }
 
 export fn skep_get_network(ctx: *Context, channel: *u8, pan_id: *u16, extended_pan_id: *u64) c_int {
@@ -559,6 +820,198 @@ test "a device that refuses a step of its setup has failed" {
   try testing.expectEqual(State.Stage.failed, ctx.state.?.device(sensor_ieee).?.progress.stage);
   // And goes no further.
   try testing.expectEqual(null, try nextOfType(ctx, .device_ready));
+}
+
+test "devices are described, and requests reach them" {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+
+  var count: usize = 0;
+  try testing.expectEqual(0, skep_get_devices(ctx, null, 0, &count));
+  try testing.expectEqual(1, count);
+  var ieee: [1]u64 = undefined;
+  try testing.expectEqual(0, skep_get_devices(ctx, &ieee, 1, &count));
+  try testing.expectEqual(sensor_ieee, ieee[0]);
+  var node_type: c_int = 0;
+  var code: u16 = 0;
+  var rx_on: c_int = 0;
+  try testing.expectEqual(0, skep_device_get_node(ctx, sensor_ieee, &node_type, &code, &rx_on));
+  try testing.expectEqual(1, node_type);
+  try testing.expectEqual(0x1407, code);
+  try testing.expectEqual(1, rx_on);
+  try testing.expectEqual(err(.NODEV), skep_device_get_node(ctx, 1, &node_type, &code, &rx_on));
+  var address: u16 = 0;
+  try testing.expectEqual(0, skep_device_get_short_address(ctx, sensor_ieee, &address));
+  try testing.expectEqual(0x1bce, address);
+  // Cut short, and NUL-terminated.
+  var model: [8]u8 = undefined;
+  try testing.expectEqual(10, skep_device_get_model(ctx, sensor_ieee, &model, model.len));
+  try testing.expectEqualStrings("3RTHS02", std.mem.sliceTo(&model, 0));
+  var endpoints: [4]u8 = undefined;
+  try testing.expectEqual(
+    0,
+    skep_device_get_endpoints(ctx, sensor_ieee, &endpoints, endpoints.len, &count),
+  );
+  try testing.expectEqualSlices(u8, &.{ 1 }, endpoints[0..count]);
+  var clusters: [8]u16 = undefined;
+  try testing.expectEqual(
+    0,
+    skep_device_get_clusters(ctx, sensor_ieee, 1, 0, &clusters, clusters.len, &count),
+  );
+  try testing.expectEqual(5, count);
+  try testing.expectEqual(
+    0,
+    skep_device_get_clusters(ctx, sensor_ieee, 1, 1, &clusters, clusters.len, &count),
+  );
+  try testing.expectEqualSlices(u16, &.{ 0x0019 }, clusters[0..count]);
+  try testing.expectEqual(
+    err(.NOENT),
+    skep_device_get_clusters(ctx, sensor_ieee, 2, 0, &clusters, 0, &count),
+  );
+
+  // Its model, its manufacturer, and an attribute it does not have.
+  var target = std.mem.zeroes(requests.Target);
+  target.device = sensor_ieee;
+  target.endpoint = 1;
+  target.cluster = 0x0000;
+  var request: u32 = 0;
+  const ids = [_]u16{ 0x0005, 0x0004, 0x0007 };
+  try testing.expectEqual(
+    0,
+    skep_read_attributes(ctx, &target, &ids, ids.len, std.math.maxInt(u64), &request),
+  );
+  const read = (try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone;
+  defer skep_event_free(read);
+  try testing.expectEqual(request, skep_event_get_request(read));
+  try testing.expectEqual(3, skep_event_get_attribute_count(read));
+  var attribute: Event.Attribute = undefined;
+  try testing.expectEqual(0, skep_event_get_attribute(read, 0, &attribute));
+  try testing.expectEqualStrings("3RTHS0224Z", attribute.value.bytesOf());
+  try testing.expectEqual(0, skep_event_get_attribute(read, 2, &attribute));
+  try testing.expectEqual(0x86, attribute.status);
+  try testing.expectEqual(err(.INVAL), skep_event_get_attribute(read, 3, &attribute));
+
+  // Writes, reporting and bindings answer with a status for each attribute, or one for all.
+  target.cluster = 0x0402;
+  const writes = [_]Event.Attribute{.{ .id = 0x0010, .status = 0, .value = .unsigned(0x20, 5) }};
+  try testing.expectEqual(
+    0,
+    skep_write_attributes(ctx, &target, &writes, writes.len, std.math.maxInt(u64), &request),
+  );
+  const written = (try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone;
+  defer skep_event_free(written);
+  try testing.expectEqual(1, skep_event_get_attribute_count(written));
+  try testing.expectEqual(0, written.attributes[0].status);
+  const reporting = [_]requests.Reporting{.{
+    .attribute = 0x0000,
+    .type = 0x29,
+    .min_interval = 30,
+    .max_interval = 600,
+    .change = .signed(0x29, 50),
+    .reserved = @splat(0),
+  }};
+  try testing.expectEqual(
+    0,
+    skep_configure_reporting(
+      ctx,
+      &target,
+      &reporting,
+      reporting.len,
+      std.math.maxInt(u64),
+      &request,
+    ),
+  );
+  skep_event_free((try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone);
+  try testing.expectEqual(4, devices[0].configurations);
+  try testing.expectEqual(0, skep_bind(ctx, &target, std.math.maxInt(u64), &request));
+  const bound = (try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone;
+  defer skep_event_free(bound);
+  try testing.expectEqual(0, skep_event_get_status(bound));
+  try testing.expectEqual(4, devices[0].binds);
+  // A command: Identify for 5 s.
+  target.cluster = 0x0003;
+  const arguments = [_]zcl.Value{ .unsigned(0x21, 5) };
+  try testing.expectEqual(
+    0,
+    skep_send_command(
+      ctx,
+      &target,
+      0x00,
+      &arguments,
+      arguments.len,
+      std.math.maxInt(u64),
+      &request,
+    ),
+  );
+  const identified = (try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone;
+  defer skep_event_free(identified);
+  try testing.expectEqual(0, skep_event_get_status(identified));
+  const sent = ctx.driver.?.sim.sent[ctx.driver.?.sim.sent_len - 1];
+  try testing.expectEqualSlices(u8, &.{ 0x01, sent.payload[1], 0x00, 0x05, 0x00 }, sent.bytes());
+
+  // Bad requests are refused at once.
+  target.reserved[0] = 1;
+  try testing.expectEqual(err(.INVAL), skep_bind(ctx, &target, std.math.maxInt(u64), &request));
+  target.reserved[0] = 0;
+  target.device = 1;
+  try testing.expectEqual(err(.NODEV), skep_bind(ctx, &target, std.math.maxInt(u64), &request));
+  target.device = sensor_ieee;
+  const too_big = [_]zcl.Value{ .unsigned(0x20, 256) };
+  try testing.expectEqual(
+    err(.INVAL),
+    skep_send_command(ctx, &target, 0x00, &too_big, 1, std.math.maxInt(u64), &request),
+  );
+
+  // Asleep: requests wait, until they are canceled or their deadline passes.
+  devices[0].silent = true;
+  ctx.state.?.device(sensor_ieee).?.node.?.rx_on_when_idle = false;
+  try testing.expectEqual(0, skep_bind(ctx, &target, std.math.maxInt(u64), &request));
+  var later: u32 = 0;
+  try testing.expectEqual(0, skep_bind(ctx, &target, 5000, &later));
+  try testing.expectEqual(null, try nextOfType(ctx, .request_done));
+  try testing.expectEqual(0, skep_cancel(ctx, request));
+  try testing.expectEqual(err(.NOENT), skep_cancel(ctx, request));
+  const canceled = (try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone;
+  defer skep_event_free(canceled);
+  try testing.expectEqual(err(.CANCELED), skep_event_get_error(canceled));
+  try testing.expectEqual(0, skep_advance(ctx, 5000));
+  const late = skep_next_event(ctx) orelse return error.TestExpectedDone;
+  defer skep_event_free(late);
+  try testing.expectEqual(later, skep_event_get_request(late));
+  try testing.expectEqual(err(.TIMEDOUT), skep_event_get_error(late));
+  // A newer write of the same attributes replaces a waiting one.
+  var first: u32 = 0;
+  try testing.expectEqual(
+    0,
+    skep_write_attributes(ctx, &target, &writes, writes.len, std.math.maxInt(u64), &first),
+  );
+  try testing.expectEqual(
+    0,
+    skep_write_attributes(ctx, &target, &writes, writes.len, std.math.maxInt(u64), &request),
+  );
+  const replaced = (try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone;
+  defer skep_event_free(replaced);
+  try testing.expectEqual(first, skep_event_get_request(replaced));
+  try testing.expectEqual(err(.CANCELED), skep_event_get_error(replaced));
+  try testing.expectEqual(0, skep_cancel(ctx, request));
+  skep_event_free((try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone);
+
+  // Set up again from the start once awake.
+  devices[0].silent = false;
+  try testing.expectEqual(0, skep_setup_device(ctx, sensor_ieee));
+  ctx.driver.?.sim.report(&devices[0], 0x0402, &.{ 0x00, 0x00, 0x29, 0xc3, 0x08 });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+
+  // Removed: asked to leave, then forgotten.
+  try testing.expectEqual(0, skep_remove_device(ctx, sensor_ieee, std.math.maxInt(u64), &request));
+  const left = (try nextOfType(ctx, .device_left)) orelse return error.TestExpectedLeft;
+  defer skep_event_free(left);
+  try testing.expectEqual(sensor_ieee, skep_event_get_device(left));
+  try testing.expectEqual(0, skep_get_devices(ctx, null, 0, &count));
+  try testing.expectEqual(0, count);
 }
 
 /// A device joins and is interviewed, every allocation failing in turn.

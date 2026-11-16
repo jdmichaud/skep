@@ -6,6 +6,7 @@ const std = @import("std");
 const Context = @import("Context.zig");
 const Event = @import("Event.zig");
 const State = @import("State.zig");
+const driver_layer = @import("driver/driver.zig");
 const exchange = @import("exchange.zig");
 const zcl = @import("zcl.zig");
 const zdo = @import("zdo.zig");
@@ -107,6 +108,9 @@ fn add(
   deadline: u64,
   id: *u32,
 ) c_int {
+  if (request.kind == .write or request.kind == .configure) {
+    replaceWaiting(ctx, d.ieee, request, &built.frame);
+  }
   var r = request;
   r.id = ctx.newRequest();
   exchange.add(ctx, .{
@@ -281,6 +285,39 @@ pub fn remove(ctx: *Context, ieee: u64, deadline: u64, id: *u32) c_int {
     zdo.leaveRequest(&out, 0, d.ieee),
   );
   return add(ctx, d, .{ .id = 0, .kind = .remove }, built, true, deadline, id);
+}
+
+/// A write or reporting configuration still waiting for its device is replaced by a newer one for
+/// the same attributes of the same target: it ends with -ECANCELED.
+fn replaceWaiting(ctx: *Context, ieee: u64, newer: Request, frame: *const driver_layer.Frame) void {
+  var i: usize = 0;
+  while (i < ctx.exchanges.items.len) {
+    const e = ctx.exchanges.items[i];
+    const same = e.device == ieee and
+      e.phase == .waiting and
+      e.purpose == .request and
+      e.purpose.request.kind == newer.kind and
+      e.frame.destination_endpoint == frame.destination_endpoint and
+      e.frame.cluster == frame.cluster and
+      manufacturerOf(&e.frame) == manufacturerOf(frame) and
+      std.mem.eql(
+        u16,
+        e.purpose.request.attributes[0..e.purpose.request.count],
+        newer.attributes[0..newer.count],
+      );
+    if (same) {
+      _ = ctx.exchanges.orderedRemove(i);
+      ctx.cancelRequest(e.purpose.request.id);
+    } else {
+      i += 1;
+    }
+  }
+}
+
+/// The manufacturer code of a ZCL frame, or null for a standard one.
+fn manufacturerOf(frame: *const driver_layer.Frame) ?u16 {
+  const parsed = zcl.Frame.parse(frame.bytes()) catch return null;
+  return parsed.header.manufacturer_code;
 }
 
 /// Ends a pending request with -ECANCELED. Returns -ENOENT if there is none of that id.

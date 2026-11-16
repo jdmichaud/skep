@@ -42,6 +42,9 @@ int main(void) {
   uint8_t seed[SKEP_SEED_SIZE] = { 0 };
   skep_ctx *ctx = NULL;
   skep_ctx *other = NULL;
+  struct skep_target target;
+  size_t count = 99;
+  uint16_t address = 0;
   uint8_t *state = NULL;
   size_t state_len = 0;
   unsigned baudrate = 0;
@@ -87,6 +90,17 @@ int main(void) {
   CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_STATE_CHANGED);
   skep_event_free(event);
   CHECK(skep_next_event(ctx) == NULL);
+
+  /* No device yet: requests about one are refused. */
+  CHECK(skep_get_devices(ctx, NULL, 0, &count) == 0 && count == 0);
+  CHECK(skep_device_get_short_address(ctx, 1, &address) == -ENODEV);
+  memset(&target, 0, sizeof target);
+  target.device = 1;
+  target.endpoint = 1;
+  target.cluster = SKEP_CLUSTER_ON_OFF;
+  CHECK(skep_send_command(ctx, &target, SKEP_CMD_ON_OFF_OFF, NULL, 0, SKEP_NO_DEADLINE, &request) ==
+        -ENODEV);
+  CHECK(skep_cancel(ctx, 12345) == -ENOENT);
 
   /* The state: first its length, then the state itself, a JSON document. */
   CHECK(skep_export_state(ctx, NULL, 0, &state_len) == -ENOBUFS && state_len > 0);

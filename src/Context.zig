@@ -247,6 +247,40 @@ pub fn refreshState(ctx: *Context, request: *u32) c_int {
   return 0;
 }
 
+/// Sets a device up again from the start, as `skep_setup_device`.
+pub fn setupDevice(ctx: *Context, ieee: u64) c_int {
+  if (ctx.status != .running or ctx.stopping) return err(.NETDOWN);
+  const d = ctx.state.?.device(ieee) orelse return err(.NODEV);
+  // For the state changing.
+  ctx.fillSpares() catch return err(.NOMEM);
+  setup.restart(ctx, d);
+  ctx.kick();
+  return 0;
+}
+
+/// Gives up a pending request, as `skep_cancel`.
+pub fn cancel(ctx: *Context, id: u32) c_int {
+  if (ctx.spares.len == 0) {
+    ctx.fillSpares() catch return err(.NOMEM);
+  }
+  for (ctx.ops[0..ctx.ops_len], 0..) |*op, i| {
+    if (op.request != id) continue;
+    // The driver finishes what it started, for no one.
+    if (i == 0 and ctx.busy != .idle) {
+      op.request = null;
+    } else {
+      std.mem.copyForwards(Op, ctx.ops[i..ctx.ops_len - 1], ctx.ops[i + 1..ctx.ops_len]);
+      ctx.ops_len -= 1;
+    }
+    ctx.cancelRequest(id);
+    return 0;
+  }
+  const result = requests.cancel(ctx, id);
+  // The device's next exchange may go now.
+  ctx.kick();
+  return result;
+}
+
 /// Copies the state as JSON into `buf`, as `skep_export_state`.
 pub fn exportState(ctx: *const Context, buf: []u8, len: *usize) c_int {
   const s = if (ctx.state) |*s| s else return err(.NODATA);
@@ -688,11 +722,13 @@ fn onFrame(ctx: *Context, frame: *const driver_layer.Frame) void {
     return;
   }
   const d = s.deviceAt(frame.address) orelse return;
+  const ieee = d.ieee;
   exchange.heard(ctx, d);
   if (!exchange.answer(ctx, d, frame)) {
     ctx.unsolicited(d, frame);
   }
-  setup.next(ctx, d);
+  // Looked up again: the answer to a removal forgets the device.
+  setup.next(ctx, s.device(ieee) orelse return);
 }
 
 /// What a device sent by itself: attribute reports, and cluster commands.

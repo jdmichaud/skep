@@ -139,8 +139,7 @@ the daemon `skepd` and the command-line tool `skep`.
 
 ## C API
 
-The API is drafted in [include/skep.h](../include/skep.h), to be
-reviewed before the library is implemented.
+The API is in [include/skep.h](../include/skep.h).
 
 - libskep does no I/O. It never opens, reads or writes a device or a
   file, never reads the clock and never blocks (the "sans-I/O" design of
@@ -338,6 +337,20 @@ reviewed before the library is implemented.
     device needs is done by `skep_send_command()` either way.
 - libskep interviews and sets up new devices itself, using the device
   tables, and reports `SKEP_EVENT_DEVICE_READY` when done.
+  - The interview asks the node descriptor, the active endpoints and
+    their simple descriptors over ZDO, then the manufacturer and model
+    from the Basic cluster. The model finds the device's entry, whose
+    steps bind clusters to the coordinator's endpoint 1 and configure
+    their reporting. A model without an entry needs no setup.
+  - Interviews, setups and requests are made of exchanges: a frame, and
+    the answer it waits for, matched by its ZDO or ZCL sequence number.
+    A device has one under way at a time, so that what is asked of it
+    goes out in order. A sleepy device is counted awake for 10 s after
+    it is heard from; what is for it waits until then. A device that
+    does not pick a frame up, or does not answer within 10 s of its
+    delivery, is silent until heard from again: its setup waits, its
+    requests too if it sleeps, and requests to a device that does not
+    sleep fail with -EHOSTUNREACH or -ETIMEDOUT.
   - A sleepy sensor stays awake for a few seconds after joining, often
     not long enough for the whole setup. libskep records how far each
     device's setup has got, in the state so that a restart does not lose
@@ -350,10 +363,11 @@ reviewed before the library is implemented.
     exception: a rejection is ignored and the setup goes on. Zigbee2MQTT
     needs this for Tuya devices, which it asks for six Basic attributes,
     including 0xFFFE, ignoring an UNSUPPORTED_ATTRIBUTE answer
-    (`configureMagicPacket` in `src/lib/tuya.ts`).
+    (`configureMagicPacket` in `src/lib/tuya.ts`). Not done yet: no
+    entry needs it.
   - Each device records the version of the device table entry it was set
     up with. When the entry changes, for instance with a new libskep that
-    corrects a reporting interval, the setup is redone.
+    corrects a reporting interval, the setup is redone. Not done yet.
 - Devices come and go. A device that rejoins (it lost its parent, or its
   network address changed) keeps its setup; one that joins afresh after a
   factory reset is set up again, as it lost its bindings and reporting.

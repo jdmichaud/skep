@@ -217,7 +217,9 @@ pub fn delivered(ctx: *Context, tag: u8, ok: bool) void {
 /// A frame from a device: the answer to its exchange, if it is one. Returns whether it was.
 pub fn answer(ctx: *Context, d: *const State.Device, frame: *const driver_layer.Frame) bool {
   for (ctx.exchanges.items, 0..) |e, i| {
-    if (e.device != d.ieee or e.phase == .waiting or e.phase == .sending) continue;
+    if (e.device != d.ieee or e.phase == .waiting or e.phase == .sending) {
+      continue;
+    }
     const payload = frame.bytes();
     if (e.is_zdo) {
       if (frame.profile != zdo.profile or frame.cluster != e.frame.cluster | zdo.Cluster.response) {
