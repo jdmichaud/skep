@@ -21,10 +21,11 @@ pub const Info = struct {
 
 pub const Failure = union(enum) {
   link: link_layer.Failure,
-  /// The NCP speaks an EZSP version outside `frame.min_version` to `frame.max_version`.
-  unsupported_version: u8,
+  /// The NCP speaks an EZSP version outside `frame.min_version` to `frame.max_version`. Its
+  /// answer tells which firmware it runs, to know what to flash.
+  unsupported_version: frame.Version,
   /// The NCP runs another stack than EmberZNet's mesh stack.
-  unsupported_stack: u8,
+  unsupported_stack: frame.Version,
   /// The NCP did not answer a command within `response_timeout`.
   response_timeout,
   /// The NCP rejected a command, with this EZSP status.
@@ -150,12 +151,12 @@ pub const Startup = struct {
         const version = frame.Version.parse(response.parameters) catch
           return s.finish(.{ .failed = .bad_response });
         if (version.stack_type != frame.stack_type_mesh) {
-          return s.finish(.{ .failed = .{ .unsupported_stack = version.stack_type } });
+          return s.finish(.{ .failed = .{ .unsupported_stack = version } });
         }
         const supported = version.protocol_version >= frame.min_version and
           version.protocol_version <= frame.max_version;
         if (!supported) {
-          return s.finish(.{ .failed = .{ .unsupported_version = version.protocol_version } });
+          return s.finish(.{ .failed = .{ .unsupported_version = version } });
         }
         s.version = version;
         if (s.step == .version and version.protocol_version != frame.max_version) {
@@ -301,14 +302,29 @@ test "an unsupported EZSP version or stack fails the startup" {
   var ncp: Ncp = .{ .startup = &startup };
   try ncp.connect();
   _ = ncp.take();
-  ncp.respond(&hex("0080000c021074"));
-  try testing.expectEqual(Result{ .failed = .{ .unsupported_version = 12 } }, startup.result.?);
+  // EZSP 8, EmberZNet 6.10.3: the answer of our ZBDongle-E as delivered.
+  ncp.respond(&hex("0080000802306a"));
+  try testing.expectEqual(
+    Result{
+      .failed = .{
+        .unsupported_version = .{ .protocol_version = 8, .stack_type = 2, .stack_version = 0x6a30 },
+      },
+    },
+    startup.result.?,
+  );
 
   ncp = .{ .startup = &startup };
   try ncp.connect();
   _ = ncp.take();
   ncp.respond(&hex("0080000d031074"));
-  try testing.expectEqual(Result{ .failed = .{ .unsupported_stack = 3 } }, startup.result.?);
+  try testing.expectEqual(
+    Result{
+      .failed = .{
+        .unsupported_stack = .{ .protocol_version = 13, .stack_type = 3, .stack_version = 0x7410 },
+      },
+    },
+    startup.result.?,
+  );
 }
 
 test "the startup fails when the NCP stops answering" {
