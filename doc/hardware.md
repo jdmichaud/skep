@@ -9,8 +9,9 @@ attribute details come from the Zigbee2MQTT device definitions
 ## Development coordinator: Sonoff Zigbee 3.0 USB Dongle Plus V2 (ZBDongle-E)
 
 - Radio: Silicon Labs EFR32MG21 according to the label and the product
-  name; not yet confirmed by talking to it. Firmware: EmberZNet network
-  co-processor; the host talks EZSP over the ASH serial link protocol.
+  name. Our unit answers ASH and EZSP, so it is an EmberZNet network
+  co-processor on a Silicon Labs radio; EZSP's version answer does not
+  name the chip.
 - USB serial bridge: our unit enumerates as `10c4:ea60` and is bound by
   the kernel's `cp210x` driver, so the bridge is a Silicon Labs CP210x
   (most likely a CP2102N), although Sonoff documents a CH9102F
@@ -29,12 +30,16 @@ attribute details come from the Zigbee2MQTT device definitions
   bridge; only talking to it does.
 - Stable device path:
   `/dev/serial/by-id/usb-Itead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_V2_<serial>-if00-port0`.
-- Serial settings: 115200 baud is the usual setting for this dongle. Flow
-  control is to be confirmed when probing.
-- Firmware version: not yet known for our unit. Early ZBDongle-E units
-  shipped EmberZNet 6.x; Zigbee2MQTT's `ember` driver needs 7.4 or newer.
-  `universal-silabs-flasher --device <path> probe` reports the running
-  firmware, and the same tool flashes a new one.
+- Serial settings: 115200 baud, 8N1, no RTS/CTS. The firmware uses
+  software flow control: it sends XON about 0.1 s after a reset, as
+  builds for XON/XOFF do. RSTACK follows about 1 s after RST. (Measured
+  on 2026-11-16 with `zig build probe`.)
+- Firmware: our unit runs EmberZNet 6.10.3 (stack version 0x6a30), EZSP
+  protocol version 8, as early ZBDongle-E units shipped. skep needs EZSP
+  13 (EmberZNet 7.4) or newer, as does Zigbee2MQTT's `ember` driver, so
+  the dongle must be flashed with newer firmware before skep can use it.
+  `universal-silabs-flasher --device <path> probe` also reports the
+  running firmware, and the same tool flashes a new one.
 - Linux pitfall: brltty claims some USB serial ids, including `10c4:ea60`,
   and takes the port away. Remove it if `/dev/ttyUSB0` appears and then
   vanishes.
