@@ -1,14 +1,16 @@
 //! The sim driver: a simulated dongle, for tests that need no hardware. No byte goes to any line.
 //!
-//! For now it only starts, reporting the network the test gave it; it grows with the driver
-//! interface, so that each feature can be tested without a dongle.
+//! It holds a network and its keys, as the test gave them or as it formed them, and reports
+//! devices the test makes join; it grows with the driver interface, so that each feature can be
+//! tested without a dongle.
 
 const std = @import("std");
 const driver = @import("../driver.zig");
 
 pub const Driver = struct {
-  /// The network the simulated dongle holds. Tests set it before `start`.
-  network: ?driver.Network = null,
+  /// The network the simulated dongle holds. Tests set it before `start`, and advance its
+  /// frame counters as they like.
+  network: ?driver.Held = null,
   /// The coordinator's IEEE address: a locally administered one (bit 1 of the first byte), which
   /// no manufactured device carries.
   ieee: u64 = 0x0200_0000_0000_0001,
@@ -28,8 +30,17 @@ pub const Driver = struct {
 
   /// Forms the network: the simulated dongle holds it from now on.
   pub fn form(d: *Driver, f: driver.Form) void {
-    d.network = f.network;
-    d.post(.{ .formed = f.network });
+    var held: driver.Held = .{ .network = f.network, .security = f.security };
+    if (!f.restore) {
+      held.security.network_frame_counter = 0;
+      held.security.trust_center_frame_counter = 0;
+    }
+    d.network = held;
+    d.post(.{ .formed = held });
+  }
+
+  pub fn refresh(d: *Driver) void {
+    d.post(.{ .refreshed = d.network.? });
   }
 
   pub fn permitJoin(d: *Driver, seconds: u8) void {
@@ -75,10 +86,20 @@ pub const Driver = struct {
   }
 };
 
+/// A network for tests, with keys of no importance.
+pub fn testNetwork(network: driver.Network) driver.Held {
+  return .{
+    .network = network,
+    .security = .{ .network_key = @splat(0x22), .trust_center_link_key = @splat(0x11) },
+  };
+}
+
 test "the simulated dongle reports the network it was given" {
-  var d: Driver = .{ .network = .{ .channel = 20, .pan_id = 0x1a62, .extended_pan_id = 1 } };
+  var d: Driver = .{
+    .network = testNetwork(.{ .channel = 20, .pan_id = 0x1a62, .extended_pan_id = 1 }),
+  };
   d.start();
   const ready = d.nextEvent().?.ready;
-  try std.testing.expectEqual(20, ready.network.?.channel);
+  try std.testing.expectEqual(20, ready.network.?.network.channel);
   try std.testing.expectEqual(null, d.nextEvent());
 }

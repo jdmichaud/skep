@@ -150,6 +150,17 @@ pub fn main(init: std.process.Init) !u8 {
           },
         );
         try out.print("transmit power {d} dBm, update id {d}\n", .{ p.tx_power, p.update_id });
+        // The keys are secrets: the probe shows only what goes with them.
+        const s = network.security;
+        try out.print(
+          "network key sequence number {d}, frame counters: network {d}, trust center ",
+          .{ s.network_key_sequence_number, s.network_frame_counter },
+        );
+        if (s.trust_center_frame_counter) |counter| {
+          try out.print("{d}\n", .{ counter });
+        } else {
+          try out.writeAll("unknown\n");
+        }
       } else {
         try out.writeAll("network: none\n");
       }
@@ -177,6 +188,7 @@ pub fn main(init: std.process.Init) !u8 {
     // The probe neither forms networks nor sends commands it can do without.
     .configuration_refused,
     .formed,
+    .refreshed,
     .command_refused,
     .permit_join_done,
     .join_window,
@@ -200,7 +212,7 @@ fn nextResult(driver: *Driver, out: *Io.Writer) !?ezsp.driver.Event {
       }),
       // The probe opens no join window, so none of these comes before ready.
       .permit_join_done, .join_window, .device, .callback => {},
-      .ready, .failed, .formed => return event,
+      .ready, .failed, .formed, .refreshed => return event,
     }
   }
   return null;

@@ -287,7 +287,9 @@ fn process(ctx: *Context) c_int {
     const driver_event = d.nextEvent() orelse break;
     switch (driver_event) {
       .ready => |ready| ctx.onReady(ready),
-      .formed => |network| ctx.onFormed(network),
+      .formed => |held| ctx.onFormed(held.network),
+      // Nothing asks for it yet.
+      .refreshed => {},
       .permit_join_done => |failure| {
         const id = ctx.permit_join orelse continue;
         ctx.permit_join = null;
@@ -330,7 +332,8 @@ fn process(ctx: *Context) c_int {
 
 fn onReady(ctx: *Context, r: driver_layer.Ready) void {
   ctx.ieee = r.ieee;
-  if (r.network) |network| {
+  if (r.network) |held| {
+    const network = held.network;
     if (!ctx.options.replace_network) {
       const message: driver_layer.Message = .init(
         "resumed the dongle's network: channel {d}, PAN ID 0x{x:0>4} ({s})",
@@ -344,7 +347,7 @@ fn onReady(ctx: *Context, r: driver_layer.Ready) void {
   const message: driver_layer.Message = if (r.network) |old|
     .init(
       "replacing the dongle's network (PAN ID 0x{x:0>4}) with a new one on channel {d} ({s})",
-      .{ old.pan_id, f.network.channel, r.firmware.text() },
+      .{ old.network.pan_id, f.network.channel, r.firmware.text() },
     )
   else
     .init("forming a new network on channel {d} ({s})", .{ f.network.channel, r.firmware.text() });
@@ -388,15 +391,14 @@ fn newNetwork(ctx: *Context) driver_layer.Form {
         if (extended != 0 and extended != std.math.maxInt(u64)) break extended;
       },
     },
-    .network_key = undefined,
-    .trust_center_link_key = undefined,
+    .security = .{ .network_key = undefined, .trust_center_link_key = undefined },
   };
   if (o.network_key) |key| {
-    f.network_key = key;
+    f.security.network_key = key;
   } else {
-    random.bytes(&f.network_key);
+    random.bytes(&f.security.network_key);
   }
-  random.bytes(&f.trust_center_link_key);
+  random.bytes(&f.security.trust_center_link_key);
   return f;
 }
 

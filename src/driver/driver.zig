@@ -24,6 +24,26 @@ pub const Network = struct {
   channel: u8,
   pan_id: u16,
   extended_pan_id: u64,
+  /// Raised each time the network moves to another channel.
+  update_id: u8 = 0,
+};
+
+/// A network's keys, and the outgoing frame counters that devices check the coordinator's frames
+/// against: each frame must carry a higher counter than the last they saw.
+pub const Security = struct {
+  network_key: [16]u8,
+  network_key_sequence_number: u8 = 0,
+  network_frame_counter: u32 = 0,
+  /// The key from which the trust center derives the link keys it gives devices.
+  trust_center_link_key: [16]u8,
+  /// Null when the dongle does not tell.
+  trust_center_frame_counter: ?u32 = 0,
+};
+
+/// A network as a dongle holds it: what it is, and its keys.
+pub const Held = struct {
+  network: Network,
+  security: Security,
 };
 
 /// A short text for the log, kept in the event that carries it.
@@ -51,7 +71,7 @@ pub const Ready = struct {
   /// The coordinator's IEEE address.
   ieee: u64,
   /// The network the dongle holds, now up, or null if it holds none.
-  network: ?Network,
+  network: ?Held,
   /// What the dongle runs, for the log.
   firmware: Message,
 };
@@ -75,21 +95,26 @@ pub const Failure = struct {
 /// What `form` needs: the network, and its keys.
 pub const Form = struct {
   network: Network,
-  network_key: [16]u8,
-  /// The trust center's link key, from which the keys it gives devices are derived.
-  trust_center_link_key: [16]u8,
+  security: Security,
+  /// The network is a saved one put back: its frame counters are set too, so that its devices
+  /// accept the coordinator's frames. A new network starts them at 0.
+  restore: bool = false,
 };
 
 /// A device the trust center saw join, rejoin or leave.
 pub const Device = struct {
   ieee: u64,
+  /// Its network address.
+  nwk: u16,
   kind: enum { joined, rejoined, left },
 };
 
 pub const Event = union(enum) {
   ready: Ready,
   /// `form` formed the network.
-  formed: Network,
+  formed: Held,
+  /// `refresh` read the network again.
+  refreshed: Held,
   /// `permitJoin` was done: null if it worked, why not otherwise.
   permit_join_done: ?Failure,
   /// The join window opened (true) or closed.
@@ -129,19 +154,36 @@ pub const Driver = union(Name) {
     }
   }
 
-  /// Forms a new network once the driver is ready, replacing the dongle's if it holds one.
+  /// Forms a network, new or saved, once the driver is ready, replacing the dongle's if it holds
+  /// one.
   pub fn form(d: *Driver, f: Form) void {
     switch (d.*) {
       .ezsp => |*driver| driver.form(.{
         .channel = f.network.channel,
         .pan_id = f.network.pan_id,
         .extended_pan_id = f.network.extended_pan_id,
+        .update_id = f.network.update_id,
         // zigbee-herdsman's default.
         .tx_power = 5,
-        .network_key = f.network_key,
-        .trust_center_link_key = f.trust_center_link_key,
+        .network_key = f.security.network_key,
+        .network_key_sequence_number = f.security.network_key_sequence_number,
+        .trust_center_link_key = f.security.trust_center_link_key,
+        .frame_counters = if (f.restore)
+          .{
+            .network = f.security.network_frame_counter,
+            .trust_center = f.security.trust_center_frame_counter orelse 0,
+          }
+        else
+          null,
       }),
       .sim => |*driver| driver.form(f),
+    }
+  }
+
+  /// Reads the network, its keys and frame counters again, once the network is up.
+  pub fn refresh(d: *Driver) void {
+    switch (d.*) {
+      inline else => |*driver| driver.refresh(),
     }
   }
 
@@ -207,14 +249,7 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
     .ready => |ready| .{
       .ready = .{
         .ieee = ready.ieee,
-        .network = if (ready.network) |network|
-          .{
-            .channel = network.parameters.channel,
-            .pan_id = network.parameters.pan_id,
-            .extended_pan_id = network.parameters.extended_pan_id,
-          }
-        else
-          null,
+        .network = if (ready.network) |network| fromEzspNetwork(network) else null,
         .firmware = .init("EmberZNet {d}.{d}.{d}.{d} build {d}{s}, EZSP {d}", .{
           ready.firmware.major,
           ready.firmware.minor,
@@ -226,13 +261,8 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
         }),
       },
     },
-    .formed => |network| .{
-      .formed = .{
-        .channel = network.parameters.channel,
-        .pan_id = network.parameters.pan_id,
-        .extended_pan_id = network.parameters.extended_pan_id,
-      },
-    },
+    .formed => |network| .{ .formed = fromEzspNetwork(network) },
+    .refreshed => |network| .{ .refreshed = fromEzspNetwork(network) },
     .permit_join_done => |refused| .{
       .permit_join_done = if (refused) |r| fromEzspFailure(.{ .refused = r }) else null,
     },
@@ -249,6 +279,7 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
     .device => |change| .{
       .device = .{
         .ieee = change.eui64,
+        .nwk = change.node_id,
         .kind = switch (change.kind) {
           .joined => .joined,
           .rejoined => .rejoined,
@@ -258,19 +289,34 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
     },
     .failed => |failure| .{ .failed = fromEzspFailure(failure) },
     .command_refused => |refused| .{
-      .log = if (refused.value == .stack_token_writing) .{
-        // The network is kept all the same, as far as we have seen.
-        .level = .info,
-        .message = .init("ezsp: the dongle refused to start writing its tokens (status 0x{x})", .{
-          refused.status.value,
-        }),
-      } else .{
-        .level = .warning,
-        .message = .init("ezsp: the dongle refused {t} (status 0x{x}), which is not needed", .{
-          refused.command,
-          refused.status.value,
-        }),
-      },
+      .log = if (refused.value == .nwk_frame_counter or refused.value == .aps_frame_counter)
+        .{
+          .level = .warning,
+          .message = .init(
+            "ezsp: the dongle refused to set the {s} frame counter (status 0x{x}): devices " ++
+              "ignore the coordinator's frames until it passes the one they last saw",
+            .{
+              if (refused.value == .nwk_frame_counter) "network" else "trust center",
+              refused.status.value,
+            },
+          ),
+        }
+      else if (refused.value == .stack_token_writing)
+        .{
+          // The network is kept all the same, as far as we have seen.
+          .level = .info,
+          .message = .init("ezsp: the dongle refused to start writing its tokens (status 0x{x})", .{
+            refused.status.value,
+          }),
+        }
+      else
+        .{
+          .level = .warning,
+          .message = .init("ezsp: the dongle refused {t} (status 0x{x}), which is not needed", .{
+            refused.command,
+            refused.status.value,
+          }),
+        },
     },
     .configuration_refused => |refused| .{
       .log = .{
@@ -280,6 +326,26 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
           .{ refused.id, refused.status.value },
         ),
       },
+    },
+  };
+}
+
+fn fromEzspNetwork(network: ezsp.driver.Network) Held {
+  const p = network.parameters;
+  const s = network.security;
+  return .{
+    .network = .{
+      .channel = p.channel,
+      .pan_id = p.pan_id,
+      .extended_pan_id = p.extended_pan_id,
+      .update_id = p.update_id,
+    },
+    .security = .{
+      .network_key = s.network_key,
+      .network_key_sequence_number = s.network_key_sequence_number,
+      .network_frame_counter = s.network_frame_counter,
+      .trust_center_link_key = s.trust_center_link_key,
+      .trust_center_frame_counter = s.trust_center_frame_counter,
     },
   };
 }
@@ -411,17 +477,31 @@ test "ezsp events become events that know nothing of EZSP" {
           .channel = 15,
           .join_method = 0,
           .manager_id = 0,
-          .update_id = 0,
+          .update_id = 2,
           .channels = 0,
+        },
+        .security = .{
+          .network_key = @splat(0x22),
+          .network_key_sequence_number = 0,
+          .network_frame_counter = 70000,
+          .trust_center_link_key = @splat(0x11),
+          .trust_center_frame_counter = null,
         },
       },
     },
   }).ready;
   try testing.expectEqualStrings("EmberZNet 6.10.3.0 build 297, EZSP 8", ready.firmware.text());
   try testing.expectEqual(
-    Network{ .channel = 15, .pan_id = 0x21e0, .extended_pan_id = 0x814298be16f0fe69 },
-    ready.network.?,
+    Network{
+      .channel = 15,
+      .pan_id = 0x21e0,
+      .extended_pan_id = 0x814298be16f0fe69,
+      .update_id = 2,
+    },
+    ready.network.?.network,
   );
+  try testing.expectEqual(70000, ready.network.?.security.network_frame_counter);
+  try testing.expectEqual(null, ready.network.?.security.trust_center_frame_counter);
 
   const failure = fromEzsp(.{ .failed = .{ .link = .ack_timeouts } }).failed;
   try testing.expectEqual(Failure.Kind.timeout, failure.kind);

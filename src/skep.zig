@@ -9,6 +9,7 @@ const build_options = @import("build_options");
 const CAllocator = @import("allocator.zig").CAllocator;
 const Context = @import("Context.zig");
 const Event = @import("Event.zig");
+const sim = @import("driver/sim/sim.zig");
 
 /// Version of libskep, taken from `.version` in `build.zig.zon`.
 pub const version: std.SemanticVersion = std.SemanticVersion.parse(build_options.version) catch
@@ -189,11 +190,11 @@ test "the sim driver resumes the network of the simulated dongle" {
   var baudrate: c_uint = 0;
   var flow_control: c_int = 0;
   try testing.expectEqual(err(.OPNOTSUPP), skep_get_serial_defaults(ctx, &baudrate, &flow_control));
-  ctx.sim_dongle.network = .{
+  ctx.sim_dongle.network = sim.testNetwork(.{
     .channel = 20,
     .pan_id = 0x1a62,
     .extended_pan_id = 0xdddddddddddddddd,
-  };
+  });
 
   try testing.expectEqual(0, skep_start(ctx));
   try testing.expectEqual(err(.BUSY), skep_start(ctx));
@@ -275,7 +276,11 @@ test "replace-network replaces the dongle's network with a new one" {
   defer skep_free(ctx);
   try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
   try testing.expectEqual(0, skep_set_option(ctx, "replace-network", "yes"));
-  ctx.sim_dongle.network = .{ .channel = 20, .pan_id = 0x1a62, .extended_pan_id = 1 };
+  ctx.sim_dongle.network = sim.testNetwork(.{
+    .channel = 20,
+    .pan_id = 0x1a62,
+    .extended_pan_id = 1,
+  });
   try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
   try testing.expectEqual(15, ctx.network.?.channel);
   try testing.expect(ctx.network.?.extended_pan_id != 1);
@@ -284,7 +289,7 @@ test "replace-network replaces the dongle's network with a new one" {
 test "a lost link stops at once, and events outlive their context" {
   const ctx = try testContext(&testing.allocator);
   try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
-  ctx.sim_dongle.network = .{ .channel = 15, .pan_id = 1, .extended_pan_id = 1 };
+  ctx.sim_dongle.network = sim.testNetwork(.{ .channel = 15, .pan_id = 1, .extended_pan_id = 1 });
   try testing.expectEqual(0, skep_start(ctx));
   try testing.expectEqual(@backingInt(Event.Type.started), try nextEventType(ctx));
   skep_link_lost(ctx);
@@ -333,9 +338,9 @@ test "devices join while the window is open" {
   try testing.expectEqual(@backingInt(Event.Type.permit_join), skep_event_get_type(window));
   try testing.expectEqual(60, skep_event_get_duration(window));
 
-  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .kind = .joined });
-  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .kind = .rejoined });
-  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .kind = .left });
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .joined });
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .rejoined });
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .left });
   try testing.expectEqual(0, skep_advance(ctx, 0));
   const joined = skep_next_event(ctx).?;
   defer skep_event_free(joined);
@@ -367,7 +372,7 @@ fn startAndStop(allocator: std.mem.Allocator) !void {
   const ctx = try testContext(&allocator);
   defer skep_free(ctx);
   if (skep_set_option(ctx, "driver", "sim") != 0) return error.TestUnexpectedResult;
-  ctx.sim_dongle.network = .{ .channel = 15, .pan_id = 1, .extended_pan_id = 1 };
+  ctx.sim_dongle.network = sim.testNetwork(.{ .channel = 15, .pan_id = 1, .extended_pan_id = 1 });
   if (skep_start(ctx) != 0) return error.TestUnexpectedResult;
   for (0..10) |_| {
     const event_type = try nextEventType(ctx) orelse continue;
