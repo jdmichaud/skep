@@ -112,17 +112,18 @@ those of our ZBDongle-E; use `lsusb` to find another dongle's.
 ## Reference sources
 
 These projects are useful for comparison. They are kept outside the skep
-repository, as independent clones pinned to the versions Zigbee2MQTT
-2.14.3 uses. In our setup they live in `~/projects/zigbee/reference/` on
-the host.
+repository, as independent clones: the zigbee-herdsman ones pinned to the
+versions Zigbee2MQTT 2.14.3 uses, zigpy at the commit below. In our setup
+they live in `~/projects/zigbee/reference/` on the host.
 
 | Project | Version | License | Of interest |
 |---|---|---|---|
 | zigbee-herdsman | v11.2.0 | MIT | `src/adapter/ember/`: ASH (`uart/ash.ts`), EZSP (`ezsp/ezsp.ts`), adapter logic (`adapter/emberAdapter.ts`); `src/zspec/` for Zigbee and ZCL definitions |
 | zigbee-herdsman-converters | v26.125.0 | MIT | Device definitions: `src/devices/third_reality.ts`, `src/devices/lumi.ts`, `src/lib/lumi.ts` |
 | zigbee2mqtt | 2.14.3 | GPL-3.0 | Application behaviour only |
+| zigpy | 64b51ef (2026-11-07) | GPL-3.0 | Behaviour only: the Open Coordinator Backup format (`zigpy/backups.py`) |
 
 - Code from the MIT projects may be ported, keeping their copyright
   notices in the ported files.
-- Zigbee2MQTT is GPL-3.0: read it to understand behaviour, but do not copy
-  or port its code into skep.
+- Zigbee2MQTT and zigpy are GPL-3.0: read them to understand behaviour,
+  but do not copy or port their code into skep.

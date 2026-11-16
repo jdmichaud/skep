@@ -33,9 +33,9 @@
 - Record changes that matter to users of skep (new or changed API,
   behaviour, devices, fixes) in `CHANGELOG.md`, under `[Unreleased]`, in
   the commit that makes them. They become the release notes.
-- Do not copy or port code from Zigbee2MQTT (GPL-3.0). Code from the MIT
-  licensed zigbee-herdsman projects may be ported with its copyright
-  notice.
+- Do not copy or port code from Zigbee2MQTT or zigpy (GPL-3.0). Code from
+  the MIT licensed zigbee-herdsman projects may be ported with its
+  copyright notice.
 
 ## README
 
