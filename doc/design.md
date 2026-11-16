@@ -514,6 +514,10 @@ The API is in [include/skep.h](../include/skep.h).
   devices`, `skep rename`, `skep read`, `skep watch` and the others,
   with `on`, `off` and `toggle` for the On/Off cluster; skep(1) lists
   them.
+- Readings, which skepd gives named and scaled, are how skep shows what
+  devices measure: `skep devices` sums them up, `skep get` gives the last
+  ones at once, `skep read plug power` asks the device. Numbers stay
+  available for what has no reading.
 - `--help` and `--version`; data on stdout, diagnostics on stderr. Human
   readable output by default, `--json` for scripts. Exit status 0 on
   success, 1 on failure, 2 on usage errors.

@@ -49,6 +49,11 @@ publishes the section of each released version as its release notes.
   `skep_device_get_readings()` lists what a device can be read for.
   skep-protocol(7) carries them, and skepd remembers the last ones, which
   the devices' descriptions give.
+- skep shows readings: `skep devices` sums up what each device last
+  reported, `skep get` gives a device's last readings at once, even for a
+  sleepy one, `skep read <device> <reading>...` asks the device, as in
+  `skep read plug power`, and `skep watch` prints events on short lines
+  such as `plug: power 11.2 W`.
 - Opening or closing the join window tells the routers too.
 - libskep answers devices on the coordinator's behalf: a Default
   Response where a frame asks for one, and "no image available" to
