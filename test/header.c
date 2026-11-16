@@ -5,6 +5,7 @@
 
 #include <poll.h>
 #include <stdlib.h>
+#include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -52,7 +53,9 @@ static void check_free(void *ctx, void *ptr, size_t size, size_t alignment) {
 
 int skep_header_new(skep_ctx **ctx) {
   struct skep_allocator allocator = { .alloc = check_alloc, .free = check_free };
-  return skep_new(&allocator, ctx);
+  uint8_t seed[SKEP_SEED_SIZE];
+  if (getrandom(seed, sizeof seed, 0) != (ssize_t)sizeof seed) return -1;
+  return skep_new(&allocator, seed, ctx);
 }
 
 static uint64_t now(void) {

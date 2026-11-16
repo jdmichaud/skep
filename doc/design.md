@@ -340,6 +340,17 @@ reviewed before the library is implemented.
 - Events hold copies of what they report and outlive the context they
   came from: an application can free a context and still handle the
   events it took from it.
+- Randomness: the application passes 32 random bytes to `skep_new()`,
+  from a cryptographically secure source such as getrandom(2), and the
+  context derives every random value it needs from them with a
+  cryptographic generator (ChaCha20): network keys, PAN IDs, sequence
+  numbers. libskep does no I/O, so it cannot read a random source itself.
+  Tests pass a fixed seed and stay repeatable.
+  - Not chosen: the dongle's random generator, which every driver would
+    have to offer, and the `sim` driver to fake, for something
+    security-critical; and leaving applications to set the PAN IDs and
+    the network key themselves, which every application would have to
+    get right.
 - Memory: the application passes an allocator (`struct skep_allocator`)
   to `skep_new()`, or NULL for `malloc()`. Everything the context
   allocates, events included, comes from it. Inside libskep, functions

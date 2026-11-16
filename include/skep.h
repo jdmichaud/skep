@@ -29,6 +29,8 @@
  *   time.
  * - Memory comes from the allocator given to skep_new(), malloc() unless
  *   the caller provides one.
+ * - Randomness comes from the seed given to skep_new(): libskep reads no
+ *   random source of its own.
  * - Devices are identified by their IEEE address (EUI-64), which never
  *   changes, rather than by their network address, which may.
  * - Values are passed in host byte order.
@@ -96,9 +98,18 @@ struct skep_allocator {
   void *reserved[4];
 };
 
+/* Size of the seed skep_new() takes. */
+#define SKEP_SEED_SIZE 32
+
 /*
  * Create a context. Configure it with skep_set_option() and, if a state
  * was saved, skep_import_state(); then call skep_start().
+ *
+ * seed is SKEP_SEED_SIZE bytes from a cryptographically secure source,
+ * such as getrandom(2). The context derives every random value it needs
+ * from them: network keys, PAN IDs, sequence numbers. Give each context a
+ * fresh seed: two contexts with the same seed choose the same values,
+ * which only tests should want.
  *
  * allocator is copied; NULL selects malloc() and free() from the C
  * library. What allocator->ctx refers to must stay usable until the
@@ -107,10 +118,11 @@ struct skep_allocator {
  * from several threads, for instance by contexts in different threads or
  * by events freed in another thread, must be thread-safe.
  *
- * Errors: -ENOMEM, -EINVAL (alloc or free missing, or a reserved field
- * set).
+ * Errors: -ENOMEM, -EINVAL (no seed, alloc or free missing, or a reserved
+ * field set).
  */
-int skep_new(const struct skep_allocator *allocator, skep_ctx **ctx);
+int skep_new(const struct skep_allocator *allocator, const uint8_t seed[SKEP_SEED_SIZE],
+             skep_ctx **ctx);
 
 /*
  * Free the context. The dongle is the caller's: libskep does not close it.
