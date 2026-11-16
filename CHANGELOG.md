@@ -19,6 +19,8 @@ publishes the section of each released version as its release notes.
 - Starting an EmberZNet dongle: reset, agreeing on the EZSP version,
   reading the firmware version, configuring it and bringing up the
   network it holds.
+- libskep as a static and a shared library (soname `libskep.so.0`),
+  installed with its headers and `libskep.pc`.
 - The core of the C API: contexts with the application's allocator and
   seed, options, the I/O loop, events, and starting on a dongle that
   holds a network.

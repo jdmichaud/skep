@@ -19,14 +19,78 @@ pub fn build(b: *std.Build) !void {
   });
   skep.addOptions("build_options", build_options);
 
+  const library = addLibrary(b, skep);
+
   const test_step = b.step("test", "Run the unit tests");
   const unit_tests = b.addTest(.{ .root_module = skep });
   test_step.dependOn(&b.addRunArtifact(unit_tests).step);
   addHeaderChecks(b, test_step, target, optimize, build_options);
+  addAbiCheck(b, test_step, target, optimize, library);
   addProbe(b, test_step, target, optimize);
   if (b.isRoot()) {
     try addFormatSteps(b);
   }
+}
+
+/// `zig build` installs libskep as a static and a shared library, whose soname carries the major
+/// version, the ABI version; its headers; and libskep.pc for pkg-config. Returns the static
+/// library, for programs built here.
+fn addLibrary(b: *std.Build, skep: *std.Build.Module) *std.Build.Step.Compile {
+  const version = std.SemanticVersion.parse(manifest.version) catch
+    @panic("invalid version in build.zig.zon");
+  const static = b.addLibrary(.{ .name = "skep", .linkage = .static, .root_module = skep });
+  const shared = b.addLibrary(.{
+    .name = "skep",
+    .linkage = .dynamic,
+    .root_module = skep,
+    .version = version,
+  });
+  b.installArtifact(static);
+  b.installArtifact(shared);
+  // One by one: with Zig 0.17, installing the include directory into a prefix that does not exist
+  // yet installs nothing.
+  for ([_][]const u8{ "skep.h", "skep/zcl.h" }) |header| {
+    b.getInstallStep().dependOn(
+      &b.addInstallHeaderFile(b.path(b.fmt("include/{s}", .{ header })), header).step,
+    );
+  }
+  const pc = b.addWriteFiles().add(
+    "libskep.pc",
+    b.fmt(
+      \\prefix=${{pcfiledir}}/../..
+      \\libdir=${{prefix}}/lib
+      \\includedir=${{prefix}}/include
+      \\
+      \\Name: libskep
+      \\Description: A small Zigbee stack
+      \\Version: {s}
+      \\Libs: -L${{libdir}} -lskep
+      \\Cflags: -I${{includedir}}
+      \\
+    , .{ manifest.version }),
+  );
+  b.getInstallStep().dependOn(&b.addInstallFileWithDir(pc, .lib, "pkgconfig/libskep.pc").step);
+  return static;
+}
+
+/// A C program linked with the static library checks that the implementation matches skep.h:
+/// struct layouts, enums, pointers and errno values, through the real C ABI.
+fn addAbiCheck(
+  b: *std.Build,
+  test_step: *std.Build.Step,
+  target: std.Build.ResolvedTarget,
+  optimize: std.lang.Optimize,
+  library: *std.Build.Step.Compile,
+) void {
+  const module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+  module.addIncludePath(b.path("include"));
+  module.addCSourceFile(.{
+    .file = b.path("test/abi.c"),
+    .flags = &.{ "-std=c99", "-Wall", "-Wextra", "-Wpedantic", "-Werror" },
+  });
+  module.linkLibrary(library);
+  const abi = b.addExecutable(.{ .name = "abi", .root_module = module });
+  test_step.dependOn(&b.addRunArtifact(abi).step);
 }
 
 /// `zig build probe -- <device>` resets a Silicon Labs dongle and reports its versions: the

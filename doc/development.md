@@ -14,9 +14,13 @@
 
 ## Building and testing
 
+- `zig build` installs libskep, static and shared, its headers and
+  `libskep.pc` under `zig-out/`, or under `--prefix`.
 - `zig build test` runs the unit tests and checks the headers in
   `include/`: they must compile as strict C99 and as C++, translate to
-  Zig, and `skep.h` must carry the version from `build.zig.zon`.
+  Zig, and `skep.h` must carry the version from `build.zig.zon`. A C
+  program linked with the library (`test/abi.c`) checks that the
+  implementation matches the headers, through the C ABI.
 - `zig build test -Drelease` does the same in ReleaseSafe, the mode of
   release builds. The build offers no other optimize mode.
 - `zig build test --fuzz=1M -Drelease` runs the fuzz tests for a million
