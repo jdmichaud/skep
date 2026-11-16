@@ -40,8 +40,9 @@
 
 - `zig build skepd -- --device <path>` runs skepd on the dongle, which
   brings its network up; SIGINT (Ctrl-C) or SIGTERM stop it cleanly.
-  With `--permit-join 120`, new devices can join for two minutes, and
-  skepd prints those that do. It keeps the network's state, keys
+  Clients ask it things on its socket, as skep-protocol(7) says, and it
+  prints the devices that join and what they report. It keeps the
+  network's state, keys
   included, in `~/.local/share/skep/state.json` unless `--state` says
   otherwise; with that file, a dongle that dies can be replaced.
   `zig-out/bin/skepd --help` lists its options.

@@ -452,9 +452,9 @@ The API is in [include/skep.h](../include/skep.h).
 - Until the configuration file format is settled, its options come from
   the command line: `--device`, `--state` for the state file and
   `--socket` for the socket (see Files), `--driver`, `--log-level`,
-  `--replace-network`, `--permit-join` to open the join window once the
-  network is up, and `--baud` and `--rtscts` to override the driver's
-  serial settings.
+  `--replace-network`, and `--baud` and `--rtscts` to override the
+  driver's serial settings. What clients ask, such as opening the join
+  window, goes through the socket, not the command line.
 - Device names, which clients give with skep-protocol's rename, are
   skepd's, not libskep's: they are kept in `names.json` next to the
   state.
