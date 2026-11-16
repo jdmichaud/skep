@@ -285,6 +285,35 @@ test "start an NCP that speaks an older EZSP version" {
   try testing.expectEqual(null, startup.nextDeadline());
 }
 
+test "start an NCP that speaks EZSP 8" {
+  var startup: Startup = .init(.{ .software_flow_control = true });
+  var ncp: Ncp = .{ .startup = &startup };
+  try ncp.connect();
+  try ncp.expectCommand(&hex("00000013"));
+  // The answer of our ZBDongle-E as delivered: EZSP 8, EmberZNet 6.10.3.
+  ncp.respond(&hex("0080000802306a"));
+  try ncp.expectCommand(&hex("010001000008"));
+  ncp.respond(&hex("01800100000802306a"));
+  try ncp.expectCommand(&hex("020001aa0011"));
+  ncp.respond(&hex("028001aa0000" ++ "07" ++ "3412" ++ "060a03" ++ "00" ++ "aa"));
+  try testing.expectEqual(
+    Result{
+      .done = .{
+        .version = .{ .protocol_version = 8, .stack_type = 2, .stack_version = 0x6a30 },
+        .firmware = .{
+          .build = 0x1234,
+          .major = 6,
+          .minor = 10,
+          .patch = 3,
+          .special = 0,
+          .type = 0xaa,
+        },
+      },
+    },
+    startup.result.?,
+  );
+}
+
 test "an NCP that speaks the newest version is not asked twice" {
   var startup: Startup = .init(.{ .software_flow_control = true });
   var ncp: Ncp = .{ .startup = &startup };
@@ -302,12 +331,12 @@ test "an unsupported EZSP version or stack fails the startup" {
   var ncp: Ncp = .{ .startup = &startup };
   try ncp.connect();
   _ = ncp.take();
-  // EZSP 8, EmberZNet 6.10.3: the answer of our ZBDongle-E as delivered.
-  ncp.respond(&hex("0080000802306a"));
+  // Older than the oldest supported.
+  ncp.respond(&hex("00800007020065"));
   try testing.expectEqual(
     Result{
       .failed = .{
-        .unsupported_version = .{ .protocol_version = 8, .stack_type = 2, .stack_version = 0x6a30 },
+        .unsupported_version = .{ .protocol_version = 7, .stack_type = 2, .stack_version = 0x6500 },
       },
     },
     startup.result.?,

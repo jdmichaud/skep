@@ -120,12 +120,18 @@ the daemon `skepd` and the command-line tool `skep`.
   ZBDongle-E) and `sim` (a simulated network for tests). Having two
   drivers from day one keeps the interface honest.
 - The `ezsp` driver negotiates the protocol version with the dongle at
-  start-up and requires EZSP 13 (EmberZNet 7.4) or newer, the same
-  minimum as zigbee-herdsman's `ember` driver. Dongles with older
-  firmware are flashed rather than supported: versions before 13 differ
-  in frame layouts and behaviour, and current releases are freely
-  available. Version-specific layouts are kept apart, so that newer
-  versions can be added.
+  start-up and supports EZSP 8 to 19: from EmberZNet 6.10, the firmware
+  our ZBDongle-E came with, to the newest version zigbee-herdsman knows.
+  Dongles then work as delivered, without being flashed.
+  - Where versions differ, the driver has a path for each, kept apart.
+    Most differences come with EZSP 13, which reads and restores keys
+    and frame counters through Silicon Labs' new security API, and
+    imports the keys of joining devices with another command.
+  - zigbee-herdsman's older `ezsp` driver (MIT licensed), kept for
+    firmware before EmberZNet 7.4, shows each difference; its `ember`
+    driver supports EZSP 13 and later only.
+  - The cost: two paths in the key and state code, of which only the
+    versions our dongles run can be tested on hardware.
 - Nothing outside a driver may depend on a particular dongle, chip or
   firmware.
 - Out of scope: radio co-processors (RCP), which need a full Zigbee stack

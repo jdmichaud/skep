@@ -8,8 +8,9 @@
 
 const std = @import("std");
 
-/// The oldest EZSP version supported (EmberZNet 7.4).
-pub const min_version: u8 = 13;
+/// The oldest EZSP version supported: the one EmberZNet 6.10 speaks, the firmware our ZBDongle-E
+/// came with. Frames have the extended format since this version.
+pub const min_version: u8 = 8;
 /// The newest EZSP version supported: the newest that zigbee-herdsman v11.2.0 knows, whose frame
 /// layouts ours follow. Layouts that differ between versions are kept apart.
 pub const max_version: u8 = 19;

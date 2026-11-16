@@ -35,11 +35,10 @@ attribute details come from the Zigbee2MQTT device definitions
   builds for XON/XOFF do. RSTACK follows about 1 s after RST. (Measured
   on 2026-11-16 with `zig build probe`.)
 - Firmware: our unit runs EmberZNet 6.10.3 (stack version 0x6a30), EZSP
-  protocol version 8, as early ZBDongle-E units shipped. skep needs EZSP
-  13 (EmberZNet 7.4) or newer, as does Zigbee2MQTT's `ember` driver, so
-  the dongle must be flashed with newer firmware before skep can use it.
-  `universal-silabs-flasher --device <path> probe` also reports the
-  running firmware, and the same tool flashes a new one.
+  protocol version 8, as early ZBDongle-E units shipped. skep supports it
+  (see design.md); Zigbee2MQTT's `ember` driver needs EmberZNet 7.4 or
+  newer. `universal-silabs-flasher --device <path> probe` also reports
+  the running firmware, and the same tool flashes a new one.
 - Linux pitfall: brltty claims some USB serial ids, including `10c4:ea60`,
   and takes the port away. Remove it if `/dev/ttyUSB0` appears and then
   vanishes.

@@ -165,10 +165,11 @@ pub fn main(init: std.process.Init) !u8 {
         .link => |link| try out.print("failed: ASH link: {any}\n", .{ link }),
         .unsupported_version => |version| {
           try printVersion(out, version);
-          try out.print(
-            "failed: EZSP {d} is not supported, only {d} to {d} (EmberZNet 7.4 or newer)\n",
-            .{ version.protocol_version, ezsp.frame.min_version, ezsp.frame.max_version },
-          );
+          try out.print("failed: EZSP {d} is not supported, only {d} to {d}\n", .{
+            version.protocol_version,
+            ezsp.frame.min_version,
+            ezsp.frame.max_version,
+          });
         },
         .unsupported_stack => |version| {
           try printVersion(out, version);
