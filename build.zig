@@ -22,25 +22,24 @@ pub fn build(b: *std.Build) !void {
   const library = addLibrary(b, skep);
 
   const test_step = b.step("test", "Run the unit tests");
-  const unit_tests = b.addTest(.{ .root_module = skep });
-  test_step.dependOn(&b.addRunArtifact(unit_tests).step);
   // skep.h as Zig sees it: how skepd uses libskep.
   const skep_h = b.addTranslateC(.{
     .root_source_file = b.path("include/skep.h"),
     .target = target,
     .optimize = optimize,
   }).createModule();
-  addHeaderChecks(b, test_step, target, optimize, build_options, skep_h);
-  // The structs of skep.h against libskep's.
-  const layout = b.createModule(.{
-    .root_source_file = b.path("src/abi_test.zig"),
+  // The unit tests, which also compare the structs of skep.h with libskep's: the header is
+  // theirs to import, not the library's.
+  const tested = b.createModule(.{
+    .root_source_file = b.path("src/skep.zig"),
     .target = target,
     .optimize = optimize,
     .link_libc = true,
     .imports = &.{.{ .name = "skep_h", .module = skep_h }},
   });
-  layout.addOptions("build_options", build_options);
-  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = layout })).step);
+  tested.addOptions("build_options", build_options);
+  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = tested })).step);
+  addHeaderChecks(b, test_step, target, optimize, build_options, skep_h);
   addAbiCheck(b, test_step, target, optimize, library);
   // Opening a dongle's serial port, for the programs that do.
   const serial = b.createModule(.{

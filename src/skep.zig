@@ -1159,6 +1159,7 @@ test {
   _ = @import("exchange.zig");
   _ = @import("requests.zig");
   _ = @import("setup.zig");
+  _ = @import("abi_test.zig");
   _ = @import("driver/driver.zig");
   _ = @import("driver/ezsp/ezsp.zig");
   std.testing.refAllDecls(@This());
