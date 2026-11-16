@@ -54,6 +54,7 @@ pub fn build(b: *std.Build) !void {
   if (b.isRoot()) {
     try addFormatSteps(b);
     try addManpages(b);
+    addSystemdFiles(b);
   }
 }
 
@@ -291,4 +292,22 @@ fn addSkep(
   run.addPassthruArgs();
   b.step("skep", "Run skep (-- <command>)").dependOn(&run.step);
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = module })).step);
+}
+
+/// The systemd units of skepd, for the system and for users, and the user its system unit runs as:
+/// `zig build` installs them where systemd looks under the prefix, lib/systemd and lib/sysusers.d.
+/// Only when skep is the project being built.
+fn addSystemdFiles(b: *std.Build) void {
+  for ([_][2][]const u8{
+    .{ "systemd/system/skepd@.service", "lib/systemd/system" },
+    .{ "systemd/user/skepd@.service", "lib/systemd/user" },
+    .{ "systemd/sysusers.d/skep.conf", "lib/sysusers.d" },
+  }) |file| {
+    const install = b.addInstallFileWithDir(
+      b.path(file[0]),
+      .{ .custom = file[1] },
+      std.fs.path.basename(file[0]),
+    );
+    b.getInstallStep().dependOn(&install.step);
+  }
 }

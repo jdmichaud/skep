@@ -1,0 +1,19 @@
+# skepd, running the Zigbee network of the dongle /dev/%I, as the user, with
+# its socket in $XDG_RUNTIME_DIR/skep and its state in $XDG_DATA_HOME/skep,
+# as when started by hand. For instance:
+#   systemctl --user enable --now skepd@ttyUSB0
+# skepd(8) tells more.
+
+[Unit]
+Description=Zigbee network of /dev/%I
+Documentation=man:skepd(8) man:skep(1)
+
+[Service]
+Type=notify
+# Found in /usr/local/bin or /usr/bin; see skepd(8) for another prefix.
+ExecStart=skepd --device /dev/%I
+Restart=on-failure
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

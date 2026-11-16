@@ -69,6 +69,10 @@ publishes the section of each released version as its release notes.
 - skep, the command-line client of skepd: `skep devices`, `skep permit`,
   `skep rename`, `skep read`, `skep on` and the others, and `skep watch`
   for events, in words or, with `--json`, as skepd sends them.
+- systemd units for skepd, for the system and for users, one instance per
+  dongle (`skepd@ttyUSB0`), installed with a sysusers.d file for the
+  `skep` user and group of the system unit; skepd reports its readiness
+  and status to systemd.
 - Man pages, written in scdoc and rendered at build time by zzdoc:
   skep(1) and skep-protocol(7).
 - `zig build probe -- <device>`, a development tool that resets an

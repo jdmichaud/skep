@@ -1,0 +1,44 @@
+# skepd, running the Zigbee network of the dongle /dev/%I, as the skep user,
+# whose group may use its socket, /run/skep/skepd.sock. For instance:
+#   systemctl enable --now skepd@ttyUSB0
+#   systemctl enable --now "skepd@$(systemd-escape --path serial/by-id/usb-...)"
+# skepd(8) tells more.
+
+[Unit]
+Description=Zigbee network of /dev/%I
+Documentation=man:skepd(8) man:skep(1)
+
+[Service]
+Type=notify
+# Found in /usr/local/bin or /usr/bin; see skepd(8) for another prefix.
+ExecStart=skepd --device /dev/%I
+Restart=on-failure
+User=skep
+Group=skep
+# Access to the dongle: dialout on Debian and Fedora, uucp on Arch.
+SupplementaryGroups=dialout
+# The socket, for the skep group.
+RuntimeDirectory=skep
+RuntimeDirectoryMode=0750
+# The state, network key included, and device names: for skep only.
+StateDirectory=skep
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

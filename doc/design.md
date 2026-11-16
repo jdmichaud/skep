@@ -461,7 +461,10 @@ The API is in [include/skep.h](../include/skep.h).
 - A state file it cannot read stops it before it opens the dongle, and
   is left as it is: replacing it would lose the network it holds.
 - Runs in the foreground and never daemonizes itself. Under systemd it
-  uses `Type=notify` and reports readiness with sd_notify.
+  uses `Type=notify` and reports readiness with sd_notify, without
+  libsystemd: ready once its socket accepts clients, since the dongle may
+  take long to answer or be plugged in, then a status line as the
+  network comes up or the dongle goes.
 - Logs to stderr, each line starting with the time in UTC (ISO 8601,
   with milliseconds), except under journald, which adds its own: skepd
   checks that stderr is the stream `JOURNAL_STREAM` names. The log level
@@ -472,7 +475,20 @@ The API is in [include/skep.h](../include/skep.h).
 - Serves clients on a Unix stream socket with line-delimited JSON
   requests, responses and events, documented in skep-protocol(7).
 - Uses libskep only through `<skep.h>`.
-- Ships a systemd user unit and a system unit.
+- Ships a systemd user unit and a system unit, both templates whose
+  instance is the dongle under /dev: `skepd@ttyUSB0`, or the escaped
+  by-id path for a stable name. The device needs no configuration file
+  that way, until skepd.conf exists.
+  - The system unit runs skepd as the `skep` user, which a sysusers.d
+    file creates, with the `dialout` group for the dongle. Its socket is
+    in `/run/skep`, mode 0750, open to the `skep` group: admins in it
+    use skep. Its state is in `/var/lib/skep`, for `skep` only. It is
+    sandboxed with systemd's usual options.
+  - The user unit uses the same paths as skepd started by hand.
+  - `ExecStart` names `skepd` without a path, which systemd finds in
+    `/usr/local/bin` and `/usr/bin`: Zig's build only knows the install
+    prefix after build.zig has run, too late to write it into a unit.
+    For another prefix, `systemctl edit` sets the path.
 
 ## skep
 
@@ -494,7 +510,8 @@ The API is in [include/skep.h](../include/skep.h).
 | Socket | `$XDG_RUNTIME_DIR/skep/skepd.sock` | `$RUNTIME_DIRECTORY/skepd.sock` (`/run/skep`) |
 
 skepd creates files holding keys, such as the state, with mode 0600 and
-replaces them atomically. The socket is not accessible to other users.
+replaces them atomically. The socket is not accessible to other users,
+except the members of the `skep` group for the system service.
 
 ## Documentation
 
