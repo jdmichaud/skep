@@ -675,6 +675,7 @@ pub fn main(init: std.process.Init) !u8 {
     .rtscts = options.rtscts orelse (flow_control == c.SKEP_FLOW_CONTROL_HARDWARE),
   };
   defer daemon.protocol.deinit();
+  daemon.print("listening on {s}", .{ socket_path });
   if (daemon.loadState()) |code| return code;
   return daemon.run(signals);
 }
