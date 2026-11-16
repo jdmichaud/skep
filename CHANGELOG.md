@@ -16,5 +16,7 @@ publishes the section of each released version as its release notes.
 - The ASH link layer: resetting the dongle, acknowledgements,
   retransmissions and software flow control (XON/XOFF).
 - EZSP frames, in the legacy and the extended format, for EZSP 13 to 19.
+- Starting an EmberZNet dongle: reset, agreeing on the EZSP version, and
+  reading the firmware version.
 - Build checks that the headers compile as C99 and C++ and translate to
   Zig.

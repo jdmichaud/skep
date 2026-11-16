@@ -13,5 +13,6 @@ test {
   _ = @import("driver/ezsp/ash.zig");
   _ = @import("driver/ezsp/link.zig");
   _ = @import("driver/ezsp/frame.zig");
+  _ = @import("driver/ezsp/startup.zig");
   std.testing.refAllDecls(@This());
 }
