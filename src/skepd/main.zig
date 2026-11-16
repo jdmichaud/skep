@@ -683,6 +683,7 @@ pub fn main(init: std.process.Init) !u8 {
       .server = server,
       .names = names,
       .names_path = names_path,
+      .readings = .{ .gpa = init.gpa },
     },
     .baudrate = options.baudrate orelse baudrate,
     .rtscts = options.rtscts orelse (flow_control == c.SKEP_FLOW_CONTROL_HARDWARE),
@@ -720,4 +721,5 @@ test {
   _ = @import("values.zig");
   _ = @import("protocol.zig");
   _ = @import("notify.zig");
+  _ = @import("Readings.zig");
 }

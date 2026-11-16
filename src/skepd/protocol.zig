@@ -4,6 +4,7 @@
 const std = @import("std");
 const c = @import("skep_h");
 const Names = @import("Names.zig");
+const Readings = @import("Readings.zig");
 const Server = @import("Server.zig");
 const values = @import("values.zig");
 
@@ -34,9 +35,8 @@ down_error: ?c_int = null,
 window_until: ?u64 = null,
 /// The monotonic time in milliseconds, as last given: libskep's clock.
 now: u64 = 0,
-/// The last readings of devices' attributes, as they were reported or read: what `device` and
-/// `devices` give, since a sleepy device cannot be read on the spot.
-last: std.AutoHashMapUnmanaged(Source, Last) = .empty,
+/// The last readings of devices' attributes, which `device` and `devices` give.
+readings: Readings,
 /// The id of the request being handled, once known, for its error response.
 request_id: ?i64 = null,
 failure: Failure = .{},
@@ -70,22 +70,6 @@ const Pending = struct {
   cluster: u16 = 0,
 };
 
-/// An attribute of a device's endpoint.
-const Source = struct {
-  device: u64,
-  endpoint: u8,
-  cluster: u16,
-  attribute: u16,
-};
-
-/// The last reading of an attribute, as reported or read.
-const Last = struct {
-  value: c.struct_skep_value,
-  scaled: f64,
-  /// When it came, in milliseconds since the epoch.
-  time: i64,
-};
-
 /// Why the request being handled fails.
 const Failure = struct {
   code: [24]u8 = undefined,
@@ -98,7 +82,7 @@ const Failure = struct {
 const Error = error{ Fail, OutOfMemory, WriteFailed };
 
 pub fn deinit(p: *Protocol) void {
-  p.last.deinit(p.gpa);
+  p.readings.deinit();
   p.pending.deinit(p.gpa);
   p.names.deinit();
   p.server.deinit();
@@ -895,7 +879,7 @@ pub fn event(p: *Protocol, e: *const c.skep_event) bool {
       m.j.objectField("removed") catch return false;
       m.j.write(removed) catch return false;
       if (removed) {
-        p.forgetReadings(device);
+        p.readings.forget(device);
       }
       p.broadcast(&m);
     },
@@ -1027,26 +1011,7 @@ fn readingMembers(
 /// Remembers the readings of an event's attributes, from a device's endpoint and cluster.
 fn remember(p: *Protocol, device: u64, endpoint: u8, cluster: u16, e: *const c.skep_event) void {
   const time: i64 = @intCast(@divTrunc(Io.Clock.real.now(p.io).nanoseconds, std.time.ns_per_ms));
-  for (0..c.skep_event_get_attribute_count(e)) |i| {
-    var a: c.struct_skep_attribute = undefined;
-    var reading: c.struct_skep_reading = undefined;
-    if (c.skep_event_get_attribute(e, i, &a) != 0 or
-      c.skep_event_get_reading(e, i, &reading) != 0) {
-      continue;
-    }
-    const source: Source = .{
-      .device = device,
-      .endpoint = endpoint,
-      .cluster = cluster,
-      .attribute = a.id,
-    };
-    // Out of memory: a value not remembered, which the next report brings again.
-    p.last.put(p.gpa, source, .{
-      .value = a.value,
-      .scaled = reading.value,
-      .time = time,
-    }) catch {};
-  }
+  p.readings.remember(device, endpoint, cluster, e, time);
 }
 
 /// "readings": what the device can be read for, with what it last reported or was read, and
@@ -1066,13 +1031,13 @@ fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u
     try j.write(source.cluster);
     try j.objectField("id");
     try j.write(source.attribute);
-    const key: Source = .{
+    const key: Readings.Source = .{
       .device = device,
       .endpoint = source.endpoint,
       .cluster = source.cluster,
       .attribute = source.attribute,
     };
-    if (p.last.get(key)) |last| {
+    if (p.readings.get(key)) |last| {
       try values.write(j, p.gpa, last.value);
       try readingMembers(j, source.name, source.unit, last.scaled);
       var buffer: [32]u8 = undefined;
@@ -1087,16 +1052,6 @@ fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u
     try j.endObject();
   }
   try j.endArray();
-}
-
-/// Forgets the readings of a device that left the network for good.
-fn forgetReadings(p: *Protocol, device: u64) void {
-  var it = p.last.iterator();
-  while (it.next()) |entry| {
-    if (entry.key_ptr.device != device) continue;
-    p.last.removeByPtr(entry.key_ptr);
-    it = p.last.iterator();
-  }
 }
 
 /// "attributes": those of the event, with their statuses in results, and values where they have
@@ -1306,6 +1261,7 @@ const TestBench = struct {
       .ctx = ctx.?,
       .server = server,
       .names = .{ .gpa = testing.allocator },
+      .readings = .{ .gpa = testing.allocator },
       .names_path = try testing.allocator.dupeSentinel(
         u8,
         try std.fmt.bufPrint(&socket_path, "{s}/names.json", .{ dir }),
