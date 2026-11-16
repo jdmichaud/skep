@@ -1015,6 +1015,25 @@ test "devices are described, and requests reach them" {
   try testing.expectEqual(0, count);
 }
 
+test "a device asked to leave is forgotten even if it does not answer" {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+  // Gone: it picks nothing up.
+  devices[0].silent = true;
+  var request: u32 = 0;
+  try testing.expectEqual(0, skep_remove_device(ctx, sensor_ieee, std.math.maxInt(u64), &request));
+  const done = (try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone;
+  defer skep_event_free(done);
+  try testing.expectEqual(err(.HOSTUNREACH), skep_event_get_error(done));
+  skep_event_free((try nextOfType(ctx, .device_left)) orelse return error.TestExpectedLeft);
+  var count: usize = 1;
+  try testing.expectEqual(0, skep_get_devices(ctx, null, 0, &count));
+  try testing.expectEqual(0, count);
+}
+
 test "libskep answers devices on the coordinator's behalf" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&testing.allocator, &devices);

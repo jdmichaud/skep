@@ -341,7 +341,13 @@ pub fn ended(
   const frame = switch (outcome) {
     .failed => |code| {
       if (code == Context.err(.CANCELED)) return ctx.cancelRequest(r.id);
-      return ctx.requestEnded(r.id, code, 0);
+      ctx.requestEnded(r.id, code, 0);
+      // A device asked to leave is forgotten even if it did not answer: one that is broken or
+      // gone never will, as skep.h says.
+      if (r.kind == .remove) {
+        ctx.forgetDevice(e.device);
+      }
+      return;
     },
     .zdo => |payload| {
       const response = zdo.parseResponse(payload) catch
