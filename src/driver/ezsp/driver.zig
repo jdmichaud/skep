@@ -132,6 +132,19 @@ pub const Event = union(enum) {
   configuration_refused: struct { id: command.ConfigId, status: command.Status },
   /// The NCP refused a command the driver can do without.
   command_refused: Refused,
+  /// A callback, as received, for the debug log.
+  callback: Callback,
+};
+
+/// A callback, copied.
+pub const Callback = struct {
+  id: frame.FrameId,
+  len: u8,
+  parameters: [frame.max_parameters_len]u8,
+
+  pub fn bytes(c: *const Callback) []const u8 {
+    return c.parameters[0..c.len];
+  }
 };
 
 pub const Driver = struct {
@@ -355,6 +368,13 @@ pub const Driver = struct {
     const received = frame.decode(bytes) catch return d.fail(.bad_response);
     const version = d.ready.version.protocol_version;
     if (received.callback) {
+      var copy: Callback = .{
+        .id = received.id,
+        .len = @intCast(received.parameters.len),
+        .parameters = undefined,
+      };
+      @memcpy(copy.parameters[0..copy.len], received.parameters);
+      d.post(.{ .callback = copy });
       if (received.id == .stack_status_handler) {
         const status = command.parseStatus(received.parameters, version) catch
           return d.fail(.bad_response);
@@ -650,6 +670,14 @@ const testing = std.testing;
 const hex = test_ncp.hex;
 const Ncp = test_ncp.Ncp(Driver);
 
+/// The next event that is not a callback logged for debugging.
+fn skipCallbacks(driver: *Driver) ?Event {
+  while (driver.nextEvent()) |event| {
+    if (event != .callback) return event;
+  }
+  return null;
+}
+
 /// Takes the driver through the startup, to its first configuration value.
 fn started(driver: *Driver) !Ncp {
   driver.* = .init(.{ .software_flow_control = true });
@@ -708,7 +736,7 @@ test "a dongle holding a network brings it up" {
   try configured(&ncp, &.{});
   try ncp.expectCommand(&hex("0d000117000000"));
   ncp.respond(&hex("0d8001170000"));
-  try testing.expectEqual(null, driver.nextEvent());
+  try testing.expectEqual(null, skipCallbacks(&driver));
   // The network comes up: stack_status_handler, NETWORK_UP.
   ncp.respond(&hex("0a9001190090"));
   try ncp.expectCommand(&hex("0e00012800"));
@@ -729,7 +757,7 @@ test "a dongle holding a network brings it up" {
   );
   try ncp.expectCommand(&hex("0f00012600"));
   ncp.respond(&hex("0f80012600" ++ "8877665544332211"));
-  const event = driver.nextEvent() orelse return error.TestExpectedEvent;
+  const event = skipCallbacks(&driver) orelse return error.TestExpectedEvent;
   const ready = event.ready;
   try testing.expectEqual(0x1122334455667788, ready.ieee);
   try testing.expectEqual(6, ready.firmware.major);
@@ -738,7 +766,7 @@ test "a dongle holding a network brings it up" {
   try testing.expectEqual(command.NodeType.coordinator, network.node_type);
   try testing.expectEqual(0x1234, network.parameters.pan_id);
   try testing.expectEqual(15, network.parameters.channel);
-  try testing.expectEqual(null, driver.nextEvent());
+  try testing.expectEqual(null, skipCallbacks(&driver));
   try testing.expectEqual(null, driver.nextDeadline());
 }
 
@@ -751,7 +779,7 @@ test "a dongle without a network is ready without one" {
   ncp.respond(&hex("0d8001170093"));
   try ncp.expectCommand(&hex("0e00012600"));
   ncp.respond(&hex("0e80012600" ++ "8877665544332211"));
-  const ready = (driver.nextEvent() orelse return error.TestExpectedEvent).ready;
+  const ready = (skipCallbacks(&driver) orelse return error.TestExpectedEvent).ready;
   try testing.expectEqual(null, ready.network);
 }
 
@@ -763,9 +791,9 @@ test "refused configuration values are reported, and the driver goes on" {
   ncp.respond(&hex("0d8001170093"));
   _ = ncp.take();
   ncp.respond(&hex("0e80012600" ++ "8877665544332211"));
-  try testing.expectEqual(configuration[1].id, driver.nextEvent().?.configuration_refused.id);
-  try testing.expectEqual(configuration[4].id, driver.nextEvent().?.configuration_refused.id);
-  try testing.expect(driver.nextEvent().? == .ready);
+  try testing.expectEqual(configuration[1].id, skipCallbacks(&driver).?.configuration_refused.id);
+  try testing.expectEqual(configuration[4].id, skipCallbacks(&driver).?.configuration_refused.id);
+  try testing.expect(skipCallbacks(&driver).? == .ready);
 }
 
 test "the driver fails when the network does not come up" {
@@ -777,7 +805,7 @@ test "the driver fails when the network does not come up" {
   ncp.respond(&hex("0d8001170000"));
   try testing.expectEqual(1000 + response_timeout, driver.nextDeadline());
   driver.advance(1000 + response_timeout);
-  try testing.expectEqual(Failure.response_timeout, driver.nextEvent().?.failed);
+  try testing.expectEqual(Failure.response_timeout, skipCallbacks(&driver).?.failed);
 }
 
 test "a refused endpoint fails the driver" {
@@ -790,7 +818,7 @@ test "a refused endpoint fails the driver" {
   }
   _ = ncp.take();
   ncp.respond(&hex("098001020036"));
-  const failure = driver.nextEvent().?.failed;
+  const failure = skipCallbacks(&driver).?.failed;
   try testing.expectEqual(frame.FrameId.add_endpoint, failure.refused.command);
   try testing.expectEqual(0x36, failure.refused.status.value);
 }
@@ -831,7 +859,7 @@ fn readyNcp(driver: *Driver, network: bool) !Ncp {
   }
   const sent = ncp.take() orelse return error.TestExpectedCommand;
   ncp.respond(&[_]u8{ sent[0], 0x80, 0x01, 0x26, 0x00 } ++ hex("1de149feffb6c67c"));
-  try testing.expect(driver.nextEvent().? == .ready);
+  try testing.expect(skipCallbacks(driver).? == .ready);
   return ncp;
 }
 
@@ -903,9 +931,9 @@ test "form a network on a dongle that holds none" {
   try formed(&driver, &ncp, true);
   try testing.expectEqual(
     frame.FrameId.clear_key_table,
-    driver.nextEvent().?.command_refused.command,
+    skipCallbacks(&driver).?.command_refused.command,
   );
-  const network = driver.nextEvent().?.formed;
+  const network = skipCallbacks(&driver).?.formed;
   try testing.expectEqual(20, network.parameters.channel);
   try testing.expectEqual(0x1a62, network.parameters.pan_id);
   try testing.expectEqual(null, driver.nextDeadline());
@@ -925,7 +953,7 @@ test "replacing a network leaves it first" {
   ncp.respond(&hex("009001190091"));
   try answer(&ncp, .set_initial_security_state, 0x00);
   try formed(&driver, &ncp, false);
-  try testing.expect(driver.nextEvent().? == .formed);
+  try testing.expect(skipCallbacks(&driver).? == .formed);
 }
 
 test "a refused security state fails the driver" {
@@ -933,7 +961,7 @@ test "a refused security state fails the driver" {
   var ncp = try readyNcp(&driver, false);
   driver.form(form_parameters);
   try answer(&ncp, .set_initial_security_state, 0x94);
-  const failure = driver.nextEvent().?.failed;
+  const failure = skipCallbacks(&driver).?.failed;
   try testing.expectEqual(frame.FrameId.set_initial_security_state, failure.refused.command);
 }
 
@@ -943,7 +971,7 @@ test "a link failure after the start is reported" {
   ncp.send(.{ .err = .{ .version = 2, .code = 0x51 } });
   try testing.expectEqual(
     link_layer.Failure{ .ncp_error = 0x51 },
-    driver.nextEvent().?.failed.link,
+    skipCallbacks(&driver).?.failed.link,
   );
 }
 
@@ -955,14 +983,14 @@ test "open the join window and see a device join" {
   try testing.expectEqual(@backingInt(frame.FrameId.permit_joining), sent[3]);
   try testing.expectEqualSlices(u8, &.{ 60 }, sent[5..]);
   ncp.respond(&.{ sent[0], 0x80, 0x01, 0x22, 0x00, 0x00 });
-  try testing.expectEqual(null, driver.nextEvent().?.permit_join_done);
+  try testing.expectEqual(null, skipCallbacks(&driver).?.permit_join_done);
   // NETWORK_OPENED, a device joining, NETWORK_CLOSED.
   ncp.respond(&hex("00900119009c"));
   ncp.respond(&hex("0090012400" ++ "3412" ++ "8877665544332211" ++ "01" ++ "00" ++ "0000"));
   ncp.respond(&hex("00900119009d"));
-  try testing.expectEqual(true, driver.nextEvent().?.join_window);
-  const device = driver.nextEvent().?.device;
+  try testing.expectEqual(true, skipCallbacks(&driver).?.join_window);
+  const device = skipCallbacks(&driver).?.device;
   try testing.expectEqual(0x1122334455667788, device.eui64);
   try testing.expect(device.kind == .joined);
-  try testing.expectEqual(false, driver.nextEvent().?.join_window);
+  try testing.expectEqual(false, skipCallbacks(&driver).?.join_window);
 }

@@ -237,6 +237,15 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
       .permit_join_done = if (refused) |r| fromEzspFailure(.{ .refused = r }) else null,
     },
     .join_window => |open| .{ .join_window = open },
+    .callback => |callback| .{
+      .log = .{
+        .level = .debug,
+        .message = if (std.enums.tagName(ezsp.frame.FrameId, callback.id)) |name|
+          .init("ezsp: callback {s}: {x}", .{ name, callback.bytes() })
+        else
+          .init("ezsp: callback 0x{x:0>4}: {x}", .{ @backingInt(callback.id), callback.bytes() }),
+      },
+    },
     .device => |change| .{
       .device = .{
         .ieee = change.eui64,
