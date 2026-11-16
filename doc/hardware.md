@@ -45,6 +45,16 @@ attribute details come from the Zigbee2MQTT device definitions
   make sure the network is saved; the network is kept across restarts
   anyway. The network it held as delivered, of unknown origin, was
   replaced by skep's on 2026-11-16.
+- Keys and frame counters (2026-11-16): `get_key` gives the network key
+  and the trust center link key, with their outgoing frame counters.
+  The firmware raises its saved network frame counter by 4096 at each
+  start (49153, 53250, 57346 over three starts).
+- Putting a saved network back (2026-11-16, over a throwaway network):
+  `set_value` of `NWK_FRAME_COUNTER` before the security state is
+  accepted, and the network carries on from it; `APS_FRAME_COUNTER`
+  after forming is refused (status 0x70), and the trust center's counter
+  reads 0 afterwards. The sensor came back by itself with a secured
+  rejoin 20 seconds after the network did, and went on reporting.
 - Linux pitfall: brltty claims some USB serial ids, including `10c4:ea60`,
   and takes the port away. Remove it if `/dev/ttyUSB0` appears and then
   vanishes.

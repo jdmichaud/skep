@@ -69,17 +69,32 @@ pub fn held(s: *const State, trust_center_link_key: [16]u8) driver.Held {
 }
 
 /// Takes in the network as the dongle holds it. Returns whether anything changed.
+///
+/// A key's frame counter never goes down: devices remember the highest they saw, so a dongle
+/// that counts from lower, having refused to carry on from the saved counter, does not lower
+/// what the next restore must pass.
 pub fn update(s: *State, coordinator_ieee: u64, h: driver.Held) bool {
   const before = s.*;
+  const same_network_key = std.mem.eql(u8, &s.network_key, &h.security.network_key);
+  const same_trust_center_key = if (s.trust_center_link_key) |key|
+    std.mem.eql(u8, &key, &h.security.trust_center_link_key)
+  else
+    false;
   s.coordinator_ieee = coordinator_ieee;
   s.network = h.network;
   s.network_key = h.security.network_key;
   s.network_key_sequence_number = h.security.network_key_sequence_number;
-  s.network_frame_counter = h.security.network_frame_counter;
+  s.network_frame_counter = if (same_network_key)
+    @max(s.network_frame_counter, h.security.network_frame_counter)
+  else
+    h.security.network_frame_counter;
   s.trust_center_link_key = h.security.trust_center_link_key;
   // A dongle that does not tell keeps the counter known so far.
   if (h.security.trust_center_frame_counter) |counter| {
-    s.trust_center_frame_counter = counter;
+    s.trust_center_frame_counter = if (same_trust_center_key)
+      @max(s.trust_center_frame_counter, counter)
+    else
+      counter;
   }
   return !std.meta.eql(before, s.*);
 }
@@ -415,6 +430,27 @@ test "the state is written as an Open Coordinator Backup, and read back" {
   try testing.expectEqual(s.trust_center_link_key, read.trust_center_link_key);
   try testing.expectEqual(s.trust_center_frame_counter, read.trust_center_frame_counter);
   try testing.expectEqualSlices(Device, s.devices.items, read.devices.items);
+}
+
+test "frame counters never go down while their keys stay" {
+  var s = testState();
+  var h = s.held(s.trust_center_link_key.?);
+  // A dongle that refused the saved counters, and counts from lower.
+  h.security.network_frame_counter = 100;
+  h.security.trust_center_frame_counter = 0;
+  try testing.expect(!s.update(s.coordinator_ieee, h));
+  try testing.expectEqual(49153, s.network_frame_counter);
+  try testing.expectEqual(16384, s.trust_center_frame_counter);
+  h.security.network_frame_counter = 50000;
+  try testing.expect(s.update(s.coordinator_ieee, h));
+  try testing.expectEqual(50000, s.network_frame_counter);
+  // New keys start their own counters.
+  h.security.network_key = @splat(0x33);
+  h.security.trust_center_link_key = @splat(0x44);
+  h.security.network_frame_counter = 7;
+  try testing.expect(s.update(s.coordinator_ieee, h));
+  try testing.expectEqual(7, s.network_frame_counter);
+  try testing.expectEqual(0, s.trust_center_frame_counter);
 }
 
 test "states from other stacks are read" {
