@@ -21,7 +21,14 @@ pub const Status = struct {
   /// An sl_status_t (EZSP 14 and later).
   sl: bool,
 
-  pub const Name = enum { ok, not_joined, network_up, network_down };
+  pub const Name = enum {
+    ok,
+    not_joined,
+    network_up,
+    network_down,
+    network_opened,
+    network_closed,
+  };
 
   pub fn is(s: Status, name: Name) bool {
     const codes: [2]u32 = switch (name) {
@@ -29,8 +36,72 @@ pub const Status = struct {
       .not_joined => .{ 0x93, 0x0017 },
       .network_up => .{ 0x90, 0x0015 },
       .network_down => .{ 0x91, 0x0016 },
+      .network_opened => .{ 0x9c, 0x0c18 },
+      .network_closed => .{ 0x9d, 0x0c19 },
     };
     return s.value == codes[@intFromBool(s.sl)];
+  }
+};
+
+/// Policies: how the NCP decides on its own, set with `set_policy`.
+pub const PolicyId = enum(u8) {
+  trust_center_policy = 0x00,
+  tc_key_request_policy = 0x05,
+  app_key_request_policy = 0x06,
+  _,
+};
+
+/// Decisions of `trust_center_policy`: bits.
+pub const TrustCenterDecision = struct {
+  pub const allow_joins: u8 = 0x01;
+  pub const allow_unsecured_rejoins: u8 = 0x02;
+};
+
+/// Decisions of the key request policies. EZSP 8 names 0x51 `ALLOW_TC_KEY_REQUESTS`.
+pub const KeyRequestDecision = struct {
+  pub const allow_tc_key_requests_and_send_current_key: u8 = 0x51;
+  pub const deny_app_key_requests: u8 = 0x60;
+};
+
+/// Parameters of `set_policy`.
+pub fn setPolicy(out: *[2]u8, id: PolicyId, decision: u8) []const u8 {
+  out.* = .{ @backingInt(id), decision };
+  return out;
+}
+
+/// Parameters of `permit_joining`: how long the network accepts new devices, in seconds; 0
+/// closes it, 255 would open it for good.
+pub fn permitJoining(out: *[1]u8, seconds: u8) []const u8 {
+  out[0] = seconds;
+  return out;
+}
+
+/// What `trust_center_join_handler` reports about a device.
+pub const DeviceUpdate = enum(u8) {
+  secured_rejoin = 0,
+  unsecured_join = 1,
+  left = 2,
+  unsecured_rejoin = 3,
+  _,
+};
+
+/// The parameters of `trust_center_join_handler`.
+pub const TrustCenterJoin = struct {
+  node_id: u16,
+  eui64: u64,
+  update: DeviceUpdate,
+  decision: u8,
+  parent_id: u16,
+
+  pub fn parse(parameters: []const u8) error{ TooShort }!TrustCenterJoin {
+    var r: Reader = .{ .bytes = parameters };
+    return .{
+      .node_id = try r.int(u16),
+      .eui64 = try r.int(u64),
+      .update = @fromBackingInt(@intCast(try r.int(u8))),
+      .decision = try r.int(u8),
+      .parent_id = try r.int(u16),
+    };
   }
 };
 
@@ -428,6 +499,21 @@ test "encode the commands that form a network" {
   try testing.expectEqualSlices(u8, &hex("00"), leaveNetwork(&leave, 14));
 }
 
+test "encode and parse what joining needs" {
+  var policy: [2]u8 = undefined;
+  try testing.expectEqualSlices(u8, &hex("0003"), setPolicy(&policy, .trust_center_policy, 3));
+  var duration: [1]u8 = undefined;
+  try testing.expectEqualSlices(u8, &hex("3c"), permitJoining(&duration, 60));
+  const join = try TrustCenterJoin.parse(
+    &hex("3412" ++ "8877665544332211" ++ "01" ++ "00" ++ "0000"),
+  );
+  try testing.expectEqual(0x1234, join.node_id);
+  try testing.expectEqual(0x1122334455667788, join.eui64);
+  try testing.expectEqual(DeviceUpdate.unsecured_join, join.update);
+  try testing.expect((try parseStatus(&hex("9c"), 8)).is(.network_opened));
+  try testing.expect((try parseStatus(&hex("190c0000"), 14)).is(.network_closed));
+}
+
 test "parse the network parameters" {
   const parsed = try parseGetNetworkParameters(
     &hex(
@@ -474,6 +560,7 @@ fn fuzzParse(_: void, smith: *testing.Smith) !void {
   _ = parseStatus(bytes[0..len], version) catch {};
   _ = parseGetNetworkParameters(bytes[0..len], version) catch {};
   _ = parseEui64(bytes[0..len]) catch {};
+  _ = TrustCenterJoin.parse(bytes[0..len]) catch {};
   const value = parseGetValue(bytes[0..len], version) catch return;
   _ = VersionInfo.parse(value.value) catch {};
 }
