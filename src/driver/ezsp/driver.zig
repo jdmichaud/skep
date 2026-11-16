@@ -178,6 +178,9 @@ pub const Driver = struct {
   /// Sequence number of the last command, and when it was sent.
   sequence: u8 = 0,
   sent_at: u64 = 0,
+  /// The last command is not written yet: `sent_at` is the time it was queued, which can be old
+  /// when the caller asked for it after a quiet spell, and is replaced by the time it is written.
+  sent_unwritten: bool = false,
   /// The network is up, as `stack_status_handler` last reported.
   network_up: bool = false,
   /// The last time given, for commands sent from `form`.
@@ -266,6 +269,10 @@ pub const Driver = struct {
       d.afterStartup(now);
     } else {
       d.startup.link.outputDone(len, now);
+      if (d.sent_unwritten and len > 0) {
+        d.sent_at = now;
+        d.sent_unwritten = false;
+      }
       d.process(now);
     }
   }
@@ -412,6 +419,7 @@ pub const Driver = struct {
     var out: [5 + frame.max_parameters_len]u8 = undefined;
     d.sequence +%= 1;
     d.sent_at = now;
+    d.sent_unwritten = true;
     d.startup.link.send(frame.encode(&out, d.sequence, id, parameters)) catch |err| switch (err) {
       // The link failed after the frame being handled arrived: its event comes next.
       error.NotConnected => {},
@@ -1365,6 +1373,18 @@ test "refresh reads the network and its counters again" {
   const network = skipCallbacks(&driver).?.refreshed;
   try testing.expectEqual(71000, network.security.network_frame_counter);
   try testing.expectEqual(null, driver.nextDeadline());
+}
+
+test "a command asked for after a quiet spell gets its full time" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, true);
+  // An hour without a call: the driver's last time is an hour old.
+  ncp.now = 3600 * 1000;
+  driver.refresh();
+  _ = ncp.take() orelse return error.TestExpectedCommand;
+  driver.advance(ncp.now + 1);
+  try testing.expectEqual(null, skipCallbacks(&driver));
+  try testing.expectEqual(ncp.now, driver.sent_at);
 }
 
 test "a refused security state fails the driver" {
