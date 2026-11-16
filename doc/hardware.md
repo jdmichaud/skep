@@ -100,6 +100,18 @@ attribute details come from the Zigbee2MQTT device definitions
   Once joined, it obtains its own trust center link key, and reports
   temperature and humidity to the coordinator by itself, before any
   binding or reporting configuration.
+- Interviewed by skep (2026-11-16): an end device with its receiver off
+  when idle, manufacturer code 0x1407; one endpoint, 1, Home Automation
+  device 0x0302 (temperature sensor), input clusters Basic, Power
+  Configuration, Identify, Poll Control (0x0020), Temperature and
+  Humidity Measurement, output cluster OTA Upgrade. Its Basic cluster
+  names it "Third Reality" (no ", Inc", unlike the plug) and
+  "3RTHS0224Z".
+- It asks for a firmware update every few minutes, and stays awake about
+  20 seconds after, polling for the answer: long enough for skep to
+  interview and set it up without pairing it again. It accepted the
+  three bindings and the reporting configurations, and reports its
+  battery percentage in halves of a percent (200 for 100 %).
 
 ## Aqara LED Bulb T2, E27, RGB CCT (LB-L02D)
 
@@ -197,3 +209,19 @@ attribute details come from the Zigbee2MQTT device definitions
   - 0x0010: LED brightness, uint8, 0–100 %;
   - 0x0020: `allowBind`, uint8.
 - Supports OTA firmware updates (not in version 1).
+- Pairing (2026-11-16): blinking red, it joined skep's network two
+  seconds after the window opened, announced itself as a mains-powered
+  router, and reported by itself, without binding or reporting
+  configured: On/Off at each change and every minute or so, voltage and
+  frequency about every 10 seconds while they change, power, current and
+  power factor on changes. Each report asks for a Default Response.
+- The scale factors above hold: 236.8 V × 0.103 A is 24.4 VA, and the
+  12.0 W reported over that is the 0.49 power factor it reported too.
+  Switched off, it still reports about 0.5 W and 35 mA.
+- Interviewed by skep (2026-11-16): a router, manufacturer code 0x1233;
+  endpoint 1, Home Automation device 0x0051 (smart plug), input clusters
+  Basic, 0xFF03, Identify, Groups, Scenes, On/Off, Electrical
+  Measurement and Metering, output cluster OTA Upgrade; and endpoint 242,
+  Green Power (profile 0xA1E0, device 0x0061, output cluster 0x0021).
+  Its Basic cluster names it "Third Reality, Inc" and "3RSPE01044BZ". It
+  accepted the three bindings and the reporting configurations.
