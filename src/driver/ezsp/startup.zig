@@ -6,10 +6,10 @@
 //! supports it. Only then does the NCP accept other commands.
 
 const std = @import("std");
-const ash = @import("ash.zig");
 const command = @import("command.zig");
 const frame = @import("frame.zig");
 const link_layer = @import("link.zig");
+const test_ncp = @import("test_ncp.zig");
 
 /// How long the NCP has to answer a command once the link is up, in milliseconds: as long as the
 /// link may take to give up.
@@ -191,73 +191,13 @@ pub const Startup = struct {
 
 const testing = std.testing;
 
-fn hex(comptime text: []const u8) [text.len / 2]u8 {
-  var bytes: [text.len / 2]u8 = undefined;
-  _ = std.fmt.hexToBytes(&bytes, text) catch unreachable;
-  return bytes;
-}
+const hex = test_ncp.hex;
 
-const Ncp = struct {
-  startup: *Startup,
-  now: u64 = 0,
-  frm_tx: u3 = 0,
-  frm_rx: u3 = 0,
-  command: [ash.max_data_len]u8 = undefined,
-  command_len: usize = 0,
-
-  /// Writes the host's output and returns the last EZSP command in it, if any.
-  fn take(ncp: *Ncp) ?[]const u8 {
-    var decoder: ash.Decoder = .{};
-    var got = false;
-    while (true) {
-      const bytes = ncp.startup.output();
-      if (bytes.len == 0) break;
-      for (bytes) |byte| {
-        const event = decoder.feed(byte) orelse continue;
-        if (event.frame != .data) continue;
-        const payload = event.frame.data.payload;
-        @memcpy(ncp.command[0..payload.len], payload);
-        ncp.command_len = payload.len;
-        ncp.frm_rx +%= 1;
-        got = true;
-      }
-      ncp.startup.outputDone(bytes.len, ncp.now);
-    }
-    return if (got) ncp.command[0..ncp.command_len] else null;
-  }
-
-  fn send(ncp: *Ncp, frame_to_send: ash.Frame) void {
-    var out: [ash.max_encoded_len]u8 = undefined;
-    ncp.startup.input(ash.encode(frame_to_send, &out) catch unreachable, ncp.now);
-  }
-
-  fn respond(ncp: *Ncp, payload: []const u8) void {
-    ncp.send(.{
-      .data = .{
-        .frame_number = ncp.frm_tx,
-        .ack_number = ncp.frm_rx,
-        .retransmitted = false,
-        .payload = payload,
-      },
-    });
-    ncp.frm_tx +%= 1;
-  }
-
-  fn connect(ncp: *Ncp) !void {
-    ncp.startup.start();
-    try testing.expectEqual(null, ncp.take());
-    ncp.send(.{ .rstack = .{ .version = ash.version, .code = link_layer.reset_software } });
-  }
-
-  fn expectCommand(ncp: *Ncp, expected: []const u8) !void {
-    const taken = ncp.take() orelse return error.TestExpectedCommand;
-    try testing.expectEqualSlices(u8, expected, taken);
-  }
-};
+const Ncp = test_ncp.Ncp(Startup);
 
 test "start an NCP that speaks an older EZSP version" {
   var startup: Startup = .init(.{ .software_flow_control = true });
-  var ncp: Ncp = .{ .startup = &startup };
+  var ncp: Ncp = .{ .host = &startup };
   try ncp.connect();
   try ncp.expectCommand(&hex("00000013"));
   // EZSP 13, EmberZNet 7.4.1, answered in the legacy format.
@@ -290,7 +230,7 @@ test "start an NCP that speaks an older EZSP version" {
 
 test "start an NCP that speaks EZSP 8" {
   var startup: Startup = .init(.{ .software_flow_control = true });
-  var ncp: Ncp = .{ .startup = &startup };
+  var ncp: Ncp = .{ .host = &startup };
   try ncp.connect();
   try ncp.expectCommand(&hex("00000013"));
   // The answer of our ZBDongle-E as delivered: EZSP 8, EmberZNet 6.10.3.
@@ -319,7 +259,7 @@ test "start an NCP that speaks EZSP 8" {
 
 test "an NCP that speaks the newest version is not asked twice" {
   var startup: Startup = .init(.{ .software_flow_control = true });
-  var ncp: Ncp = .{ .startup = &startup };
+  var ncp: Ncp = .{ .host = &startup };
   try ncp.connect();
   try ncp.expectCommand(&hex("00000013"));
   ncp.respond(&hex("00800013020080"));
@@ -331,7 +271,7 @@ test "an NCP that speaks the newest version is not asked twice" {
 
 test "an unsupported EZSP version or stack fails the startup" {
   var startup: Startup = .init(.{ .software_flow_control = true });
-  var ncp: Ncp = .{ .startup = &startup };
+  var ncp: Ncp = .{ .host = &startup };
   try ncp.connect();
   _ = ncp.take();
   // Older than the oldest supported.
@@ -345,7 +285,7 @@ test "an unsupported EZSP version or stack fails the startup" {
     startup.result.?,
   );
 
-  ncp = .{ .startup = &startup };
+  ncp = .{ .host = &startup };
   try ncp.connect();
   _ = ncp.take();
   ncp.respond(&hex("0080000d031074"));
@@ -361,7 +301,7 @@ test "an unsupported EZSP version or stack fails the startup" {
 
 test "the startup fails when the NCP stops answering" {
   var startup: Startup = .init(.{ .software_flow_control = true });
-  var ncp: Ncp = .{ .startup = &startup };
+  var ncp: Ncp = .{ .host = &startup };
   try ncp.connect();
   _ = ncp.take();
   // The NCP acknowledges the command but never answers it.

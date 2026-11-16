@@ -8,6 +8,9 @@ pub const frame = @import("frame.zig");
 pub const command = @import("command.zig");
 pub const startup = @import("startup.zig");
 
+const test_ncp = @import("test_ncp.zig");
+
 test {
   std.testing.refAllDecls(@This());
+  _ = test_ncp;
 }
