@@ -42,6 +42,9 @@ publishes the section of each released version as its release notes.
   `skep_unbind()`, `skep_send_command()`, `skep_cancel()`), which wait
   for sleepy devices to wake up.
 - Opening or closing the join window tells the routers too.
+- libskep answers devices on the coordinator's behalf: a Default
+  Response where a frame asks for one, and "no image available" to
+  firmware update queries.
 - The state: `skep_export_state()` and `skep_import_state()` save and
   load the network, its keys and frame counters, and its devices as an
   Open Coordinator Backup, the JSON format of zigpy and zigbee-herdsman;

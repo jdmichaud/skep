@@ -731,11 +731,36 @@ fn onFrame(ctx: *Context, frame: *const driver_layer.Frame) void {
   setup.next(ctx, s.device(ieee) orelse return);
 }
 
-/// What a device sent by itself: attribute reports, and cluster commands.
+/// The OTA Upgrade cluster, and its commands libskep answers.
+const ota_cluster: u16 = 0x0019;
+const ota_query_next_image: u8 = 0x01;
+const ota_query_next_image_response: u8 = 0x02;
+const ota_no_image_available: u8 = 0x98;
+
+/// What a device sent by itself: attribute reports, and cluster commands. libskep answers on the
+/// coordinator's behalf: "no image available" to firmware update queries, since updates are not
+/// supported, and a Default Response wherever the frame asks for one.
 fn unsolicited(ctx: *Context, d: *const State.Device, frame: *const driver_layer.Frame) void {
   if (frame.profile == zdo.profile) return;
   const parsed = zcl.Frame.parse(frame.bytes()) catch return;
   const h = parsed.header;
+  var answer: zcl.Header = .{
+    .cluster_specific = false,
+    .manufacturer_code = h.manufacturer_code,
+    .from_server = !h.from_server,
+    .disable_default_response = true,
+    .sequence = h.sequence,
+    .command = zcl.Command.default_response,
+  };
+  if (h.cluster_specific and frame.cluster == ota_cluster and h.command == ota_query_next_image) {
+    answer.cluster_specific = true;
+    answer.command = ota_query_next_image_response;
+    return exchange.reply(ctx, d, frame, answer, &.{ ota_no_image_available });
+  }
+  if (!h.disable_default_response and
+    !(!h.cluster_specific and h.command == zcl.Command.default_response)) {
+    exchange.reply(ctx, d, frame, answer, &.{ h.command, zcl.Status.success });
+  }
   const report = !h.cluster_specific and h.command == zcl.Command.report_attributes;
   if (!report and !h.cluster_specific) return;
   const event = ctx.spares.pop().?;

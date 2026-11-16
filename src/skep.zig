@@ -14,6 +14,7 @@ const requests = @import("requests.zig");
 const setup = @import("setup.zig");
 const zcl = @import("zcl.zig");
 const sim = @import("driver/sim/sim.zig");
+const driver_layer = @import("driver/driver.zig");
 
 /// Version of libskep, taken from `.version` in `build.zig.zon`.
 pub const version: std.SemanticVersion = std.SemanticVersion.parse(build_options.version) catch
@@ -1012,6 +1013,48 @@ test "devices are described, and requests reach them" {
   try testing.expectEqual(sensor_ieee, skep_event_get_device(left));
   try testing.expectEqual(0, skep_get_devices(ctx, null, 0, &count));
   try testing.expectEqual(0, count);
+}
+
+test "libskep answers devices on the coordinator's behalf" {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+  const sim_driver = &ctx.driver.?.sim;
+
+  // A firmware update query, as the plug asks: no image, and no event.
+  var query: driver_layer.Frame = .{
+    .address = 0x1bce,
+    .profile = 0x0104,
+    .cluster = 0x0019,
+    .source_endpoint = 1,
+    .destination_endpoint = 1,
+  };
+  query.setPayload(&.{ 0x01, 0xb8, 0x01, 0x00, 0x33, 0x12, 0xa6, 0xd3, 0x58, 0x30, 0x01, 0x10 });
+  sim_driver.receive(query);
+  try testing.expectEqual(null, try nextEventType(ctx));
+  try testing.expectEqual(0, skep_advance(ctx, 0));
+  var answer = sim_driver.sent[sim_driver.sent_len - 1];
+  try testing.expectEqual(0x0019, answer.cluster);
+  try testing.expectEqualSlices(u8, &.{ 0x19, 0xb8, 0x02, 0x98 }, answer.bytes());
+
+  // A report that asks for a Default Response, as the plug's do: answered, and reported.
+  var report: driver_layer.Frame = .{
+    .address = 0x1bce,
+    .profile = 0x0104,
+    .cluster = 0x0006,
+    .source_endpoint = 1,
+    .destination_endpoint = 1,
+  };
+  report.setPayload(&.{ 0x08, 0xd9, 0x0a, 0x00, 0x00, 0x10, 0x01 });
+  sim_driver.receive(report);
+  const attributes = (try nextOfType(ctx, .attributes)) orelse return error.TestExpectedReport;
+  defer skep_event_free(attributes);
+  try testing.expectEqual(1, attributes.attributes[0].value.v.u);
+  try testing.expectEqual(0, skep_advance(ctx, 0));
+  answer = sim_driver.sent[sim_driver.sent_len - 1];
+  try testing.expectEqualSlices(u8, &.{ 0x10, 0xd9, 0x0b, 0x0a, 0x00 }, answer.bytes());
 }
 
 /// A device joins and is interviewed, every allocation failing in turn.

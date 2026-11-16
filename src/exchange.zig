@@ -66,6 +66,8 @@ pub const Purpose = union(enum) {
   /// A step of the device's interview or setup.
   setup,
   request: requests.Request,
+  /// An answer to the device, which expects none back: done once delivered, or not.
+  reply,
 };
 
 /// How an exchange ended.
@@ -206,6 +208,10 @@ pub fn sendDone(ctx: *Context, tag: u8, refused: bool) void {
 pub fn delivered(ctx: *Context, tag: u8, ok: bool) void {
   const i = find(ctx, tag) orelse return;
   const e = &ctx.exchanges.items[i];
+  if (e.purpose == .reply) {
+    _ = ctx.exchanges.orderedRemove(i);
+    return;
+  }
   if (!ok) return miss(ctx, i, err(.HOSTUNREACH));
   // An answer may have come first.
   if (e.phase == .sent) {
@@ -217,7 +223,7 @@ pub fn delivered(ctx: *Context, tag: u8, ok: bool) void {
 /// A frame from a device: the answer to its exchange, if it is one. Returns whether it was.
 pub fn answer(ctx: *Context, d: *const State.Device, frame: *const driver_layer.Frame) bool {
   for (ctx.exchanges.items, 0..) |e, i| {
-    if (e.device != d.ieee or e.phase == .waiting or e.phase == .sending) {
+    if (e.device != d.ieee or e.phase == .waiting or e.phase == .sending or e.purpose == .reply) {
       continue;
     }
     const payload = frame.bytes();
@@ -243,6 +249,10 @@ pub fn answer(ctx: *Context, d: *const State.Device, frame: *const driver_layer.
 /// that does not sleep fails.
 fn miss(ctx: *Context, i: usize, error_code: c_int) void {
   const e = &ctx.exchanges.items[i];
+  if (e.purpose == .reply) {
+    _ = ctx.exchanges.orderedRemove(i);
+    return;
+  }
   const d = ctx.state.?.device(e.device) orelse return end(ctx, i, .{ .failed = error_code });
   d.silent = true;
   if (e.purpose == .request and !d.sleepy()) return end(ctx, i, .{ .failed = error_code });
@@ -256,6 +266,7 @@ fn end(ctx: *Context, i: usize, outcome: Outcome) void {
   switch (e.purpose) {
     .setup => setup.ended(ctx, &e, outcome),
     .request => |r| requests.ended(ctx, &e, r, outcome),
+    .reply => {},
   }
 }
 
@@ -288,6 +299,37 @@ pub fn nextDeadline(ctx: *const Context) ?u64 {
   }
   // A sleepy device's awake time running out changes nothing to wake up for.
   return if (next == never) null else next;
+}
+
+/// Answers a ZCL frame from a device, which is awake since it just sent it: the reply goes from the
+/// other side of the cluster, with the frame's sequence number and manufacturer code.
+pub fn reply(
+  ctx: *Context,
+  d: *const State.Device,
+  to: *const driver_layer.Frame,
+  header: zcl.Header,
+  payload: []const u8,
+) void {
+  var frame: driver_layer.Frame = .{
+    .address = 0,
+    .profile = to.profile,
+    .cluster = to.cluster,
+    .source_endpoint = to.destination_endpoint,
+    .destination_endpoint = to.source_endpoint,
+  };
+  var w: std.Io.Writer = .fixed(&frame.payload);
+  header.write(&w) catch return;
+  w.writeAll(payload) catch return;
+  frame.len = @intCast(w.end);
+  // Out of memory: the device does without.
+  add(ctx, .{
+    .id = 0,
+    .device = d.ieee,
+    .purpose = .reply,
+    .frame = frame,
+    .is_zdo = false,
+    .sequence = header.sequence,
+  }) catch {};
 }
 
 /// A device was heard from: it is awake, and no longer silent.

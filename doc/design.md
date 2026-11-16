@@ -377,9 +377,10 @@ The API is in [include/skep.h](../include/skep.h).
   a device that comes back should keep its identity and setup.
 - libskep also answers devices on the coordinator's behalf, without the
   application: a ZCL Default Response where the frame asks for one, reads
-  of the coordinator's own clusters (Basic), and "no image available" to
-  OTA queries, since firmware updates are not in version 1. ZDO requests
-  to the coordinator are answered by the dongle's firmware.
+  of the coordinator's own clusters (Basic, not done yet), and "no image
+  available" to OTA queries, since firmware updates are not in version
+  1; those are not reported as commands. ZDO requests to the coordinator
+  are answered by the dongle's firmware.
 - No global state: everything libskep knows is in a context, which the
   application holds as an opaque handle. The application decides when a
   context is created and freed; only libskep reads or changes what is
