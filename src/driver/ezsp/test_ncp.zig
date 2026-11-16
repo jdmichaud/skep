@@ -60,7 +60,14 @@ pub fn Ncp(comptime Host: type) type {
     /// Starts the host and answers its reset.
     pub fn connect(ncp: *Self) !void {
       ncp.host.start();
+      try ncp.answerReset();
+    }
+
+    /// Answers a reset the host asked for, which starts the frame numbers again.
+    pub fn answerReset(ncp: *Self) !void {
       try testing.expectEqual(null, ncp.take());
+      ncp.frm_tx = 0;
+      ncp.frm_rx = 0;
       ncp.send(.{ .rstack = .{ .version = ash.version, .code = link.reset_software } });
     }
 

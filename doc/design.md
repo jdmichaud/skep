@@ -230,7 +230,10 @@ reviewed before the library is implemented.
     and the trust center's once the network is formed. A dongle that
     refuses a counter is logged as a warning, not a failure, and the
     state keeps the counter it had: a key's counter in the state never
-    goes down, since devices remember the highest they saw. A state
+    goes down, since devices remember the highest they saw. Unlike
+    zigbee-herdsman, the `ezsp` driver then restarts the dongle: without
+    that, EmberZNet's next start goes back below frames already sent
+    (hardware.md). A state
     without a trust center link key, as one written for Z-Stack, gets a
     new one, which devices paired before do not share.
   - The dongle holds the imported network when it has the same extended

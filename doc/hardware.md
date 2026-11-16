@@ -49,12 +49,28 @@ attribute details come from the Zigbee2MQTT device definitions
   and the trust center link key, with their outgoing frame counters.
   The firmware raises its saved network frame counter by 4096 at each
   start (49153, 53250, 57346 over three starts).
-- Putting a saved network back (2026-11-16, over a throwaway network):
-  `set_value` of `NWK_FRAME_COUNTER` before the security state is
-  accepted, and the network carries on from it; `APS_FRAME_COUNTER`
+- Putting a saved network back (2026-11-16, four times, over a throwaway
+  network): `set_value` of `NWK_FRAME_COUNTER` before the security state
+  is accepted, and the network carries on from it; `APS_FRAME_COUNTER`
   after forming is refused (status 0x70), and the trust center's counter
-  reads 0 afterwards. The sensor came back by itself with a secured
-  rejoin 20 seconds after the network did, and went on reporting.
+  reads 0 afterwards. The sensor came back by itself each time, with a
+  secured rejoin within 25 seconds, and went on reporting.
+- The network frame counter after a restore, by the value set (4096 ×
+  block + offset) and the starts that followed:
+  - 157347 (38 + 1699): the next start resumed at 157347 or below,
+    under frames already sent; the one after, at 159753 (39 + 9).
+  - 262143 (63 + 4095), counted up to 262167 (64 + 23): the next start
+    resumed at 262145 (64 + 1), under frames already sent; the one
+    after, at 266241 (65 + 1).
+  - 362167 (88 + 1719), restarted right after forming: resumed at
+    360448 (88 + 0), below the value set; the next start, at 364545.
+  - 462848 (113 + 0), restarted right after forming: resumed at 466944
+    (114 + 0); counted up to 466968, then the next start resumed at
+    471041 (115 + 1).
+  So a run that begins with `set_value` saves nothing ahead, and its
+  next start can go back below what it sent; a start saves ahead again.
+  skep sets a block's start and restarts the dongle once the network is
+  formed, as in the last case.
 - Linux pitfall: brltty claims some USB serial ids, including `10c4:ea60`,
   and takes the port away. Remove it if `/dev/ttyUSB0` appears and then
   vanishes.

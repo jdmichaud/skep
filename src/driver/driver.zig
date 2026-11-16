@@ -417,6 +417,13 @@ fn fromEzspFailure(failure: ezsp.driver.Failure) Failure {
       .kind = .protocol,
       .message = .init("ezsp: an answer from the dongle cannot be decoded", .{}),
     },
+    .restored_network_lost => .{
+      .kind = .refused,
+      .message = .init(
+        "ezsp: the dongle did not bring the saved network back up after restarting",
+        .{},
+      ),
+    },
   };
 }
 

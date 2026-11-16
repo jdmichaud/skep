@@ -109,6 +109,8 @@ pub const Failure = union(enum) {
   refused: Refused,
   /// A response that cannot be decoded.
   bad_response,
+  /// Restarted after a saved network was put back, the NCP did not bring it up again.
+  restored_network_lost,
 };
 
 /// What `form` needs: the network, and its keys.
@@ -191,6 +193,9 @@ pub const Driver = struct {
   permit_seconds: u8 = 0,
   ready: Ready = undefined,
   policy_index: usize = 0,
+  /// Restarting after a saved network was put back: the network the NCP then resumes is reported
+  /// as `formed`.
+  restarting: bool = false,
   /// What reading the network is for, which says what to report once it is read.
   reading_for: enum { ready, formed, refreshed } = .ready,
   /// The network being read.
@@ -664,6 +669,12 @@ pub const Driver = struct {
       .reading_ieee => {
         if (received.id != .get_eui64) return d.fail(.bad_response);
         d.ready.ieee = command.parseEui64(received.parameters) catch return d.fail(.bad_response);
+        if (d.restarting) {
+          d.restarting = false;
+          const network = d.ready.network orelse return d.fail(.restored_network_lost);
+          d.step = .running;
+          return d.post(.{ .formed = network });
+        }
         d.step = .running;
         d.post(.{ .ready = d.ready });
       },
@@ -786,7 +797,7 @@ pub const Driver = struct {
             },
           });
         }
-        d.readNetwork(.formed, now);
+        d.restart();
       },
       .idle,
       .starting,
@@ -874,9 +885,35 @@ pub const Driver = struct {
     const counters = d.form_parameters.frame_counters orelse return d.secure(now);
     d.step = .restoring_frame_counter;
     var value: [4]u8 = undefined;
-    std.mem.writeInt(u32, &value, counters.network, .little);
+    std.mem.writeInt(u32, &value, blockStart(counters.network), .little);
     var out: [6]u8 = undefined;
     d.send(.set_value, command.setValue(&out, .nwk_frame_counter, &value), now);
+  }
+
+  /// Restarts the NCP once a saved network is back, and reports it as formed once it resumes it.
+  ///
+  /// EmberZNet saves the network frame counter in blocks of 4096 and resumes each start at a
+  /// block it saved ahead, but `set_value` leaves nothing saved ahead: on our dongle, the first
+  /// start after a restore went back below frames already sent, which devices then ignore
+  /// (hardware.md). With the value set at a block's start and a restart once the network is
+  /// formed, it resumed above every frame sent, and saved ahead again. At worst it would resume
+  /// at the value set, using again the counters of the frames sent between forming and the
+  /// restart, within a second or so.
+  fn restart(d: *Driver) void {
+    d.startup = .init(d.startup.link.options);
+    d.step = .starting;
+    d.configuration_index = 0;
+    d.policy_index = 0;
+    d.network_up = false;
+    d.restarting = true;
+    d.startup.start();
+  }
+
+  /// The start of the first block of 4096 at or above `counter`, from which EmberZNet resumes
+  /// as it should after a restart (see `restart`).
+  fn blockStart(counter: u32) u32 {
+    return std.math.cast(u32, (@as(u64, counter) + 0xfff) & ~@as(u64, 0xfff)) orelse
+      std.math.maxInt(u32) & ~@as(u32, 0xfff);
   }
 
   /// Sets the security of the network to form.
@@ -943,13 +980,18 @@ fn startedAt(driver: *Driver, version: u8) !Ncp {
   driver.* = .init(.{ .software_flow_control = true });
   var ncp: Ncp = .{ .host = driver };
   try ncp.connect();
+  try handshake(&ncp, version);
+  return ncp;
+}
+
+/// Agrees on EZSP `version` and reads the firmware version, after a reset.
+fn handshake(ncp: *Ncp, version: u8) !void {
   try ncp.expectCommand(&hex("00000013"));
   ncp.respond(&(hex("008000") ++ .{ version } ++ hex("02306a")));
   try ncp.expectCommand(&(hex("0100010000") ++ .{ version }));
   ncp.respond(&(hex("0180010000") ++ .{ version } ++ hex("02306a")));
   try ncp.expectCommand(&hex("020001aa0011"));
   ncp.respond(&hex("028001aa0000" ++ "07" ++ "2901" ++ "060a03" ++ "00" ++ "aa"));
-  return ncp;
 }
 
 /// Answers the configuration values, refusing those in `refused`, and the endpoint.
@@ -1316,7 +1358,8 @@ test "a saved network is put back with its frame counters" {
   driver.form(parameters);
   // The network frame counter first, refused here, which does not stop the driver.
   const counter = ncp.take() orelse return error.TestExpectedCommand;
-  try testing.expectEqualSlices(u8, &hex("ab00" ++ "23" ++ "04" ++ "45230100"), counter[3..]);
+  // 0x00012345, up to the start of a block of 4096.
+  try testing.expectEqualSlices(u8, &hex("ab00" ++ "23" ++ "04" ++ "00300100"), counter[3..]);
   ncp.respond(&.{ counter[0], 0x80, 0x01, 0xab, 0x00, 0x35 });
   const security = ncp.take() orelse return error.TestExpectedCommand;
   // The bitmask keeps the frame counter, and the network key's sequence number follows the keys.
@@ -1332,6 +1375,12 @@ test "a saved network is put back with its frame counters" {
   const trust_center = ncp.take() orelse return error.TestExpectedCommand;
   try testing.expectEqualSlices(u8, &hex("ab00" ++ "24" ++ "04" ++ "00040000"), trust_center[3..]);
   ncp.respond(&.{ trust_center[0], 0x80, 0x01, 0xab, 0x00, 0x00 });
+  // Then the NCP restarts, so that it saves its frame counter ahead, and resumes the network.
+  try ncp.answerReset();
+  try handshake(&ncp, 8);
+  try configured(&ncp, &.{});
+  try answer(&ncp, .network_init, 0x00);
+  ncp.respond(&hex("009001190090"));
   const read = ncp.take() orelse return error.TestExpectedCommand;
   ncp.respond(
     &[_]u8{ read[0], 0x80, 0x01, 0x28, 0x00 } ++
@@ -1349,10 +1398,51 @@ test "a saved network is put back with its frame counters" {
       ),
   );
   try keysRead(&ncp, 0x00012345);
+  const ieee = ncp.take() orelse return error.TestExpectedCommand;
+  ncp.respond(&[_]u8{ ieee[0], 0x80, 0x01, 0x26, 0x00 } ++ hex("8877665544332211"));
+  // What was reported before the restart is still there.
   const refused = skipCallbacks(&driver).?.command_refused;
   try testing.expectEqual(command.ValueId.nwk_frame_counter, refused.value);
   const network = skipCallbacks(&driver).?.formed;
   try testing.expectEqual(0x00012345, network.security.network_frame_counter);
+  try testing.expectEqual(0x1a62, network.parameters.pan_id);
+  try testing.expectEqual(null, skipCallbacks(&driver));
+}
+
+test "a saved network the NCP does not bring back after its restart fails the driver" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, false);
+  var parameters = form_parameters;
+  parameters.frame_counters = .{ .network = 1, .trust_center = 1 };
+  driver.form(parameters);
+  for ([_]frame.FrameId{
+    .set_value,
+    .set_initial_security_state,
+    .set_value,
+    .clear_key_table,
+    .form_network,
+  }) |id| {
+    try answer(&ncp, id, 0x00);
+  }
+  ncp.respond(&hex("009001190090"));
+  try answer(&ncp, .set_value, 0x00);
+  try answer(&ncp, .set_value, 0x00);
+  try ncp.answerReset();
+  try handshake(&ncp, 8);
+  try configured(&ncp, &.{});
+  // NOT_JOINED.
+  try answer(&ncp, .network_init, 0x93);
+  const ieee = ncp.take() orelse return error.TestExpectedCommand;
+  ncp.respond(&[_]u8{ ieee[0], 0x80, 0x01, 0x26, 0x00 } ++ hex("8877665544332211"));
+  try testing.expectEqual(Failure.restored_network_lost, skipCallbacks(&driver).?.failed);
+}
+
+test "restored counters start a block of 4096" {
+  try testing.expectEqual(0, Driver.blockStart(0));
+  try testing.expectEqual(4096, Driver.blockStart(1));
+  try testing.expectEqual(4096, Driver.blockStart(4096));
+  try testing.expectEqual(462848, Driver.blockStart(460471));
+  try testing.expectEqual(0xfffff000, Driver.blockStart(0xffffffff));
 }
 
 test "refresh reads the network and its counters again" {

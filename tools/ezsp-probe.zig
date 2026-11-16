@@ -182,6 +182,8 @@ pub fn main(init: std.process.Init) !u8 {
           refused.status.value,
         }),
         .bad_response => try out.writeAll("failed: an answer that cannot be decoded\n"),
+        // The probe puts no network back.
+        .restored_network_lost => unreachable,
       }
       return 1;
     },
