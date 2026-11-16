@@ -21,13 +21,17 @@ pub const FrameId = enum(u16) {
   network_init = 0x0017,
   network_state = 0x0018,
   stack_status_handler = 0x0019,
+  form_network = 0x001e,
+  leave_network = 0x0020,
   get_eui64 = 0x0026,
   get_network_parameters = 0x0028,
   set_configuration_value = 0x0053,
   set_policy = 0x0055,
   invalid_command = 0x0058,
+  set_initial_security_state = 0x0068,
   get_value = 0x00aa,
   set_value = 0x00ab,
+  clear_key_table = 0x00b1,
   _,
 };
 

@@ -3,8 +3,13 @@
 
 const std = @import("std");
 
-/// Values read with `get_value`.
-pub const ValueId = enum(u8) { version_info = 0x11, _ };
+/// Values read with `get_value` and written with `set_value`.
+pub const ValueId = enum(u8) {
+  stack_token_writing = 0x07,
+  extended_security_bitmask = 0x0a,
+  version_info = 0x11,
+  _,
+};
 
 /// The stack type of EmberZNet's mesh stack, the only one supported.
 pub const stack_type_mesh: u8 = 2;
@@ -101,6 +106,75 @@ pub const Endpoint = struct {
     return w.written();
   }
 };
+
+/// Parameters of `set_value`. `out` needs 2 bytes more than the value.
+pub fn setValue(out: []u8, id: ValueId, value: []const u8) []const u8 {
+  out[0] = @backingInt(id);
+  out[1] = @intCast(value.len);
+  @memcpy(out[2..][0..value.len], value);
+  return out[0..2 + value.len];
+}
+
+/// How the trust center secures a network it forms, in `set_initial_security_state`.
+pub const InitialSecurityState = struct {
+  bitmask: u16,
+  /// The trust center's link key.
+  preconfigured_key: [16]u8,
+  network_key: [16]u8,
+  network_key_sequence_number: u8,
+  /// The trust center's IEEE address, for devices that join; 0 when it forms the network itself.
+  trust_center_eui64: u64 = 0,
+
+  // Bits of the bitmask.
+  pub const trust_center_global_link_key: u16 = 0x0004;
+  pub const trust_center_uses_hashed_link_key: u16 = 0x0084;
+  pub const have_preconfigured_key: u16 = 0x0100;
+  pub const have_network_key: u16 = 0x0200;
+  pub const require_encrypted_key: u16 = 0x0800;
+  pub const no_frame_counter_reset: u16 = 0x1000;
+
+  pub const len = 2 + 16 + 16 + 1 + 8;
+
+  pub fn encode(s: InitialSecurityState, out: *[len]u8) []const u8 {
+    var w: Writer = .{ .buffer = out };
+    w.int(u16, s.bitmask);
+    @memcpy(out[2..18], &s.preconfigured_key);
+    @memcpy(out[18..34], &s.network_key);
+    w.len = 34;
+    w.int(u8, s.network_key_sequence_number);
+    w.int(u64, s.trust_center_eui64);
+    return w.written();
+  }
+};
+
+/// Bits of the extended security bitmask, set with `set_value`.
+pub const ExtendedSecurity = struct {
+  /// Devices that join use the global link key.
+  pub const joiner_global_link_key: u16 = 0x0010;
+  /// The coordinator does not leave the network when another device asks it to.
+  pub const nwk_leave_request_not_allowed: u16 = 0x0100;
+};
+
+/// Parameters of `form_network`. The network fields not given take the usual values: joining by
+/// MAC association, the coordinator managing the network, every channel allowed.
+pub fn formNetwork(out: *[20]u8, network: NetworkParameters) []const u8 {
+  var w: Writer = .{ .buffer = out };
+  w.int(u64, network.extended_pan_id);
+  w.int(u16, network.pan_id);
+  w.int(u8, @bitCast(network.tx_power));
+  w.int(u8, network.channel);
+  w.int(u8, network.join_method);
+  w.int(u16, network.manager_id);
+  w.int(u8, network.update_id);
+  w.int(u32, network.channels);
+  return w.written();
+}
+
+/// Parameters of `leave_network`: none before EZSP 14, an options byte since.
+pub fn leaveNetwork(out: *[1]u8, version: u8) []const u8 {
+  out[0] = 0;
+  return if (version >= 14) out else out[0..0];
+}
 
 /// Parameters of `network_init`: no options, both concerning end devices.
 pub fn networkInit(out: *[2]u8) []const u8 {
@@ -307,6 +381,51 @@ test "encode the commands that bring a network up" {
     .output_clusters = &.{ 0x0006 },
   };
   try testing.expectEqualSlices(u8, &hex("010401050001010100000600"), e.encode(&endpoint));
+}
+
+test "encode the commands that form a network" {
+  var state: [InitialSecurityState.len]u8 = undefined;
+  const s: InitialSecurityState = .{
+    .bitmask = InitialSecurityState.have_network_key,
+    .preconfigured_key = @splat(0x11),
+    .network_key = @splat(0x22),
+    .network_key_sequence_number = 0,
+  };
+  try testing.expectEqualSlices(
+    u8,
+    &hex(
+      "0002" ++
+        "11111111111111111111111111111111" ++
+        "22222222222222222222222222222222" ++
+        "00" ++
+        "0000000000000000",
+    ),
+    s.encode(&state),
+  );
+  var network: [20]u8 = undefined;
+  try testing.expectEqualSlices(
+    u8,
+    &hex("efcdab8967452301" ++ "3412" ++ "05" ++ "0f" ++ "00" ++ "0000" ++ "00" ++ "00f8ff07"),
+    formNetwork(&network, .{
+      .extended_pan_id = 0x0123456789abcdef,
+      .pan_id = 0x1234,
+      .tx_power = 5,
+      .channel = 15,
+      .join_method = 0,
+      .manager_id = 0,
+      .update_id = 0,
+      .channels = 0x07fff800,
+    }),
+  );
+  var value: [4]u8 = undefined;
+  try testing.expectEqualSlices(
+    u8,
+    &hex("0a021001"),
+    setValue(&value, .extended_security_bitmask, &.{ 0x10, 0x01 }),
+  );
+  var leave: [1]u8 = undefined;
+  try testing.expectEqual(0, leaveNetwork(&leave, 8).len);
+  try testing.expectEqualSlices(u8, &hex("00"), leaveNetwork(&leave, 14));
 }
 
 test "parse the network parameters" {
