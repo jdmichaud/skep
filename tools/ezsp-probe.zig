@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const ezsp = @import("ezsp");
+const serial = @import("serial");
 
 const linux = std.os.linux;
 const posix = std.posix;
@@ -19,7 +20,7 @@ const usage =
   \\
   \\Resets the EmberZNet dongle on <device> and reports its EZSP and firmware versions.
   \\
-  \\  --baud <rate>  57600, 115200 (default), 230400 or 460800
+  \\  --baud <rate>  57600, 115200 (default), 230400, 460800 or 921600
   \\  --rtscts       hardware flow control (RTS/CTS); XON/XOFF are honoured either way
   \\  --trace        show the bytes exchanged, on stderr
   \\
@@ -27,7 +28,7 @@ const usage =
 
 const Options = struct {
   device: []const u8,
-  speed: linux.speed_t = .B115200,
+  baudrate: u32 = 115200,
   rtscts: bool = false,
   trace: bool = false,
 };
@@ -45,16 +46,8 @@ fn parseOptions(args: []const [:0]const u8) ?Options {
     } else if (std.mem.eql(u8, arg, "--baud")) {
       i += 1;
       if (i == args.len) return null;
-      options.speed = if (std.mem.eql(u8, args[i], "57600"))
-        .B57600
-      else if (std.mem.eql(u8, args[i], "115200"))
-        .B115200
-      else if (std.mem.eql(u8, args[i], "230400"))
-        .B230400
-      else if (std.mem.eql(u8, args[i], "460800"))
-        .B460800
-      else
-        return null;
+      options.baudrate = std.fmt.parseInt(u32, args[i], 10) catch return null;
+      if (serial.speed(options.baudrate) == null) return null;
     } else if (arg.len > 0 and arg[0] == '-' or device != null) {
       return null;
     } else {
@@ -82,27 +75,11 @@ pub fn main(init: std.process.Init) !u8 {
     return 2;
   };
 
-  const fd = posix.openat(
-    posix.AT.FDCWD,
-    options.device,
-    .{
-      .ACCMODE = .RDWR,
-      .NOCTTY = true,
-      .NONBLOCK = true,
-      .CLOEXEC = true,
-    },
-    0,
-  ) catch |e| {
+  const fd = serial.open(options.device, options.baudrate, options.rtscts) catch |e| {
     try err.print("ezsp-probe: {s}: {t}\n", .{ options.device, e });
     return 1;
   };
-  configure(fd, options) catch |e| {
-    try err.print("ezsp-probe: {s}: cannot configure the serial port: {t}\n", .{
-      options.device,
-      e,
-    });
-    return 1;
-  };
+  defer serial.close(fd);
 
   var driver: Driver = .init(.{ .software_flow_control = !options.rtscts });
   const start = milliseconds(io);
@@ -262,26 +239,6 @@ fn printVersion(out: *Io.Writer, version: ezsp.command.Version) !void {
     v >> 4 & 0xf,
     v & 0xf,
   });
-}
-
-/// Raw mode, 8N1, at the chosen speed. XON/XOFF stay in the data: the driver handles them.
-fn configure(fd: posix.fd_t, options: Options) !void {
-  var t = try posix.tcgetattr(fd);
-  t.iflag = .{};
-  t.oflag = .{};
-  t.lflag = .{};
-  t.cflag = .{ .CSIZE = .CS8, .CREAD = true, .CLOCAL = true, .CRTSCTS = options.rtscts };
-  // The speed is in the CBAUD bits of cflag (asm-generic layout: x86, ARM, RISC-V).
-  const cbaud: u32 = 0o010017;
-  const cflag: u32 = @bitCast(t.cflag);
-  t.cflag = @bitCast(cflag & ~cbaud | @backingInt(options.speed));
-  t.ispeed = options.speed;
-  t.ospeed = options.speed;
-  t.cc[@backingInt(linux.V.MIN)] = 0;
-  t.cc[@backingInt(linux.V.TIME)] = 0;
-  try posix.tcsetattr(fd, .NOW, t);
-  // Drop what arrived before: the reset starts afresh.
-  _ = linux.ioctl(fd, linux.T.CFLSH, 0);
 }
 
 fn write(fd: posix.fd_t, driver: *Driver, io: Io, tracer: ?*Io.Writer, start: u64) !void {

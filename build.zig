@@ -26,7 +26,14 @@ pub fn build(b: *std.Build) !void {
   test_step.dependOn(&b.addRunArtifact(unit_tests).step);
   addHeaderChecks(b, test_step, target, optimize, build_options);
   addAbiCheck(b, test_step, target, optimize, library);
-  addProbe(b, test_step, target, optimize);
+  // Opening a dongle's serial port, for the programs that do.
+  const serial = b.createModule(.{
+    .root_source_file = b.path("src/serial/serial.zig"),
+    .target = target,
+    .optimize = optimize,
+  });
+  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = serial })).step);
+  addProbe(b, test_step, target, optimize, serial);
   if (b.isRoot()) {
     try addFormatSteps(b);
   }
@@ -100,6 +107,7 @@ fn addProbe(
   test_step: *std.Build.Step,
   target: std.Build.ResolvedTarget,
   optimize: std.lang.Optimize,
+  serial: *std.Build.Module,
 ) void {
   const ezsp = b.createModule(.{
     .root_source_file = b.path("src/driver/ezsp/ezsp.zig"),
@@ -112,7 +120,7 @@ fn addProbe(
       .root_source_file = b.path("tools/ezsp-probe.zig"),
       .target = target,
       .optimize = optimize,
-      .imports = &.{.{ .name = "ezsp", .module = ezsp }},
+      .imports = &.{.{ .name = "ezsp", .module = ezsp }, .{ .name = "serial", .module = serial }},
     }),
   });
   const run = b.addRunArtifact(probe);
