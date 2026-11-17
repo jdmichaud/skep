@@ -790,6 +790,9 @@ struct skep_reading_source {
   uint8_t settable; /* 1 if skep_set_reading() can set it */
   const char *name;
   const char *unit;
+  /* For those that can be set: the values they take, in their unit, such
+   * as the colour temperatures a light shows, 2203 to 7042 K. */
+  double min, max;
   uint64_t reserved[2]; /* for later versions */
 };
 
@@ -949,8 +952,8 @@ struct skep_setting {
  * set up to report it.
  *
  * Errors: -ENOENT (no such reading on the endpoint), -ENOTSUP (a reading
- * that cannot be set), -EINVAL (a value or transition out of range), and
- * those of all requests.
+ * that cannot be set), -EINVAL (a value or transition out of range: the
+ * value's range is the reading's min and max), and those of all requests.
  */
 int skep_set_reading(skep_ctx *ctx, const struct skep_setting *setting, const char *reading,
                      double value, uint64_t deadline, uint32_t *request);

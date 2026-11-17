@@ -1,6 +1,7 @@
 //! Interviewing a device, then setting it up: libskep asks its node descriptor, its endpoints and
-//! their simple descriptors, its manufacturer and model, then takes the steps its entry in
-//! devices.zig lists, binding clusters and configuring their reporting.
+//! their simple descriptors, its manufacturer and model, a light's range of colour temperatures,
+//! then takes the steps its entry in devices.zig lists, binding clusters and configuring their
+//! reporting.
 //!
 //! Each step is an exchange, and what it learns is kept in the state with the device's progress,
 //! so that a device that falls asleep half-way, or a restart, takes the setup up where it was. A
@@ -90,6 +91,24 @@ fn queue(ctx: *Context, d: *State.Device) error{ OutOfMemory }!void {
       exchange.payloadWritten(&built.frame, &w);
       break :blk .{ built, false };
     },
+    .light => blk: {
+      const e = colorEndpoint(d) orelse {
+        moveTo(ctx, d, .{ .stage = .setup });
+        return queue(ctx, d);
+      };
+      var built = exchange.zclFrame(ctx, d, e, devices.Cluster.color_control, .{
+        .cluster_specific = false,
+        .from_server = false,
+        .sequence = 0,
+        .command = zcl.Command.read_attributes,
+      });
+      var w = exchange.payloadWriter(&built.frame);
+      for ([_]u16{ attribute_physical_min_mireds, attribute_physical_max_mireds }) |id| {
+        w.writeInt(u16, id, .little) catch unreachable;
+      }
+      exchange.payloadWritten(&built.frame, &w);
+      break :blk .{ built, false };
+    },
     .setup => blk: {
       const steps = entryOf(d).steps;
       if (step >= steps.len) return moveTo(ctx, d, .{ .stage = .ready });
@@ -135,6 +154,17 @@ fn queue(ctx: *Context, d: *State.Device) error{ OutOfMemory }!void {
 
 const attribute_manufacturer: u16 = 0x0004;
 const attribute_model: u16 = 0x0005;
+/// ColorTempPhysicalMinMireds and ColorTempPhysicalMaxMireds, of Color Control.
+const attribute_physical_min_mireds: u16 = 0x400b;
+const attribute_physical_max_mireds: u16 = 0x400c;
+
+/// The first endpoint with Color Control, a light's.
+fn colorEndpoint(d: *const State.Device) ?u8 {
+  for (d.endpoints) |e| {
+    if (e.hasInput(devices.Cluster.color_control)) return e.id;
+  }
+  return null;
+}
 
 /// The endpoint to read the Basic cluster from: the first that has it, or the first.
 fn basicEndpoint(d: *const State.Device) u8 {
@@ -243,6 +273,27 @@ fn zclAnswer(ctx: *Context, d: *State.Device, frame: zcl.Frame) void {
             else => continue,
           };
           State.Device.setText(ctx.gpa, field, a.value.bytesOf()) catch return;
+        }
+      }
+      moveTo(ctx, d, .{ .stage = .light });
+    },
+    .light => {
+      // A light without colour temperatures, or that does not say, has no range.
+      if (command == zcl.Command.read_attributes_response) {
+        var min: ?u16 = null;
+        var max: ?u16 = null;
+        var it: zcl.ReadResponseIterator = .{ .bytes = frame.payload };
+        while (it.next() catch null) |a| {
+          if (a.status != zcl.Status.success or a.value.type != zcl.Type.uint16) continue;
+          const end = switch (a.id) {
+            attribute_physical_min_mireds => &min,
+            attribute_physical_max_mireds => &max,
+            else => continue,
+          };
+          end.* = @intCast(a.value.v.u);
+        }
+        if (min != null and max != null and min.? > 0 and min.? <= max.? and max.? < 0xffff) {
+          d.color_temperature_range = .{ .min = min.?, .max = max.? };
         }
       }
       moveTo(ctx, d, .{ .stage = .setup });

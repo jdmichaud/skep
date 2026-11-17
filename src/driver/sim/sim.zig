@@ -24,6 +24,8 @@ pub const Device = struct {
   silent: bool = false,
   /// The ZDO status it answers bindings with.
   bind_status: u8 = 0,
+  /// The colour temperatures it shows, in mireds, if it is such a light.
+  color_temperature_range: ?[2]u16 = null,
   /// What it accepted.
   binds: u8 = 0,
   configurations: u8 = 0,
@@ -202,10 +204,18 @@ pub const Driver = struct {
                 0x0005 => dev.model,
                 else => null,
               };
+              const mireds: ?u16 = if (message.cluster != 0x0300) null else switch (id) {
+                0x400b => if (dev.color_temperature_range) |r| r[0] else null,
+                0x400c => if (dev.color_temperature_range) |r| r[1] else null,
+                else => null,
+              };
               if (text) |t| {
                 w.writeAll(&.{ zcl.Status.success, zcl.Type.char_string, @intCast(t.len) }) catch
                   unreachable;
                 w.writeAll(t) catch unreachable;
+              } else if (mireds) |m| {
+                w.writeAll(&.{ zcl.Status.success, zcl.Type.uint16 }) catch unreachable;
+                w.writeInt(u16, m, .little) catch unreachable;
               } else {
                 w.writeByte(zcl.Status.unsupported_attribute) catch unreachable;
               }

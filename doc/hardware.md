@@ -186,7 +186,16 @@ attribute details come from the Zigbee2MQTT device definitions
   CurrentX, CurrentY and ColorTemperatureMireds together.
 - Obeys On, Off, Move to Level with On/Off, Move to Color Temperature and
   Move to Hue and Saturation, each answered with a Default Response of
-  status 0.
+  status 0. ColorTempPhysicalMinMireds and MaxMireds are 142 and 454,
+  7042 to 2203 K; a colour temperature outside them is answered with
+  status 0 too, and changes nothing.
+- Its colours lean green between red and green: at full saturation,
+  hue 0° is red, but 24° (orange) looks yellow-green and 60° (yellow)
+  green; 120°, 180°, 240° and 300° look as they should. The bulb reports
+  the hue it is sent, so it renders it so. Orange shows around 6 to 12°.
+  Owners of the ZL1, its firmware family, report the same ("yellow comes
+  out green"); firmware 1.00.80, which both bulbs run and the latest the
+  release notes list, does not fix it.
 
 ## ThirdReality Smart Plug E2, Type F (3RSPE01044BZ)
 

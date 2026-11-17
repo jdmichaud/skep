@@ -62,6 +62,8 @@ pub const CSource = extern struct {
   settable: u8,
   name: [*:0]const u8,
   unit: [*:0]const u8,
+  min: f64 = 0,
+  max: f64 = 0,
   reserved: [2]u64 = @splat(0),
 };
 
@@ -179,9 +181,32 @@ pub fn read(definition: *const Definition, value: zcl.Value) ?Reading {
   };
 }
 
+/// The values a settable reading takes, in its unit, within `limits` of the attribute's own if the
+/// device has some, such as a light's range of colour temperatures.
+pub fn range(definition: *const Definition, limits: ?[2]u64) [2]f64 {
+  const set = definition.set orelse return .{ 0, 0 };
+  switch (set) {
+    .on_off => return .{ 0, 1 },
+    .move => |m| {
+      const raw: [2]f64 = if (limits) |l|
+        .{ @floatFromInt(l[0]), @floatFromInt(l[1]) }
+      else
+        .{ if (definition.inverse) 1 else 0, @floatFromInt(m.max) };
+      if (definition.inverse) return .{ definition.divisor / raw[1], definition.divisor / raw[0] };
+      return .{ raw[0] / definition.divisor, raw[1] / definition.divisor };
+    },
+  }
+}
+
 /// The command that sets a reading to a value in its unit, over a transition in seconds where it
-/// takes one; null for a value or transition out of range, or a reading that cannot be set.
-pub fn setting(definition: *const Definition, value: f64, transition: f64) ?Command {
+/// takes one, within `limits` of the attribute's own if the device has some; null for a value or
+/// transition out of range, or a reading that cannot be set.
+pub fn setting(
+  definition: *const Definition,
+  value: f64,
+  transition: f64,
+  limits: ?[2]u64,
+) ?Command {
   const set = definition.set orelse return null;
   if (!std.math.isFinite(value)) return null;
   switch (set) {
@@ -193,6 +218,9 @@ pub fn setting(definition: *const Definition, value: f64, transition: f64) ?Comm
         if (definition.inverse) definition.divisor / value else value * definition.divisor,
       );
       if (!(raw >= 0 and raw <= @as(f64, @floatFromInt(m.max)))) return null;
+      if (limits) |l| {
+        if (raw < @as(f64, @floatFromInt(l[0])) or raw > @as(f64, @floatFromInt(l[1]))) return null;
+      }
       var c: Command = .{ .id = m.command };
       c.add(.unsigned(m.type, @intFromFloat(raw)));
       if (m.direction) {
@@ -284,21 +312,29 @@ fn expectArguments(command: Command, id: u8, arguments: []const u64) !void {
 test "readings are set by their clusters' commands, scaled back" {
   const level = find(&.{}, 0x0008, 0x0000).?;
   // 50 %, over 1 s: Move to Level with On/Off.
-  try expectArguments(setting(level, 50, 1).?, 0x04, &.{ 127, 10 });
-  try testing.expect(null == setting(level, 101, 0));
-  try testing.expect(null == setting(level, -1, 0));
-  try testing.expect(null == setting(level, 50, -1));
-  try testing.expect(null == setting(level, std.math.nan(f64), 0));
+  try expectArguments(setting(level, 50, 1, null).?, 0x04, &.{ 127, 10 });
+  try testing.expect(null == setting(level, 101, 0, null));
+  try testing.expect(null == setting(level, -1, 0, null));
+  try testing.expect(null == setting(level, 50, -1, null));
+  try testing.expect(null == setting(level, std.math.nan(f64), 0, null));
   // 2700 K: 370 mireds.
-  try expectArguments(setting(find(&.{}, 0x0300, 0x0007).?, 2700, 0).?, 0x0a, &.{ 370, 0 });
-  try testing.expect(null == setting(find(&.{}, 0x0300, 0x0007).?, 0, 0));
+  try expectArguments(setting(find(&.{}, 0x0300, 0x0007).?, 2700, 0, null).?, 0x0a, &.{ 370, 0 });
+  try testing.expect(null == setting(find(&.{}, 0x0300, 0x0007).?, 0, 0, null));
   // 180°, the shortest way round.
-  try expectArguments(setting(find(&.{}, 0x0300, 0x0000).?, 180, 0).?, 0x00, &.{ 127, 0, 0 });
+  try expectArguments(setting(find(&.{}, 0x0300, 0x0000).?, 180, 0, null).?, 0x00, &.{ 127, 0, 0 });
   const on = find(&.{}, 0x0006, 0x0000).?;
-  try expectArguments(setting(on, 1, 0).?, 0x01, &.{});
-  try expectArguments(setting(on, 0, 0).?, 0x00, &.{});
+  try expectArguments(setting(on, 1, 0, null).?, 0x01, &.{});
+  try expectArguments(setting(on, 0, 0, null).?, 0x00, &.{});
+  // A light's own range: 142 to 454 mireds, 2203 to 7042 K.
+  const color_temperature = find(&.{}, 0x0300, 0x0007).?;
+  try testing.expect(null == setting(color_temperature, 1000, 0, .{ 142, 454 }));
+  try expectArguments(setting(color_temperature, 2700, 0, .{ 142, 454 }).?, 0x0a, &.{ 370, 0 });
+  const kelvins = range(color_temperature, .{ 142, 454 });
+  try testing.expectApproxEqAbs(2202.6, kelvins[0], 0.1);
+  try testing.expectApproxEqAbs(7042.3, kelvins[1], 0.1);
+  try testing.expectEqual(.{ 0, 100 }, range(level, null));
   // Not settable.
-  try testing.expect(null == setting(find(&.{}, 0x0402, 0x0000).?, 20, 0));
+  try testing.expect(null == setting(find(&.{}, 0x0402, 0x0000).?, 20, 0, null));
 }
 
 test "colours are set by their chromaticity" {

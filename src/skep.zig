@@ -220,6 +220,7 @@ export fn skep_device_get_readings(
     for (definitions) |*listed| {
       if (pass == 1 and readings.find(&.{}, listed.cluster, listed.attribute) != null) continue;
       const definition = readings.find(own, listed.cluster, listed.attribute).?;
+      const settable_range = readings.range(definition, limitsOf(d, definition));
       for (d.endpoints) |e| {
         if (!e.hasInput(definition.cluster)) continue;
         if (n < capacity) {
@@ -228,6 +229,8 @@ export fn skep_device_get_readings(
             .cluster = definition.cluster,
             .attribute = definition.attribute,
             .settable = @intFromBool(definition.set != null),
+            .min = settable_range[0],
+            .max = settable_range[1],
             .name = definition.name.ptr,
             .unit = definition.unit.ptr,
           };
@@ -516,7 +519,9 @@ export fn skep_set_reading(
   const definition = definitionOn(e.device, e.endpoint, std.mem.span(reading)) orelse
     return err(.NOENT);
   if (definition.set == null) return err(.OPNOTSUPP);
-  const command = readings.setting(definition, value, setting.transition) orelse return err(.INVAL);
+  const limits = limitsOf(e.device, definition);
+  const command = readings.setting(definition, value, setting.transition, limits) orelse
+    return err(.INVAL);
   return sendSetting(ctx, setting, definition.cluster, command, deadline, request);
 }
 
@@ -537,6 +542,13 @@ export fn skep_set_color(
 }
 
 const color_control = 0x0300;
+
+/// The device's own limits of a reading's attribute: a light's range of colour temperatures.
+fn limitsOf(d: *const State.Device, definition: *const readings.Definition) ?[2]u64 {
+  if (definition.cluster != color_control or definition.attribute != 0x0007) return null;
+  const r = d.color_temperature_range orelse return null;
+  return .{ r.min, r.max };
+}
 
 const SettingEndpoint = struct {
   device: *State.Device,
@@ -950,6 +962,7 @@ fn simBulb() sim.Device {
     .nwk = 0x6442,
     .model = "3RCB02070Z",
     .input_clusters = &.{ 0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300, 0xff04 },
+    .color_temperature_range = .{ 142, 454 },
   };
 }
 
@@ -1036,6 +1049,14 @@ test "a bulb's readings and colour are set by its clusters' commands" {
     err(.INVAL),
     skep_set_reading(ctx, &setting, "level", 150, never, &request),
   );
+  // Warmer than the bulb goes: its range, read at setup, is 2203 to 7042 K.
+  try testing.expectEqual(
+    err(.INVAL),
+    skep_set_reading(ctx, &setting, "color_temperature", 1000, never, &request),
+  );
+  try testing.expectEqualStrings("color_temperature", std.mem.span(sources[2].name));
+  try testing.expectEqual(2203, @round(sources[2].min));
+  try testing.expectEqual(7042, @round(sources[2].max));
   try testing.expectEqual(
     err(.NOENT),
     skep_set_reading(ctx, &setting, "power", 1, never, &request),

@@ -38,6 +38,8 @@ pub const Device = struct {
   /// From its Basic cluster: printable ASCII only, since it comes from the radio.
   manufacturer: ?[]u8 = null,
   model: ?[]u8 = null,
+  /// The colour temperatures a light shows, in mireds, as its Color Control cluster says.
+  color_temperature_range: ?Range = null,
   progress: Progress = .{},
   /// When it was last heard from, on the context's clock. Not saved.
   heard_at: ?u64 = null,
@@ -123,6 +125,12 @@ pub const Progress = struct {
   step: u16 = 0,
 };
 
+/// A range of values, both ends included.
+pub const Range = struct {
+  min: u16,
+  max: u16,
+};
+
 pub const Stage = enum {
   /// The interview: its node descriptor, its endpoints, their descriptors, then its manufacturer
   /// and model.
@@ -130,6 +138,8 @@ pub const Stage = enum {
   endpoints,
   descriptors,
   basic,
+  /// A light's range of colour temperatures, if it has Color Control.
+  light,
   /// The steps its device entry asks for: bindings and reporting.
   setup,
   ready,
@@ -367,6 +377,15 @@ fn writeDevice(j: *std.json.Stringify, d: *const Device) std.Io.Writer.Error!voi
     try j.objectField("model");
     try j.write(m);
   }
+  if (d.color_temperature_range) |r| {
+    try j.objectField("color_temperature_range");
+    try j.beginObject();
+    try j.objectField("min");
+    try j.write(r.min);
+    try j.objectField("max");
+    try j.write(r.max);
+    try j.endObject();
+  }
   if (d.endpoints.len > 0) {
     try j.objectField("endpoints");
     try j.beginArray();
@@ -507,6 +526,10 @@ fn parseDevice(s: *State, gpa: std.mem.Allocator, entry: *const SkepDevice) Pars
   if (entry.model) |m| {
     try Device.setText(gpa, &d.model, m);
   }
+  if (entry.color_temperature_range) |r| {
+    if (r.min > r.max) return error.Invalid;
+    d.color_temperature_range = .{ .min = r.min, .max = r.max };
+  }
   // Assigned as soon as allocated, so that `deinit` frees what is there if a later part fails.
   d.endpoints = try gpa.alloc(Endpoint, entry.endpoints.len);
   for (d.endpoints) |*e| {
@@ -561,6 +584,7 @@ const SkepDevice = struct {
   node: ?struct { type: []const u8, manufacturer_code: []const u8, rx_on_when_idle: bool } = null,
   manufacturer: ?[]const u8 = null,
   model: ?[]const u8 = null,
+  color_temperature_range: ?struct { min: u16, max: u16 } = null,
   endpoints: []const struct {
     id: u8,
     profile: []const u8,
@@ -758,6 +782,7 @@ test "what libskep learnt of devices is kept" {
     .output_clusters = try testing.allocator.dupe(u16, &.{ 0x0019 }),
   };
   d.progress = .{ .stage = .setup, .step = 2 };
+  d.color_temperature_range = .{ .min = 142, .max = 454 };
   try testing.expect(d.sleepy());
   try testing.expect(d.endpoint(1).?.hasInput(0x0402));
   // A device known from the "skep" object only.

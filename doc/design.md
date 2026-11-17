@@ -400,6 +400,12 @@ The API is in [include/skep.h](../include/skep.h).
     readings, rather than one function per command, gives applications
     one way to control any device that has the reading, the plug's `on`
     as much as a bulb's.
+  - A setting outside what the device takes is refused (-EINVAL), and
+    `skep_device_get_readings()` gives each settable reading's range in
+    its unit. A light's colour temperatures are its own: its interview
+    reads them (ColorTempPhysicalMinMireds and MaxMireds), and the state
+    keeps them. Lights answer an out-of-range temperature with success
+    and ignore it, so without that, a user would never learn why.
   - Colours are set from sRGB (`skep_set_color()`), as their CIE 1931
     chromaticity (Move to Color); their brightness is the level's. The
     conversion is colour science rather than Zigbee, but lights need it,

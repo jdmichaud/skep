@@ -56,7 +56,10 @@ publishes the section of each released version as its release notes.
   of, once the network is up and when a device is set up.
 - Setting readings: `skep_set_reading()` sets a light's or a plug's `on`,
   and a light's `level`, `color_temperature`, `hue` and `saturation`,
-  with a transition, and `skep_set_color()` a light's colour, from sRGB. The
+  with a transition, and `skep_set_color()` a light's colour, from sRGB. A
+  setting outside what the device takes is refused, and each settable
+  reading says its range: a light's colour temperatures are read during
+  its interview and kept in the state. The
   protocol's `set` method does both, and devices' readings say which can
   be set.
 - skep shows readings: `skep devices` sums up what each device last
