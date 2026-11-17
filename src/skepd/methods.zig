@@ -89,6 +89,23 @@ pub fn permit_join(
   try p.wait(req, .{ .client = client.id, .id = id, .method = .permit_join });
 }
 
+pub fn rotate_network_key(
+  p: *Protocol,
+  _: std.mem.Allocator,
+  client: *Server.Client,
+  id: i64,
+  ps: Params,
+) Error!void {
+  try p.params(ps, &.{});
+  try p.room(client);
+  var req: u32 = 0;
+  const r = c.skep_rotate_network_key(p.ctx, &req);
+  if (libskep.is(r, .NODEV)) return p.fail("ENODEV", "no device to send a new key to", .{});
+  if (libskep.is(r, .NOBUFS)) return p.fail("ENOBUFS", "the key is already being changed", .{});
+  if (r != 0) return p.failErrno(r);
+  try p.wait(req, .{ .client = client.id, .id = id, .method = .rotate_network_key });
+}
+
 pub fn devices(
   p: *Protocol,
   a: std.mem.Allocator,

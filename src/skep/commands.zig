@@ -274,6 +274,20 @@ pub const commands = [_]Command{
     .render = output.permit,
   },
   .{
+    .names = &.{ "rekey" },
+    .method = "rotate_network_key",
+    .forms = &.{.{ .arguments = &.{} }},
+    .summary = "give the network a new key",
+    .help =
+    \\Gives the network a new, random key: sent to each device, encrypted with its own link key,
+    \\then switched to after 15 seconds. A device that was removed and still listens cannot read
+    \\it: rekey after removing a device you no longer trust. A sleepy device that missed it
+    \\rejoins, or must be paired again.
+    ,
+    .params = noParams,
+    .render = output.rekey,
+  },
+  .{
     .names = &.{ "devices" },
     .method = "devices",
     .forms = &.{.{ .arguments = &.{} }},
@@ -1287,6 +1301,7 @@ fn expectParsed(args: []const []const u8, expected: []const u8) !void {
 test "command lines become requests" {
   try expectParsed(&.{ "devices" }, "{\"id\":1,\"method\":\"devices\",\"params\":{}}\n");
   try expectParsed(&.{ "permit" }, "\"method\":\"permit_join\",\"params\":{\"seconds\":60}}");
+  try expectParsed(&.{ "rekey" }, "\"method\":\"rotate_network_key\",\"params\":{}}");
   try expectParsed(
     &.{ "set", "lamp", "level", "50%", "--transition", "1.5" },
     "\"params\":{\"device\":\"lamp\",\"reading\":\"level\",\"value\":50,\"transition\":1.5}}",

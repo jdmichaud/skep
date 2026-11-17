@@ -102,6 +102,11 @@ pub fn permit(x: *const Answer) !u8 {
   return ok;
 }
 
+pub fn rekey(x: *const Answer) !u8 {
+  try x.out.writeAll("the network has a new key\n");
+  return ok;
+}
+
 pub fn devices(x: *const Answer) !u8 {
   try showDevices(x.out, items(field(x.result, "devices")));
   return ok;

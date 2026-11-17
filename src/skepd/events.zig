@@ -271,7 +271,12 @@ pub fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   }
   if (error_code != 0) {
     var buffer: [24]u8 = undefined;
-    p.sendError(client, Protocol.errnoCode(&buffer, error_code), Protocol.errnoText(error_code));
+    const text = if (pending.method == .rotate_network_key) switch (libskep.errno(error_code)) {
+      .HOSTUNREACH => "no device took the new key: the network keeps its own",
+      .IO => "the dongle did not switch to the new key",
+      else => Protocol.errnoText(error_code),
+    } else Protocol.errnoText(error_code);
+    p.sendError(client, Protocol.errnoCode(&buffer, error_code), text);
     return true;
   }
   var m: Message = undefined;
@@ -279,7 +284,7 @@ pub fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   defer m.deinit();
   p.result(&m, pending.id) catch return true;
   switch (pending.method) {
-    .permit_join => {},
+    .permit_join, .rotate_network_key => {},
     .read, .write, .configure_reporting => {
       if (pending.method == .read) {
         remember(p, pending.device, pending.endpoint, pending.cluster, e);

@@ -55,6 +55,7 @@ pub const Method = enum {
   watch,
   network,
   permit_join,
+  rotate_network_key,
   devices,
   device,
   rename,
@@ -871,6 +872,26 @@ test "a client done sending still gets its answers" {
   try expectContains(bench.received(&buffer), "{\"id\":1,\"result\":{}}");
   bench.protocol.dropFinished();
   try testing.expectEqual(0, bench.protocol.server.clients.items.len);
+}
+
+test "the network gets a new key" {
+  const sim = TestBench.libskep_internal.sim;
+  var devices = [_]sim.Device{.{ .ieee = 0xf44250000d350000, .nwk = 0x1bce }};
+  var bench: TestBench = undefined;
+  try bench.initWith(&devices);
+  defer bench.deinit();
+  var buffer: [4096]u8 = undefined;
+  bench.ask("{\"id\": 1, \"method\": \"rotate_network_key\"}\n");
+  try expectContains(bench.received(&buffer), "\"code\":\"ENODEV\"");
+  bench.ask("{\"id\": 2, \"method\": \"permit_join\", \"params\": {\"seconds\": 254}}\n");
+  bench.sim().device(.{ .ieee = 0xf44250000d350000, .nwk = 0x1bce, .kind = .joined });
+  bench.pump();
+  _ = bench.received(&buffer);
+  bench.ask("{\"id\": 3, \"method\": \"rotate_network_key\"}\n");
+  try testing.expectEqual(0, bench.received(&buffer).len);
+  bench.protocol.now += c.SKEP_KEY_SWITCH_DELAY * 1000;
+  bench.pump();
+  try expectContains(bench.received(&buffer), "{\"id\":3,\"result\":{}}");
 }
 
 test "a flood of lines is handled a turn at a time, and read as it is" {

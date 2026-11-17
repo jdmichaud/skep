@@ -190,6 +190,13 @@ value the hexadecimal digits of its encoding.
 	once the coordinator and the routers have been told.
 	Result: {}
 
+*rotate_network_key*
+	Give the network a new, random key, sent to each device encrypted with its
+	own link key, then switched to after 15 seconds. Done once the dongle holds
+	the new key; "EHOSTUNREACH" if no device took it, in which case the network
+	keeps its own; "ENODEV" if there is no device to send it to.
+	Result: {}
+
 *devices*
 	The devices of the network, the coordinator aside.
 	Result: {"devices": [_device_, ...]}

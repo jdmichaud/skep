@@ -40,6 +40,14 @@ to drive the terminal, nor to forge lines.
 	Let new devices join for that long, 60 seconds by default, at most 254;
 	0 stops letting them.
 
+*rekey*
+	Give the network a new, random key: sent to each device, encrypted with
+	its own link key, then switched to after 15 seconds. A device that was
+	removed and still listens cannot read it: rekey after removing a device
+	you no longer trust. A sleepy device that missed the key rejoins by
+	itself, or must be paired again; skepd's log names the devices the key
+	could not be sent to.
+
 *devices*
 	The devices, one per line: their name, or address without one, their
 	model, and the first three readings they reported, or how far their setup
