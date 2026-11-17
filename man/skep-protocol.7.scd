@@ -239,9 +239,10 @@ value the hexadecimal digits of its encoding.
 	reading "color" and an sRGB colour as "#rrggbb"; its brightness is the
 	"level"'s. "endpoint" is the first one with the reading when left out.
 	"transition" is how long, in seconds, a light takes to get there: 0 by
-	default, 6553.4 at most. A reading that cannot be set is *ENOTSUP*, one
-	the endpoint does not have *ENOENT*, a device whose interview is not done
-	*EAGAIN*.
+	default, 6553.4 at most. A value outside the reading's "min" and "max" is
+	*EINVAL*, its message saying the range. A reading that cannot be set is
+	*ENOTSUP*, one the endpoint does not have *ENOENT*, both saying what the
+	device can set, and a device whose interview is not done *EAGAIN*.
 	Result: {"status": _ZCL status_}, the status of the device's Default
 	Response, 0 if it sent none.
 
@@ -330,8 +331,9 @@ reserves for "invalid", such as 0x8000 for a temperature, has no reading.
 A device's "readings" are those it can be read for, what matters most
 first, once its interview found its clusters. Each has the "endpoint",
 "cluster" and "id" to *read* it, its "reading" and "unit", "settable":
-true if *set* can set it, and the "type", "value", "scaled" and "time" of
-the last value the device reported or was read for, if any:
+true if *set* can set it, with the "min" and "max" values it takes, and the
+"type", "value", "scaled" and "time" of the last value the device reported
+or was read for, if any:
 
 ```
 "readings": [
@@ -347,8 +349,9 @@ set, and so can a plug's "on":
 
 ```
 "readings": [
-  {"endpoint": 1, "cluster": 8, "id": 0, "settable": true, "type": "uint8",
-   "value": 127, "reading": "level", "scaled": 50, "unit": "%", "time": ...},
+  {"endpoint": 1, "cluster": 8, "id": 0, "settable": true, "min": 0,
+   "max": 100, "type": "uint8", "value": 127, "reading": "level",
+   "scaled": 50, "unit": "%", "time": ...},
   ...
 ]
 ```

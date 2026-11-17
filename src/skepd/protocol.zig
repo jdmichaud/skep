@@ -499,6 +499,9 @@ fn request(
           .float => |f| f,
           else => return p.fail("EINVAL", "transition: seconds", .{}),
         };
+        if (!(setting.transition >= 0 and setting.transition <= 6553.4)) {
+          return p.fail("EINVAL", "transition: from 0 to 6553.4 seconds", .{});
+        }
       }
       const deadline = try p.deadlineOf(ps.get("timeout"));
       const given = ps.get("value") orelse return p.fail("EINVAL", "no value", .{});
@@ -534,7 +537,11 @@ fn request(
         });
       }
       if (r == -@as(c_int, @backingInt(E.INVAL))) {
-        return p.fail("EINVAL", "{s}: value or transition out of range", .{ reading });
+        if (color) return p.fail("EINVAL", "black has no colour: set level 0, or on no", .{});
+        return p.fail("EINVAL", "{s}: {s}", .{
+          reading,
+          try p.rangeOf(a, setting.device, setting.endpoint, reading),
+        });
       }
       if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .set });
@@ -663,6 +670,49 @@ fn endpointWith(
     if (std.mem.eql(u8, std.mem.span(source.name), name)) return source.endpoint;
   }
   return p.fail("ENOENT", "no reading {s}; {s}", .{ what, try p.settable(a, device) });
+}
+
+/// The values a settable reading takes, in words: "from 2203 to 7042 K".
+fn rangeOf(
+  p: *Protocol,
+  a: std.mem.Allocator,
+  device: u64,
+  endpoint: u8,
+  name: []const u8,
+) Error![]const u8 {
+  var count: usize = 0;
+  if (c.skep_device_get_readings(p.ctx, device, null, 0, &count) != 0) return "out of range";
+  const sources = try a.alloc(c.struct_skep_reading_source, count);
+  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
+  for (sources[0..@min(count, sources.len)]) |source| {
+    if (source.endpoint != endpoint or !std.mem.eql(u8, std.mem.span(source.name), name)) continue;
+    if (std.mem.eql(u8, name, "on")) return "yes or no, 1 or 0";
+    var w: std.Io.Writer.Allocating = .init(a);
+    try w.writer.writeAll("from ");
+    try writeShort(&w.writer, source.min);
+    try w.writer.writeAll(" to ");
+    try writeShort(&w.writer, source.max);
+    const unit = std.mem.span(source.unit);
+    if (unit.len > 0) {
+      try w.writer.print(" {s}", .{ unit });
+    }
+    return w.written();
+  }
+  return "out of range";
+}
+
+/// A number with four significant digits at most, without trailing zeros: 2203, 0.5.
+fn writeShort(w: *std.Io.Writer, x: f64) std.Io.Writer.Error!void {
+  if (x == 0 or !std.math.isFinite(x)) return w.print("{d}", .{ x });
+  const magnitude: i64 = @intFromFloat(@floor(std.math.log10(@abs(x))));
+  const decimals: usize = @intCast(std.math.clamp(3 - magnitude, 0, 6));
+  var buffer: [64]u8 = undefined;
+  var s: []const u8 = std.fmt.bufPrint(&buffer, "{d:.[1]}", .{ x, decimals }) catch
+    return w.print("{d}", .{ x });
+  if (std.mem.indexOfScalar(u8, s, '.') != null) {
+    s = std.mem.trimEnd(u8, std.mem.trimEnd(u8, s, "0"), ".");
+  }
+  try w.writeAll(s);
 }
 
 /// What can be set on a device, in words: "it can set on and level".
@@ -1194,6 +1244,10 @@ fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u
     if (source.settable != 0) {
       try j.objectField("settable");
       try j.write(true);
+      try j.objectField("min");
+      try j.write(source.min);
+      try j.objectField("max");
+      try j.write(source.max);
     }
     const key: Readings.Source = .{
       .device = device,
