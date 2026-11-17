@@ -9,6 +9,8 @@ publishes the section of each released version as its release notes.
 
 ### Added
 
+- skepd takes ZCL booleans and numbers as strings too, as a command line
+  gives them: "true", "12", "0x0c", "1.5".
 - Network key rotation: `skep_rotate_network_key()`, skepd's
   `rotate_network_key` method and `skep rekey` give the network a new,
   random key, then switch to it. It is broadcast encrypted with the

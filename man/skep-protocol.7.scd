@@ -168,6 +168,9 @@ value the hexadecimal digits of its encoding.
   bags, count first for structures.
 - "nodata" has no "value".
 
+skepd also takes booleans and numbers as strings, as a command line gives
+them: "true", "12", "0x0c", "1.5".
+
 # METHODS
 
 *version*

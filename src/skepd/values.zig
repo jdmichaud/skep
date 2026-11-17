@@ -204,7 +204,8 @@ pub fn typeOf(value: std.json.Value) ?*const Type {
   };
 }
 
-/// Reads a value of type `t`, given as the type says.
+/// Reads a value of type `t`, given as the type says, or as a string, as a command line gives it:
+/// "true", "12", "0x0c", "1.5". What the value means is skepd's to know, not its clients'.
 pub fn valueOf(
   arena: std.mem.Allocator,
   t: *const Type,
@@ -215,6 +216,12 @@ pub fn valueOf(
     .none => {},
     .boolean => v.v.u = switch (value) {
       .bool => |b| @intFromBool(b),
+      .string => |s| if (std.mem.eql(u8, s, "true"))
+        1
+      else if (std.mem.eql(u8, s, "false"))
+        0
+      else
+        return error.Invalid,
       else => return error.Invalid,
     },
     .unsigned => v.v.u = unsignedOf(u64, value) orelse return error.Invalid,
@@ -222,6 +229,7 @@ pub fn valueOf(
     .float => v.v.f = switch (value) {
       .integer => |i| @floatFromInt(i),
       .float => |f| f,
+      .string, .number_string => |s| std.fmt.parseFloat(f64, s) catch return error.Invalid,
       else => return error.Invalid,
     },
     .text => {
@@ -367,6 +375,23 @@ test "values are read as their types say" {
   try testing.expectError(
     error.Invalid,
     read(a, try parse(a, "{\"type\": \"bool\", \"value\": 1}")),
+  );
+  // As a command line gives them.
+  try testing.expectEqual(
+    1,
+    (try read(a, try parse(a, "{\"type\": \"bool\", \"value\": \"true\"}"))).v.u,
+  );
+  try testing.expectEqual(
+    1.5,
+    (try read(a, try parse(a, "{\"type\": \"single\", \"value\": \"1.5\"}"))).v.f,
+  );
+  try testing.expectEqual(
+    -3,
+    (try read(a, try parse(a, "{\"type\": \"int8\", \"value\": \"-3\"}"))).v.i,
+  );
+  try testing.expectError(
+    error.Invalid,
+    read(a, try parse(a, "{\"type\": \"bool\", \"value\": \"yes\"}")),
   );
   try testing.expectError(
     error.Invalid,

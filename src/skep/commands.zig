@@ -1076,7 +1076,7 @@ fn reportParams(j: *Stringify, call: *const Call) Stringify.Error!void {
   try j.write(integerOf(call.get("max").?).?);
   if (call.get("change")) |change| {
     try j.objectField("change");
-    try writeValue(j, change);
+    try j.write(change);
   }
   try j.endObject();
   try j.endArray();
@@ -1137,24 +1137,12 @@ fn writeNumber(j: *Stringify, n: f64) Stringify.Error!void {
 }
 
 /// A value as typed: a number, true or false, or text.
-fn writeValue(j: *Stringify, s: []const u8) Stringify.Error!void {
-  if (eq(s, "true")) return j.write(true);
-  if (eq(s, "false")) return j.write(false);
-  if (std.fmt.parseInt(i64, s, 10)) |n| return j.write(n) else |_| {}
-  if (std.fmt.parseFloat(f64, s)) |f| return j.write(f) else |_| {}
-  try j.write(s);
-}
-
-/// "type" and "value", with text and hexadecimal digits kept as strings, whatever they look like.
+/// "type" and "value", the value as given: what it means for its type is skepd's to know.
 fn writeTyped(j: *Stringify, type_name: []const u8, s: []const u8) Stringify.Error!void {
   try j.objectField("type");
   try j.write(type_name);
   try j.objectField("value");
-  for ([_][]const u8{ "array", "struct", "set", "bag", "key128", "ieee_address" }) |name| {
-    if (eq(type_name, name)) return j.write(s);
-  }
-  if (std.mem.endsWith(u8, type_name, "_string")) return j.write(s);
-  try writeValue(j, s);
+  try j.write(s);
 }
 
 fn eq(a: []const u8, b: []const u8) bool {
@@ -1376,7 +1364,7 @@ test "command lines become requests" {
   );
   try expectParsed(
     &.{ "command", "lamp", "1", "8", "4", "uint8:127", "uint16:10" },
-    "\"command\":4,\"arguments\":[{\"type\":\"uint8\",\"value\":127},{\"type\":\"uint16\",\"value\":10}]",
+    "\"command\":4,\"arguments\":[{\"type\":\"uint8\",\"value\":\"127\"},{\"type\":\"uint16\",\"value\":\"10\"}]",
   );
   try expectParsed(
     &.{ "write", "lamp", "1", "0", "0x4000", "char_string", "1.0" },
@@ -1384,7 +1372,7 @@ test "command lines become requests" {
   );
   try expectParsed(
     &.{ "report", "sensor", "1", "0x0402", "0", "int16", "10", "3600", "100" },
-    "\"reporting\":[{\"id\":0,\"type\":\"int16\",\"min_interval\":10,\"max_interval\":3600,\"change\":100}]",
+    "\"reporting\":[{\"id\":0,\"type\":\"int16\",\"min_interval\":10,\"max_interval\":3600,\"change\":\"100\"}]",
   );
   try expectParsed(&.{ "rename", "lamp" }, "\"params\":{\"device\":\"lamp\",\"name\":null}");
   try expectParsed(&.{ "remove", "lamp" }, "\"timeout\":60");
