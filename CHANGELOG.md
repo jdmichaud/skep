@@ -195,3 +195,5 @@ publishes the section of each released version as its release notes.
 - skep tried the default sockets when nothing answered on the one given
   by `--socket` or `$SKEP_SOCKET`, and so could act on another network
   than the one meant: a socket given is now the only one tried.
+- skepd keeps systemd's watchdog, which its units set to 30 seconds:
+  a skepd whose loop stops turning is restarted.

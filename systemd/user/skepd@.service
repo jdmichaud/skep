@@ -16,6 +16,8 @@ Restart=on-failure
 # Not at once: restarting a crash loop at once reaches the start limit, and
 # the service would stay down.
 RestartSec=5s
+# Restarted, too, if its loop stops turning.
+WatchdogSec=30s
 # Bounds: 32 clients, what they leave unread, and the state.
 LimitNOFILE=256
 MemoryMax=256M

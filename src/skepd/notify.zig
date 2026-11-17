@@ -1,5 +1,7 @@
 //! Telling systemd how skepd is doing when it runs as a Type=notify service: sd_notify(3)'s
-//! protocol, a datagram of lines such as READY=1 sent to the socket $NOTIFY_SOCKET names.
+//! protocol, a datagram of lines such as READY=1 sent to the socket $NOTIFY_SOCKET names. With
+//! WatchdogSec=, systemd also expects WATCHDOG=1 at least as often as $WATCHDOG_USEC says, and
+//! restarts a skepd that stops sending it: one stuck in its loop.
 
 const std = @import("std");
 
@@ -9,6 +11,9 @@ pub const Notifier = struct {
   fd: ?linux.fd_t = null,
   address: linux.sockaddr.un = .{ .path = @splat(0) },
   len: linux.socklen_t = 0,
+  /// How often to send WATCHDOG=1, in milliseconds: half the time systemd allows, as
+  /// sd_watchdog_enabled(3) advises. Null when systemd watches nothing.
+  watchdog_interval: ?u64 = null,
 
   /// A notifier for $NOTIFY_SOCKET, which does nothing when it is not set: skepd not run by
   /// systemd, or not as a Type=notify service.
@@ -26,7 +31,21 @@ pub const Notifier = struct {
     const rc = linux.socket(linux.AF.UNIX, linux.SOCK.DGRAM | linux.SOCK.CLOEXEC, 0);
     if (linux.errno(rc) != .SUCCESS) return n;
     n.fd = @intCast(rc);
+    n.watchdog_interval = watchdogInterval(environ, linux.getpid());
     return n;
+  }
+
+  /// Half of $WATCHDOG_USEC in milliseconds, if it is set for this process: $WATCHDOG_PID, when
+  /// set, names the process systemd watches, and the variables pass on to children.
+  fn watchdogInterval(environ: *const std.process.Environ.Map, pid: linux.pid_t) ?u64 {
+    const usec = std.fmt.parseInt(u64, environ.get("WATCHDOG_USEC") orelse return null, 10) catch
+      return null;
+    if (environ.get("WATCHDOG_PID")) |watched| {
+      const watched_pid = std.fmt.parseInt(linux.pid_t, watched, 10) catch return null;
+      if (watched_pid != pid) return null;
+    }
+    if (usec < 2000) return null;
+    return usec / 2000;
   }
 
   pub fn deinit(n: *Notifier) void {
@@ -78,4 +97,19 @@ test "systemd hears from skepd at the socket it names" {
   var quiet: Notifier = .init(&none);
   quiet.send("READY=1");
   try std.testing.expectEqual(null, quiet.fd);
+}
+
+test "the watchdog is kept for the process systemd watches, at half its time" {
+  var environ: std.process.Environ.Map = .init(std.testing.allocator);
+  defer environ.deinit();
+  try std.testing.expectEqual(null, Notifier.watchdogInterval(&environ, 42));
+  try environ.put("WATCHDOG_USEC", "30000000");
+  try std.testing.expectEqual(15_000, Notifier.watchdogInterval(&environ, 42));
+  try environ.put("WATCHDOG_PID", "42");
+  try std.testing.expectEqual(15_000, Notifier.watchdogInterval(&environ, 42));
+  try environ.put("WATCHDOG_PID", "43");
+  try std.testing.expectEqual(null, Notifier.watchdogInterval(&environ, 42));
+  try environ.put("WATCHDOG_PID", "42");
+  try environ.put("WATCHDOG_USEC", "nonsense");
+  try std.testing.expectEqual(null, Notifier.watchdogInterval(&environ, 42));
 }

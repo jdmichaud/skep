@@ -155,6 +155,8 @@ const Daemon = struct {
   exit_code: ?u8 = null,
   /// systemd, when it runs skepd as a Type=notify service.
   notifier: Notifier,
+  /// When to tell systemd's watchdog that the loop runs, if it watches.
+  watchdog_at: ?u64 = null,
 
   fn now(d: *const Daemon) u64 {
     const timestamp = Io.Clock.awake.now(d.io);
@@ -504,7 +506,16 @@ const Daemon = struct {
       d.protocol.dropFinished();
 
       const current = d.now();
+      if (d.notifier.watchdog_interval) |interval| {
+        if (current >= d.watchdog_at orelse 0) {
+          d.notifier.send("WATCHDOG=1");
+          d.watchdog_at = current + interval;
+        }
+      }
       var deadline: ?u64 = d.reopen_at;
+      if (d.watchdog_at) |t| {
+        deadline = if (deadline) |other| @min(other, t) else t;
+      }
       if (d.saving.at) |t| {
         deadline = if (deadline) |other| @min(other, t) else t;
       }

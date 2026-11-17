@@ -139,6 +139,10 @@ _JOURNAL_STREAM_
 _NOTIFY_SOCKET_
 	Where systemd listens for skepd's readiness and status.
 
+_WATCHDOG_USEC_, _WATCHDOG_PID_
+	Set by systemd with _WatchdogSec=_: skepd tells it that it is alive twice
+	as often, and systemd restarts it if it stops.
+
 # EXIT STATUS
 
 0 after a clean stop. 1 when skepd cannot go on: a state it cannot read, a
