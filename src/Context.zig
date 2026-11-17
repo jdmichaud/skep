@@ -788,14 +788,16 @@ fn unsolicited(ctx: *Context, d: *const State.Device, frame: *const driver_layer
     .command = zcl.Command.default_response,
   };
   if (h.cluster_specific and frame.cluster == ota_cluster and h.command == ota_query_next_image) {
+    // No image, since firmware updates are not done yet; the query is reported all the same.
     answer.cluster_specific = true;
     answer.command = ota_query_next_image_response;
-    return exchange.reply(ctx, d, frame, answer, &.{ ota_no_image_available });
-  }
-  // The ZCL answers no broadcast with a Default Response: every node that heard it would.
-  if (!frame.broadcast and
+    exchange.reply(ctx, d, frame, answer, &.{ ota_no_image_available });
+  } else if (!frame.broadcast and
     !h.disable_default_response and
     !(!h.cluster_specific and h.command == zcl.Command.default_response)) {
+    // The ZCL answers no broadcast with a Default Response: every node that heard it would.
+    // Success, whether the application handles the command or not, as zigbee-herdsman does: a
+    // device told otherwise may try again, or give up a remote's binding.
     exchange.reply(ctx, d, frame, answer, &.{ h.command, zcl.Status.success });
   }
   const report = !h.cluster_specific and h.command == zcl.Command.report_attributes;

@@ -360,7 +360,12 @@ enum skep_event_type {
    * skep_read_attributes() come in SKEP_EVENT_REQUEST_DONE instead.
    */
   SKEP_EVENT_ATTRIBUTES = 7,
-  /* A cluster command sent by a device, for instance by a remote. */
+  /*
+   * A cluster command sent by a device, for instance by a remote, or a
+   * firmware update query. libskep answers each with what the ZCL asks: a
+   * Default Response of status success where a unicast command asks for
+   * one, and "no image available" to a firmware update query.
+   */
   SKEP_EVENT_COMMAND = 8,
   /*
    * A request finished. Every request ends with exactly one such event,

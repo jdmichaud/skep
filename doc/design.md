@@ -389,11 +389,16 @@ The API is in [include/skep.h](../include/skep.h).
   application removes it, because leave reports are not always final and
   a device that comes back should keep its identity and setup.
 - libskep also answers devices on the coordinator's behalf, without the
-  application: a ZCL Default Response where the frame asks for one, reads
-  of the coordinator's own clusters (Basic, not done yet), and "no image
-  available" to OTA queries, since firmware updates are not in version
-  1; those are not reported as commands. ZDO requests to the coordinator
-  are answered by the dongle's firmware.
+  application, since the answers are due at once and the ZCL says what
+  they are: a ZCL Default Response where a unicast frame asks for one, of
+  status success for a command whether the application handles it or not
+  (as zigbee-herdsman answers); reads of the coordinator's own clusters
+  (Basic, not done yet); and "no image available" to OTA queries, since
+  firmware updates are not in version 1, while the query is reported as
+  a command, so that the application knows a device asks. An application
+  could not answer them itself: the answer carries the query's sequence
+  number. ZDO requests to the coordinator are answered by the dongle's
+  firmware.
 - Readings: libskep names the attributes that hold a measurement or a
   state, in words and units (`temperature` in °C rather than hundredths
   of a degree), in events (`skep_event_get_reading()`), and lists those a

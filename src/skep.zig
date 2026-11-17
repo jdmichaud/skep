@@ -1471,7 +1471,7 @@ test "libskep answers devices on the coordinator's behalf" {
   skep_event_free((try nextOfType(ctx, .state_changed)) orelse return error.TestExpectedState);
   const sim_driver = &ctx.driver.?.sim;
 
-  // A firmware update query, as the plug asks: no image, and no event.
+  // A firmware update query, as the plug asks: no image, and the query reported.
   var query: driver_layer.Frame = .{
     .address = 0x1bce,
     .profile = 0x0104,
@@ -1481,7 +1481,10 @@ test "libskep answers devices on the coordinator's behalf" {
   };
   query.setPayload(&.{ 0x01, 0xb8, 0x01, 0x00, 0x33, 0x12, 0xa6, 0xd3, 0x58, 0x30, 0x01, 0x10 });
   sim_driver.receive(query);
-  try testing.expectEqual(null, try nextEventType(ctx));
+  const asked = (try nextOfType(ctx, .command)) orelse return error.TestExpectedCommand;
+  try testing.expectEqual(0x0019, skep_event_get_cluster(asked));
+  try testing.expectEqual(0x01, skep_event_get_command(asked));
+  skep_event_free(asked);
   try testing.expectEqual(0, skep_advance(ctx, 0));
   var answer = sim_driver.sent[sim_driver.sent_len - 1];
   try testing.expectEqual(0x0019, answer.cluster);
