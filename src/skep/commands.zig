@@ -27,6 +27,8 @@ pub const Kind = enum {
   typed,
   /// What a reading is set to, as the reading before it takes it.
   setting,
+  /// on or off.
+  state,
 };
 
 pub const Argument = struct {
@@ -93,6 +95,8 @@ pub const Flow = enum {
 pub const Form = struct {
   arguments: []const Argument,
   flow: Flow = .request,
+  /// Whether it takes the command's options.
+  options: bool = true,
 };
 
 pub const Command = struct {
@@ -335,13 +339,22 @@ pub const commands = [_]Command{
   .{
     .names = &.{ "set" },
     .method = "set",
-    .forms = &.{.{
-      .arguments = &.{
-        device,
-        argument("reading", .reading, "what to set, from the list below"),
-        argument("value", .setting, "what to set it to, as the list below says"),
+    .forms = &.{
+      .{
+        .arguments = &.{
+          device,
+          .{ .name = "state", .label = "on|off", .kind = .state, .help = "switch it on or off" },
+        },
+        .options = false,
       },
-    }},
+      .{
+        .arguments = &.{
+          device,
+          argument("reading", .reading, "what to set, from the list below"),
+          argument("value", .setting, "what to set it to, as the list below says"),
+        },
+      },
+    },
     .options = &.{.{
       .name = "--transition",
       .value = upTo(
@@ -350,11 +363,10 @@ pub const commands = [_]Command{
       ),
     }},
     .summary = "set a reading, such as level 50%, or a colour: color #ff8000",
-    .help = "Sets a reading of the device, or a light's colour.",
+    .help = "Switches the device on or off, or sets a reading of it, or a light's colour.",
     .more =
     \\Readings and their values:
     \\
-    \\  on yes|no                    a light or a plug, on or off
     \\  level <percent>              a light's brightness, such as 50%; 0 switches it off
     \\  color_temperature <kelvins>  a light's white, such as 2700K
     \\  hue <degrees>                a light's hue, such as 120
@@ -598,6 +610,16 @@ pub fn parse(a: std.mem.Allocator, args: []const []const u8) error{ OutOfMemory 
   var best: ?Mismatch = null;
   for (c.forms) |*form| {
     const mismatch = try match(a, form, arguments) orelse {
+      if (!form.options) {
+        for (given[0..c.options.len], c.options) |value, o| {
+          if (value != null) {
+            return problem(a, c, name, "{s} does not go with {s}", .{
+              o.name,
+              arguments[arguments.len - 1],
+            });
+          }
+        }
+      }
       return .{
         .call = .{
           .command = c,
@@ -609,7 +631,7 @@ pub fn parse(a: std.mem.Allocator, args: []const []const u8) error{ OutOfMemory 
         },
       };
     };
-    if (best == null or mismatch.position > best.?.position) {
+    if (mismatch.better(best)) {
       best = mismatch;
     }
   }
@@ -643,6 +665,13 @@ const Mismatch = struct {
   /// How many of the form's arguments went well.
   position: usize,
   message: []const u8,
+  /// Arguments were left over: less telling than a wrong one, on a tie.
+  excess: bool = false,
+
+  fn better(m: Mismatch, other: ?Mismatch) bool {
+    const o = other orelse return true;
+    return m.position > o.position or (m.position == o.position and o.excess and !m.excess);
+  }
 };
 
 /// What keeps a form from taking the arguments, or null if it takes them.
@@ -695,6 +724,7 @@ fn match(a: std.mem.Allocator, form: *const Form, arguments: []const []const u8)
     return .{
       .position = form.arguments.len,
       .message = try std.fmt.allocPrint(a, "too many arguments, from \"{s}\"", .{ arguments[i] }),
+      .excess = true,
     };
   }
   return null;
@@ -748,6 +778,10 @@ fn check(
       if (colon == 0 or !isName(value[0..colon])) {
         return try std.fmt.allocPrint(a, "\"{s}\" has no type, as in uint8:128", .{ value });
       }
+    },
+    .state => if (!std.ascii.eqlIgnoreCase(value, "on") and
+      !std.ascii.eqlIgnoreCase(value, "off")) {
+      return try std.fmt.allocPrint(a, "\"{s}\" is not on or off", .{ value });
     },
     .setting => {
       const reading = for ((form orelse return null).arguments, 0..) |other, k| {
@@ -918,6 +952,13 @@ fn readParams(j: *Stringify, call: *const Call) Stringify.Error!void {
 
 fn setParams(j: *Stringify, call: *const Call) Stringify.Error!void {
   try deviceParams(j, call);
+  if (call.get("state")) |state| {
+    try j.objectField("reading");
+    try j.write("on");
+    try j.objectField("value");
+    try j.write(std.ascii.eqlIgnoreCase(state, "on"));
+    return;
+  }
   const reading = call.get("reading").?;
   try j.objectField("reading");
   try j.write(reading);
@@ -1097,8 +1138,10 @@ pub fn writeSynopsis(
       if (a.optional) "]" else "",
     });
   }
-  for (command.options) |o| {
-    try w.print(" [{s} {s}]", .{ o.name, o.value.label });
+  if (form.options) {
+    for (command.options) |o| {
+      try w.print(" [{s} {s}]", .{ o.name, o.value.label });
+    }
   }
 }
 
@@ -1203,6 +1246,15 @@ test "command lines become requests" {
   try expectParsed(&.{ "set", "lamp", "color", "ff8000" }, "\"value\":\"#ff8000\"");
   try expectParsed(&.{ "set", "plug", "on", "no" }, "\"reading\":\"on\",\"value\":false}");
   try expectParsed(
+    &.{ "set", "lamp", "off" },
+    "\"params\":{\"device\":\"lamp\",\"reading\":\"on\",\"value\":false}}",
+  );
+  try expectParsed(
+    &.{ "set", "lamp", "on" },
+    "\"params\":{\"device\":\"lamp\",\"reading\":\"on\",\"value\":true}}",
+  );
+  try expectParsed(&.{ "set", "lamp", "OFF" }, "\"reading\":\"on\",\"value\":false}}");
+  try expectParsed(
     &.{ "--timeout", "5", "set", "lamp", "color_temperature", "2700K" },
     "\"value\":2700,\"timeout\":5}",
   );
@@ -1239,7 +1291,8 @@ test "command lines become requests" {
 test "mistakes say what is wrong, and how to use the command" {
   try expectParsed(&.{ "set", "color_temperature", "1000K" },
     \\skep set: missing <value>; "color_temperature" was taken as <device>, "1000K" as <reading>
-    \\usage: skep [<options>] set <device> <reading> <value> [--transition <seconds>]
+    \\usage: skep [<options>] set <device> on|off
+    \\       skep [<options>] set <device> <reading> <value> [--transition <seconds>]
     \\skep set --help tells more.
     \\
   );
@@ -1266,6 +1319,14 @@ test "mistakes say what is wrong, and how to use the command" {
   try expectParsed(
     &.{ "set", "lamp", "level", "50", "more" },
     "skep set: too many arguments, from \"more\"\n",
+  );
+  try expectParsed(
+    &.{ "set", "lamp", "off", "--transition", "2" },
+    "skep set: --transition does not go with off\n",
+  );
+  try expectParsed(
+    &.{ "set", "lamp", "dim" },
+    "skep set: missing <value>; \"lamp\" was taken as <device>, \"dim\" as <reading>\n",
   );
   try expectParsed(&.{ "permit", "300" }, "skep permit: <seconds>: 300 is more than 254\n");
   try expectParsed(

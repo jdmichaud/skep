@@ -75,8 +75,8 @@ publishes the section of each released version as its release notes.
   before or after the command.
 - `skep set <device> <reading> <value>` sets a reading, with
   `--transition`: `skep set bulb level 50%`, `skep set bulb
-  color_temperature 2700K`, `skep set bulb color "#ff8000"`, `skep set
-  plug on no`.
+  color_temperature 2700K`, `skep set bulb color "#ff8000"`; and `skep
+  set <device> on` or `off` switches it.
 - Opening or closing the join window tells the routers too.
 - libskep answers devices on the coordinator's behalf: a Default
   Response where a frame asks for one, and "no image available" to
