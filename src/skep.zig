@@ -660,6 +660,20 @@ test "a context needs a seed, and a valid allocator" {
   try testing.expectEqual(null, ctx);
 }
 
+test "the port's flow control reaches the driver" {
+  for ([_]struct { [:0]const u8, bool }{.{ "hardware", false }, .{ "software", true }}) |case| {
+    const ctx = try testContext(&testing.allocator);
+    defer skep_free(ctx);
+    try testing.expectEqual(0, skep_set_option(ctx, "driver", "ezsp"));
+    try testing.expectEqual(0, skep_set_option(ctx, "flow-control", case[0]));
+    try testing.expectEqual(0, skep_start(ctx));
+    try testing.expectEqual(case[1], ctx.driver.?.ezsp.startup.link.options.software_flow_control);
+  }
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(err(.INVAL), skep_set_option(ctx, "flow-control", "xon"));
+}
+
 test "the sim driver resumes the network of the simulated dongle" {
   const ctx = try testContext(&testing.allocator);
   defer skep_free(ctx);

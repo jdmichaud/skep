@@ -634,6 +634,13 @@ pub fn main(init: std.process.Init) !u8 {
     return 2;
   }
 
+  const rtscts = options.rtscts orelse (flow_control == c.SKEP_FLOW_CONTROL_HARDWARE);
+  // XON and XOFF are libskep's to handle, and to warn of when the port uses RTS/CTS instead.
+  if (rtscts and c.skep_set_option(ctx, "flow-control", "hardware") != 0) {
+    try log.writeAll("skepd: --rtscts: libskep takes no flow control\n");
+    return 2;
+  }
+
   const state_path = options.state orelse
     StateFile.defaultPath(init.arena.allocator(), init.environ_map) orelse {
     try log.writeAll(
@@ -695,7 +702,7 @@ pub fn main(init: std.process.Init) !u8 {
       .readings = .{ .gpa = init.gpa },
     },
     .baudrate = options.baudrate orelse baudrate,
-    .rtscts = options.rtscts orelse (flow_control == c.SKEP_FLOW_CONTROL_HARDWARE),
+    .rtscts = rtscts,
     .notifier = .init(init.environ_map),
   };
   defer daemon.protocol.deinit();

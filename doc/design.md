@@ -114,9 +114,10 @@ the daemon `skepd` and the command-line tool `skep`.
   needs it: the `ezsp` driver does not.
 - Software flow control (XON/XOFF) is handled by libskep: the driver
   pauses its output on XOFF, so the caller opens the port in raw mode
-  whatever the dongle uses. XON or XOFF arriving when the driver expects
-  no software flow control means the firmware and the serial settings
-  disagree; libskep logs a warning.
+  whatever the dongle uses. The caller says how it opened the port (the
+  `flow-control` option, which skepd sets from `--rtscts`). XON or XOFF
+  arriving when the port uses no software flow control means the
+  firmware and the serial settings disagree; libskep logs a warning.
 - First drivers: `ezsp` (Silicon Labs EmberZNet NCP over ASH, used by the
   ZBDongle-E) and `sim` (a simulated network for tests). Having two
   drivers from day one keeps the interface honest.

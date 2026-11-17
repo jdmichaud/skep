@@ -98,6 +98,8 @@ pub const Options = struct {
   log_level: driver_layer.Level = .warning,
   frame_counter_margin: u32 = 100000,
   replace_network: bool = false,
+  /// The port's, as the caller opened it; the driver's usual one if null.
+  flow_control: ?driver_layer.FlowControl = null,
   channel: u8 = 15,
   pan_id: ?u16 = null,
   extended_pan_id: ?u64 = null,
@@ -155,6 +157,11 @@ pub fn setOption(ctx: *Context, name: []const u8, value: []const u8) c_int {
     .@"frame-counter-margin" => o.frame_counter_margin = std.fmt.parseInt(u32, value, 10) catch
       return err(.INVAL),
     .@"replace-network" => o.replace_network = parseYesNo(value) orelse return err(.INVAL),
+    .@"flow-control" => o.flow_control = std.meta.stringToEnum(
+      driver_layer.FlowControl,
+      value,
+    ) orelse
+      return err(.INVAL),
     .channel => {
       const channel = std.fmt.parseInt(u8, value, 10) catch return err(.INVAL);
       if (channel < 11 or channel > 26) return err(.INVAL);
@@ -188,6 +195,7 @@ const OptionName = enum {
   driver,
   @"frame-counter-margin",
   @"replace-network",
+  @"flow-control",
   channel,
   @"pan-id",
   @"extended-pan-id",
@@ -221,7 +229,7 @@ pub fn start(ctx: *Context) c_int {
   if (ctx.status == .starting or ctx.status == .running) return err(.BUSY);
   ctx.driver = switch (name) {
     .sim => .{ .sim = ctx.sim_dongle },
-    else => .init(name),
+    else => .init(name, ctx.options.flow_control),
   };
   ctx.driver.?.start();
   ctx.status = .starting;

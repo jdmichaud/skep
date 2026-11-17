@@ -166,11 +166,13 @@ pub const Driver = union(Name) {
   ezsp: ezsp.driver.Driver,
   sim: sim.Driver,
 
-  pub fn init(name: Name) Driver {
+  /// A driver, for a port opened with `flow_control`, or the driver's usual one if null.
+  pub fn init(name: Name, flow_control: ?FlowControl) Driver {
     return switch (name) {
       .ezsp => .{
         .ezsp = .init(.{
-          .software_flow_control = serialDefaults(.ezsp).?.flow_control == .software,
+          .software_flow_control = (flow_control orelse serialDefaults(.ezsp).?.flow_control) ==
+            .software,
         }),
       },
       .sim => .{ .sim = .{} },

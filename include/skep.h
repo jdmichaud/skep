@@ -148,6 +148,13 @@ void skep_free(skep_ctx *ctx);
  *                    dongle: with the imported one, or with a new one when
  *                    no state is imported. Devices of the old network must
  *                    then be paired again. Default: "no".
+ *   flow-control     How the caller opened the port: "software" (XON/XOFF,
+ *                    which libskep handles), "hardware" (RTS/CTS) or
+ *                    "none". XON or XOFF from the dongle when it is not
+ *                    "software" means that its firmware and the port
+ *                    disagree, which libskep logs as a warning. Default:
+ *                    the driver's usual one, as skep_get_serial_defaults()
+ *                    gives it.
  *
  * Used only when a new network is formed (no imported state, and no
  * network on the dongle or replace-network set):

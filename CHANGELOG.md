@@ -67,6 +67,9 @@ publishes the section of each released version as its release notes.
   sleepy one, `skep read <device> <reading>...` asks the device, as in
   `skep read plug power`, and `skep watch` prints events on short lines
   such as `plug: power 11.2 W`.
+- The `flow-control` option tells libskep how the caller opened the port,
+  so that it warns of XON or XOFF on a port using RTS/CTS; skepd sets it
+  from `--rtscts`.
 - `--help` after any skep command tells how to use it (`skep set
   --help`), and skepd takes `--help` too.
 - skep's mistakes are told with the command, the argument and what is
