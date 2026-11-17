@@ -561,10 +561,11 @@ int skep_event_get_attribute(const skep_event *event, size_t index, struct skep_
  * The names and units are UTF-8 strings that stay valid as long as the
  * program runs:
  *
+ *   on (1 or 0, no unit), level (%), color_temperature (K), hue (°),
+ *   saturation (%), color_x and color_y (CIE 1931, no unit),
  *   temperature (°C), humidity (%), pressure (hPa), battery (%),
- *   battery_voltage (V), on (1 or 0, no unit), level (%),
- *   color_temperature (mired), voltage (V), current (A), power (W),
- *   power_factor (no unit), frequency (Hz), energy (kWh).
+ *   battery_voltage (V), power (W), energy (kWh), voltage (V),
+ *   current (A), power_factor (no unit), frequency (Hz).
  *
  * Newer versions of libskep name more readings.
  */

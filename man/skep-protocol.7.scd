@@ -308,10 +308,11 @@ and in *attributes* events, has three more members: "reading", its name;
 ```
 
 The readings, and their units: "on" (1 or 0, no unit), "level" (%),
-"color_temperature" (mired), "temperature" (°C), "humidity" (%),
-"pressure" (hPa), "battery" (%), "battery_voltage" (V), "power" (W),
-"energy" (kWh), "voltage" (V), "current" (A), "power_factor" (no unit) and
-"frequency" (Hz). Newer versions of skepd name more. A value the ZCL
+"color_temperature" (K), "hue" (°), "saturation" (%), "color_x" and
+"color_y" (the colour's CIE 1931 chromaticity, no unit), "temperature" (°C),
+"humidity" (%), "pressure" (hPa), "battery" (%), "battery_voltage" (V),
+"power" (W), "energy" (kWh), "voltage" (V), "current" (A), "power_factor"
+(no unit) and "frequency" (Hz). Newer versions of skepd name more. A value the ZCL
 reserves for "invalid", such as 0x8000 for a temperature, has no reading.
 
 A device's "readings" are those it can be read for, what matters most

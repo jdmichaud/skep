@@ -46,7 +46,9 @@ publishes the section of each released version as its release notes.
   for sleepy devices to wake up.
 - Readings: libskep names attributes in words and units, a temperature
   in °C rather than hundredths of a degree, with the device's own scale
-  where it has one, such as the plug's power, current and voltage.
+  where it has one, such as the plug's power, current and voltage, and
+  the light's: level, colour temperature in kelvins, hue, saturation and
+  CIE x and y.
   `skep_event_get_reading()` gives an attribute's, and
   `skep_device_get_readings()` lists what a device can be read for.
   skep-protocol(7) carries them, and skepd remembers the last ones, which

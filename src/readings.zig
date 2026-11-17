@@ -15,6 +15,9 @@ pub const Definition = struct {
   unit: [:0]const u8,
   /// The value in its unit is the attribute's divided by this.
   divisor: f64 = 1,
+  /// Whether the value is this divisor divided by the attribute's instead: a colour temperature
+  /// in kelvins, from mireds.
+  inverse: bool = false,
 };
 
 /// A reading of an attribute.
@@ -41,8 +44,20 @@ pub const standard = [_]Definition{
   .{ .cluster = 0x0006, .attribute = 0x0000, .name = "on", .unit = "" },
   // Level Control: CurrentLevel, 0 to 254.
   .{ .cluster = 0x0008, .attribute = 0x0000, .name = "level", .unit = "%", .divisor = 2.54 },
-  // Color Control: ColorTemperatureMireds.
-  .{ .cluster = 0x0300, .attribute = 0x0007, .name = "color_temperature", .unit = "mired" },
+  // Color Control: ColorTemperatureMireds, in kelvins; CurrentHue, 0 to 254 for the whole circle;
+  // CurrentSaturation, 0 to 254; CurrentX and CurrentY, the CIE 1931 chromaticity, in 65536ths.
+  .{
+    .cluster = 0x0300,
+    .attribute = 0x0007,
+    .name = "color_temperature",
+    .unit = "K",
+    .divisor = 1_000_000,
+    .inverse = true,
+  },
+  .{ .cluster = 0x0300, .attribute = 0x0000, .name = "hue", .unit = "°", .divisor = 254.0 / 360.0 },
+  .{ .cluster = 0x0300, .attribute = 0x0001, .name = "saturation", .unit = "%", .divisor = 2.54 },
+  .{ .cluster = 0x0300, .attribute = 0x0003, .name = "color_x", .unit = "", .divisor = 65536 },
+  .{ .cluster = 0x0300, .attribute = 0x0004, .name = "color_y", .unit = "", .divisor = 65536 },
   // Temperature Measurement: hundredths of a degree.
   .{ .cluster = 0x0402, .attribute = 0x0000, .name = "temperature", .unit = "°C", .divisor = 100 },
   // Relative Humidity Measurement: hundredths of a percent.
@@ -94,10 +109,11 @@ pub fn read(definition: *const Definition, value: zcl.Value) ?Reading {
     .float => if (std.math.isFinite(value.v.f)) value.v.f else return null,
     else => return null,
   };
+  if (definition.inverse and raw == 0) return null;
   return .{
     .name = definition.name.ptr,
     .unit = definition.unit.ptr,
-    .value = raw / definition.divisor,
+    .value = if (definition.inverse) definition.divisor / raw else raw / definition.divisor,
   };
 }
 
@@ -115,6 +131,12 @@ test "readings are scaled as the ZCL or the device says" {
   const battery = find(&.{}, 0x0001, 0x0021).?;
   try testing.expectEqual(100, read(battery, .unsigned(zcl.Type.uint8, 200)).?.value);
   try testing.expectEqual(null, read(battery, .unsigned(zcl.Type.uint8, 0xff)));
+  // Mireds, in kelvins.
+  const color_temperature = find(&.{}, 0x0300, 0x0007).?;
+  try testing.expectEqual(4000, read(color_temperature, .unsigned(zcl.Type.uint16, 250)).?.value);
+  try testing.expectEqual(null, read(color_temperature, .unsigned(zcl.Type.uint16, 0)));
+  const hue = find(&.{}, 0x0300, 0x0000).?;
+  try testing.expectApproxEqAbs(180, read(hue, .unsigned(zcl.Type.uint8, 127)).?.value, 1e-9);
   const on = find(&.{}, 0x0006, 0x0000).?;
   try testing.expectEqual(1, read(on, .unsigned(zcl.Type.boolean, 1)).?.value);
   // A device's own scale comes first.
