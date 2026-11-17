@@ -204,7 +204,7 @@ export fn skep_event_get_reading(
 const ReadingSource = readings.CSource;
 
 export fn skep_device_get_readings(
-  ctx: *Context,
+  ctx: *const Context,
   ieee: u64,
   sources: ?[*]ReadingSource,
   capacity: usize,
@@ -265,7 +265,12 @@ export fn skep_event_get_payload(event: *const Event, len: *usize) [*]const u8 {
   return &event.payload;
 }
 
-export fn skep_get_devices(ctx: *Context, devices: ?[*]u64, capacity: usize, count: *usize) c_int {
+export fn skep_get_devices(
+  ctx: *const Context,
+  devices: ?[*]u64,
+  capacity: usize,
+  count: *usize,
+) c_int {
   const known = if (ctx.state) |*s| s.devices.items else &.{};
   count.* = known.len;
   if (capacity > 0) {
@@ -278,13 +283,16 @@ export fn skep_get_devices(ctx: *Context, devices: ?[*]u64, capacity: usize, cou
 }
 
 /// The device of IEEE address `ieee`, or a negative errno value.
-fn deviceOf(ctx: *Context, ieee: u64) union(enum) { device: *State.Device, err: c_int } {
+fn deviceOf(ctx: *const Context, ieee: u64) union(enum) {
+  device: *const State.Device,
+  err: c_int,
+} {
   const s = if (ctx.state) |*s| s else return .{ .err = err(.NODEV) };
   return .{ .device = s.device(ieee) orelse return .{ .err = err(.NODEV) } };
 }
 
 export fn skep_device_get_node(
-  ctx: *Context,
+  ctx: *const Context,
   ieee: u64,
   node_type: *c_int,
   manufacturer_code: *u16,
@@ -301,7 +309,7 @@ export fn skep_device_get_node(
   return 0;
 }
 
-export fn skep_device_get_short_address(ctx: *Context, ieee: u64, address: *u16) c_int {
+export fn skep_device_get_short_address(ctx: *const Context, ieee: u64, address: *u16) c_int {
   const d = switch (deviceOf(ctx, ieee)) {
     .device => |d| d,
     .err => |e| return e,
@@ -323,14 +331,19 @@ fn copyText(text: ?[]const u8, buf: ?[*]u8, size: usize) c_int {
   return @intCast(t.len);
 }
 
-export fn skep_device_get_manufacturer(ctx: *Context, ieee: u64, buf: ?[*]u8, size: usize) c_int {
+export fn skep_device_get_manufacturer(
+  ctx: *const Context,
+  ieee: u64,
+  buf: ?[*]u8,
+  size: usize,
+) c_int {
   return switch (deviceOf(ctx, ieee)) {
     .device => |d| copyText(d.manufacturer, buf, size),
     .err => |e| e,
   };
 }
 
-export fn skep_device_get_model(ctx: *Context, ieee: u64, buf: ?[*]u8, size: usize) c_int {
+export fn skep_device_get_model(ctx: *const Context, ieee: u64, buf: ?[*]u8, size: usize) c_int {
   return switch (deviceOf(ctx, ieee)) {
     .device => |d| copyText(d.model, buf, size),
     .err => |e| e,
@@ -346,7 +359,7 @@ fn interviewed(d: *const State.Device) bool {
 }
 
 export fn skep_device_get_endpoints(
-  ctx: *Context,
+  ctx: *const Context,
   ieee: u64,
   endpoints: ?[*]u8,
   capacity: usize,
@@ -368,7 +381,7 @@ export fn skep_device_get_endpoints(
 }
 
 export fn skep_device_get_endpoint(
-  ctx: *Context,
+  ctx: *const Context,
   ieee: u64,
   endpoint: u8,
   profile: *u16,
@@ -386,7 +399,7 @@ export fn skep_device_get_endpoint(
 }
 
 export fn skep_device_get_clusters(
-  ctx: *Context,
+  ctx: *const Context,
   ieee: u64,
   endpoint: u8,
   side: c_int,
@@ -413,7 +426,7 @@ export fn skep_device_get_clusters(
   return 0;
 }
 
-export fn skep_device_get_setup(ctx: *Context, ieee: u64, setup_state: *c_int) c_int {
+export fn skep_device_get_setup(ctx: *const Context, ieee: u64, setup_state: *c_int) c_int {
   const d = switch (deviceOf(ctx, ieee)) {
     .device => |d| d,
     .err => |e| return e,
@@ -563,7 +576,7 @@ fn limitsOf(d: *const State.Device, definition: *const readings.Definition) ?[2]
 }
 
 const SettingEndpoint = struct {
-  device: *State.Device,
+  device: *const State.Device,
   endpoint: *const State.Endpoint,
 };
 
@@ -630,7 +643,12 @@ export fn skep_cancel(ctx: *Context, request: u32) c_int {
   return ctx.cancel(request);
 }
 
-export fn skep_get_network(ctx: *Context, channel: *u8, pan_id: *u16, extended_pan_id: *u64) c_int {
+export fn skep_get_network(
+  ctx: *const Context,
+  channel: *u8,
+  pan_id: *u16,
+  extended_pan_id: *u64,
+) c_int {
   const network = ctx.network orelse return err(.NETDOWN);
   channel.* = network.channel;
   pan_id.* = network.pan_id;

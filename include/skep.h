@@ -639,7 +639,7 @@ const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
  * Errors: -ENOBUFS, -ENODATA (no network yet: nothing worth saving),
  * -EINVAL (buf NULL with a size).
  */
-int skep_export_state(skep_ctx *ctx, uint8_t *buf, size_t size, size_t *len);
+int skep_export_state(const skep_ctx *ctx, uint8_t *buf, size_t size, size_t *len);
 
 /*
  * Read the security counters from the dongle, which advances them with
@@ -668,7 +668,7 @@ int skep_import_state(skep_ctx *ctx, const uint8_t *data, size_t len);
  *
  * Errors: -ENETDOWN (network not up).
  */
-int skep_get_network(skep_ctx *ctx, uint8_t *channel, uint16_t *pan_id, uint64_t *extended_pan_id);
+int skep_get_network(const skep_ctx *ctx, uint8_t *channel, uint16_t *pan_id, uint64_t *extended_pan_id);
 
 /*
  * Let new devices join for the given number of seconds (at most
@@ -708,7 +708,7 @@ int skep_permit_join(skep_ctx *ctx, unsigned seconds, uint32_t *request);
  * devices and the total number of devices in *count, so that a first call
  * with capacity 0 tells how much room is needed.
  */
-int skep_get_devices(skep_ctx *ctx, uint64_t *devices, size_t capacity, size_t *count);
+int skep_get_devices(const skep_ctx *ctx, uint64_t *devices, size_t capacity, size_t *count);
 
 enum skep_node_type {
   SKEP_NODE_COORDINATOR = 0,
@@ -723,7 +723,7 @@ enum skep_node_type {
  *
  * Errors: -ENODEV (unknown device), -EAGAIN (not interviewed yet).
  */
-int skep_device_get_node(skep_ctx *ctx, uint64_t device, enum skep_node_type *type,
+int skep_device_get_node(const skep_ctx *ctx, uint64_t device, enum skep_node_type *type,
                          uint16_t *manufacturer_code, int *rx_on_when_idle);
 
 /*
@@ -732,7 +732,7 @@ int skep_device_get_node(skep_ctx *ctx, uint64_t device, enum skep_node_type *ty
  * Errors: -ENODEV, -EAGAIN (not known yet: a device of an imported state
  * that has not been heard from).
  */
-int skep_device_get_short_address(skep_ctx *ctx, uint64_t device, uint16_t *address);
+int skep_device_get_short_address(const skep_ctx *ctx, uint64_t device, uint16_t *address);
 
 /*
  * Manufacturer name and model identifier from the device's Basic cluster,
@@ -741,8 +741,8 @@ int skep_device_get_short_address(skep_ctx *ctx, uint64_t device, uint16_t *addr
  *
  * Errors: -ENODEV, -EAGAIN (not interviewed yet).
  */
-int skep_device_get_manufacturer(skep_ctx *ctx, uint64_t device, char *buf, size_t size);
-int skep_device_get_model(skep_ctx *ctx, uint64_t device, char *buf, size_t size);
+int skep_device_get_manufacturer(const skep_ctx *ctx, uint64_t device, char *buf, size_t size);
+int skep_device_get_model(const skep_ctx *ctx, uint64_t device, char *buf, size_t size);
 
 /*
  * Endpoints of the device, then the input (server) or output (client)
@@ -752,7 +752,7 @@ int skep_device_get_model(skep_ctx *ctx, uint64_t device, char *buf, size_t size
  * Errors: -ENODEV, -EAGAIN (not interviewed yet), -ENOENT (no such
  * endpoint).
  */
-int skep_device_get_endpoints(skep_ctx *ctx, uint64_t device, uint8_t *endpoints, size_t capacity,
+int skep_device_get_endpoints(const skep_ctx *ctx, uint64_t device, uint8_t *endpoints, size_t capacity,
                               size_t *count);
 enum skep_cluster_side {
   SKEP_CLUSTER_INPUT = 0,
@@ -766,9 +766,9 @@ enum skep_cluster_side {
  * Errors: -ENODEV, -EAGAIN (not interviewed yet), -ENOENT (no such
  * endpoint).
  */
-int skep_device_get_endpoint(skep_ctx *ctx, uint64_t device, uint8_t endpoint, uint16_t *profile,
+int skep_device_get_endpoint(const skep_ctx *ctx, uint64_t device, uint8_t endpoint, uint16_t *profile,
                              uint16_t *device_type);
-int skep_device_get_clusters(skep_ctx *ctx, uint64_t device, uint8_t endpoint,
+int skep_device_get_clusters(const skep_ctx *ctx, uint64_t device, uint8_t endpoint,
                              enum skep_cluster_side side, uint16_t *clusters, size_t capacity,
                              size_t *count);
 
@@ -789,7 +789,7 @@ enum skep_setup {
  *
  * Errors: -ENODEV.
  */
-int skep_device_get_setup(skep_ctx *ctx, uint64_t device, enum skep_setup *setup);
+int skep_device_get_setup(const skep_ctx *ctx, uint64_t device, enum skep_setup *setup);
 
 /* An attribute of a device that libskep names as a reading. */
 struct skep_reading_source {
@@ -812,7 +812,7 @@ struct skep_reading_source {
  *
  * Errors: -ENODEV, -EAGAIN (not interviewed yet).
  */
-int skep_device_get_readings(skep_ctx *ctx, uint64_t device, struct skep_reading_source *sources,
+int skep_device_get_readings(const skep_ctx *ctx, uint64_t device, struct skep_reading_source *sources,
                              size_t capacity, size_t *count);
 
 /*
