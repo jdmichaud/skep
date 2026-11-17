@@ -36,3 +36,18 @@ test "the structs of skep.h are laid out as libskep's" {
   try expectSameLayout(readings.CSource, c.struct_skep_reading_source);
   try expectSameLayout(readings.CSetting, c.struct_skep_setting);
 }
+
+test "every function skep.h declares is exported" {
+  // Taking each one's address links it: a function the header declares and libskep does not
+  // export fails the build.
+  @setEvalBranchQuota(100_000);
+  comptime var count = 0;
+  inline for (@typeInfo(c).@"struct".decl_names) |name| {
+    if (comptime !std.mem.startsWith(u8, name, "skep_")) continue;
+    const Declared = @TypeOf(@field(c, name));
+    if (@typeInfo(Declared) != .@"fn") continue;
+    std.mem.doNotOptimizeAway(&@field(c, name));
+    count += 1;
+  }
+  try std.testing.expect(count > 50);
+}

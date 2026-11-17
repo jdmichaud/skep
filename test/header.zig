@@ -7,13 +7,13 @@ const build_options = @import("build_options");
 
 test "skep.h translates to Zig" {
   const functions = .{
-    "skep_version",         "skep_new",                      "skep_free",                     "skep_set_option",         "skep_get_serial_defaults",
-    "skep_start",           "skep_stop",                     "skep_link_lost",                "skep_input",              "skep_output",
-    "skep_output_done",     "skep_next_deadline",            "skep_advance",                  "skep_next_event",         "skep_event_free",
-    "skep_event_get_type",  "skep_event_get_network_origin", "skep_event_get_lines",          "skep_export_state",       "skep_refresh_state",
-    "skep_import_state",    "skep_get_network",              "skep_permit_join",              "skep_get_devices",        "skep_setup_device",
-    "skep_read_attributes", "skep_write_attributes",         "skep_configure_reporting",      "skep_bind",               "skep_unbind",
-    "skep_send_command",    "skep_cancel",                   "skep_event_get_argument_count", "skep_event_get_argument",
+    "skep_version",          "skep_new",                      "skep_free",               "skep_set_option",    "skep_get_serial_defaults",
+    "skep_start",            "skep_stop",                     "skep_link_lost",          "skep_input",         "skep_output",
+    "skep_output_done",      "skep_next_deadline",            "skep_advance",            "skep_next_event",    "skep_event_free",
+    "skep_event_get_type",   "skep_event_get_network_origin", "skep_export_state",       "skep_refresh_state", "skep_import_state",
+    "skep_get_network",      "skep_permit_join",              "skep_get_devices",        "skep_setup_device",  "skep_read_attributes",
+    "skep_write_attributes", "skep_configure_reporting",      "skep_bind",               "skep_unbind",        "skep_send_command",
+    "skep_cancel",           "skep_event_get_argument_count", "skep_event_get_argument",
   };
   inline for (functions) |name| {
     if (!@hasDecl(c, name)) @compileError("skep.h lost " ++ name);

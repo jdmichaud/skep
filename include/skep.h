@@ -364,14 +364,6 @@ enum skep_event_type {
    * would most likely reject the step again; skep_setup_device() does.
    */
   SKEP_EVENT_DEVICE_SETUP_FAILED = 12,
-  /*
-   * Set the serial control lines of the dongle as skep_event_get_lines()
-   * says, before the next skep_output(). Some dongles need them toggled to
-   * leave their bootloader. libskep holds its output back until the event
-   * has been taken. Applications without control lines (a dongle reached
-   * over TCP) ignore it.
-   */
-  SKEP_EVENT_SERIAL_LINES = 13,
 };
 
 /*
@@ -439,17 +431,6 @@ enum skep_network_origin {
   /* A new network: devices must be paired. */
   SKEP_NETWORK_FORMED = 3,
 };
-
-enum skep_serial_line {
-  SKEP_SERIAL_DTR = 1 << 0,
-  SKEP_SERIAL_RTS = 1 << 1,
-};
-
-/*
- * SKEP_EVENT_SERIAL_LINES: the lines to assert, a bitwise or of enum
- * skep_serial_line values. Lines not in it are deasserted.
- */
-unsigned skep_event_get_lines(const skep_event *event);
 
 /* SKEP_EVENT_STARTED: how the network was brought up. */
 enum skep_network_origin skep_event_get_network_origin(const skep_event *event);

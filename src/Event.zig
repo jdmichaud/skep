@@ -24,7 +24,6 @@ pub const Type = enum(c_int) {
   log = 10,
   state_changed = 11,
   device_setup_failed = 12,
-  serial_lines = 13,
 };
 
 /// `enum skep_network_origin`, 0 for events of other types.

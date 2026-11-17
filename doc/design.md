@@ -108,9 +108,10 @@ the daemon `skepd` and the command-line tool `skep`.
   prefixes and codes in the device tables, through a driver operation.
 - Drivers may need the serial control lines: some CC2652 dongles only
   leave their bootloader after a pulse on RTS (zigbee-herdsman's Z-Stack
-  driver sends one). As libskep does no I/O, it asks the caller with an
-  event (`SKEP_EVENT_SERIAL_LINES`) and holds its output back until the
-  event has been taken; timing between steps uses its deadlines.
+  driver sends one). As libskep does no I/O, it will ask the caller with
+  an event and hold its output back until the event has been taken;
+  timing between steps uses its deadlines. Not in skep.h until a driver
+  needs it: the `ezsp` driver does not.
 - Software flow control (XON/XOFF) is handled by libskep: the driver
   pauses its output on XOFF, so the caller opens the port in raw mode
   whatever the dongle uses. XON or XOFF arriving when the driver expects
