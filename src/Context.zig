@@ -528,6 +528,7 @@ pub fn exchangeEnded(ctx: *Context, e: *const exchange.Exchange, outcome: exchan
 
 /// Forgets a device that left on request: its exchanges go, and so does it.
 pub fn forgetDevice(ctx: *Context, ieee: u64) void {
+  ctx.exchanges.forget(ieee);
   // Its requests are ended as canceled; it has no other exchange left.
   while (ctx.exchanges.take(ieee, waitingFor)) |e| {
     if (e.purpose == .request) {

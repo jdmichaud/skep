@@ -147,13 +147,22 @@ fn profileOf(d: *const State.Device, endpoint: u8) u16 {
 /// them and their frames apart. Other modules change them through its functions only.
 pub const Queue = struct {
   list: std.ArrayList(Exchange) = .empty,
+  /// When devices were last heard from, and whether they stopped answering: what decides when
+  /// a frame can go to them. Not saved: a restart starts them unheard.
+  presence: std.AutoHashMapUnmanaged(u64, Presence) = .empty,
   next_id: u32 = 0,
   zdo_sequence: u8 = 0,
   zcl_sequence: u8 = 0,
   next_tag: u8 = 0,
 
   pub fn deinit(q: *Queue, gpa: std.mem.Allocator) void {
+    q.presence.deinit(gpa);
     q.list.deinit(gpa);
+  }
+
+  /// Forgets what it knows of a device that left for good.
+  pub fn forget(q: *Queue, device: u64) void {
+    _ = q.presence.remove(device);
   }
 
   /// The tag of a frame to send, which the driver gives back when it is done with it.
@@ -194,6 +203,14 @@ pub const Queue = struct {
   }
 };
 
+/// Whether a device is heard from.
+pub const Presence = struct {
+  /// When it was last heard from, on the context's clock.
+  heard_at: ?u64 = null,
+  /// It did not answer or pick up an exchange: nothing more goes to it until it is heard from.
+  silent: bool = false,
+};
+
 /// Queues an exchange for a device.
 pub fn add(ctx: *Context, exchange: Exchange) error{ OutOfMemory }!void {
   var e = exchange;
@@ -204,9 +221,11 @@ pub fn add(ctx: *Context, exchange: Exchange) error{ OutOfMemory }!void {
 
 /// Whether a device can be sent something now.
 fn canHear(ctx: *const Context, d: *const State.Device) bool {
-  if (d.nwk == null or d.silent) return false;
+  if (d.nwk == null) return false;
+  const presence = ctx.exchanges.presence.get(d.ieee) orelse Presence{};
+  if (presence.silent) return false;
   if (!d.sleepy()) return true;
-  const heard_at = d.heard_at orelse return false;
+  const heard_at = presence.heard_at orelse return false;
   return ctx.now < heard_at + awake_time;
 }
 
@@ -327,7 +346,13 @@ fn miss(ctx: *Context, i: usize, error_code: c_int) void {
     return;
   }
   const d = ctx.state.?.device(e.device) orelse return end(ctx, i, .{ .failed = error_code });
-  d.silent = true;
+  // Out of memory: not marked silent, and tried again.
+  if (ctx.exchanges.presence.getOrPut(ctx.gpa, d.ieee)) |entry| {
+    if (!entry.found_existing) {
+      entry.value_ptr.* = .{};
+    }
+    entry.value_ptr.silent = true;
+  } else |_| {}
   if (e.purpose == .request and !d.sleepy()) return end(ctx, i, .{ .failed = error_code });
   e.phase = .waiting;
   e.due = never;
@@ -402,9 +427,9 @@ pub fn reply(
 }
 
 /// A device was heard from: it is awake, and no longer silent.
-pub fn heard(ctx: *Context, d: *State.Device) void {
-  d.heard_at = ctx.now;
-  d.silent = false;
+pub fn heard(ctx: *Context, d: *const State.Device) void {
+  // Out of memory: counted unheard, and a sleepy device's exchanges wait for its next frame.
+  ctx.exchanges.presence.put(ctx.gpa, d.ieee, .{ .heard_at = ctx.now }) catch {};
 }
 
 /// Ends every exchange: requests with -ECANCELED, setups to be taken up again later.

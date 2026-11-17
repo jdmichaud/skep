@@ -41,11 +41,6 @@ pub const Device = struct {
   /// The colour temperatures a light shows, in mireds, as its Color Control cluster says.
   color_temperature_range: ?Range = null,
   progress: Progress = .{},
-  /// When it was last heard from, on the context's clock. Not saved.
-  heard_at: ?u64 = null,
-  /// It did not answer or pick up an exchange: nothing more goes to it until it is heard from.
-  /// Not saved.
-  silent: bool = false,
 
   pub fn deinit(d: *Device, gpa: std.mem.Allocator) void {
     freeEndpoints(gpa, d.endpoints);
@@ -55,7 +50,7 @@ pub const Device = struct {
     if (d.model) |m| {
       gpa.free(m);
     }
-    d.* = .{ .ieee = d.ieee, .nwk = d.nwk, .heard_at = d.heard_at };
+    d.* = .{ .ieee = d.ieee, .nwk = d.nwk };
   }
 
   /// Whether it sleeps, and only hears what it polls for. A device not interviewed yet is taken
