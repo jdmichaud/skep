@@ -466,6 +466,12 @@ pub const Endpoint = struct {
 };
 
 /// Parameters of `set_value`. `out` needs 2 bytes more than the value.
+/// set_radio_power: the transmit power, in dBm.
+pub fn setRadioPower(out: []u8, power: i8) []const u8 {
+  out[0] = @bitCast(power);
+  return out[0..1];
+}
+
 pub fn setValue(out: []u8, id: ValueId, value: []const u8) []const u8 {
   out[0] = @backingInt(id);
   out[1] = @intCast(value.len);

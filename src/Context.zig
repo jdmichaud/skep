@@ -95,6 +95,8 @@ pub const Options = struct {
   replace_network: bool = false,
   /// The port's, as the caller opened it; the driver's usual one if null.
   flow_control: ?driver_layer.FlowControl = null,
+  /// The radio's transmit power, in dBm; the dongle's own if null.
+  tx_power: ?i8 = null,
   channel: u8 = 15,
   pan_id: ?u16 = null,
   extended_pan_id: ?u64 = null,
@@ -160,6 +162,7 @@ pub fn setOption(ctx: *Context, name: []const u8, value: []const u8) c_int {
       value,
     ) orelse
       return err(.INVAL),
+    .@"tx-power" => o.tx_power = std.fmt.parseInt(i8, value, 10) catch return err(.INVAL),
     .channel => {
       const channel = std.fmt.parseInt(u8, value, 10) catch return err(.INVAL);
       if (channel < 11 or channel > 26) return err(.INVAL);
@@ -194,6 +197,7 @@ const OptionName = enum {
   @"frame-counter-margin",
   @"replace-network",
   @"flow-control",
+  @"tx-power",
   channel,
   @"pan-id",
   @"extended-pan-id",
@@ -227,7 +231,7 @@ pub fn start(ctx: *Context) c_int {
   if (ctx.status == .starting or ctx.status == .running) return err(.BUSY);
   ctx.driver = switch (name) {
     .sim => .{ .sim = ctx.sim_dongle },
-    else => .init(name, ctx.options.flow_control),
+    else => .init(name, ctx.options.flow_control, ctx.options.tx_power),
   };
   ctx.driver.?.start();
   ctx.status = .starting;

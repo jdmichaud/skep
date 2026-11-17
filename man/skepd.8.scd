@@ -6,7 +6,7 @@ skepd - run a Zigbee network
 
 # SYNOPSIS
 
-*skepd* *--device* _path_ [*--state* _path_] [*--socket* _path_] [*--driver* _name_] [*--log-level* _level_] [*--replace-network*] [*--baud* _rate_] [*--rtscts*]
+*skepd* *--device* _path_ [*--state* _path_] [*--socket* _path_] [*--driver* _name_] [*--log-level* _level_] [*--replace-network*] [*--baud* _rate_] [*--rtscts*] [*--tx-power* _dBm_]
 
 *skepd* *--help*
 
@@ -64,6 +64,11 @@ back. It runs in the foreground, and logs to standard error.
 	The serial speed and hardware flow control, if the dongle's firmware does
 	not use the driver's usual ones (115200 bauds, software flow control for
 	ezsp).
+
+*--tx-power* _dBm_
+	The radio's transmit power, which the dongle is set to at every start,
+	within what it and the local regulations allow. By default, the dongle
+	keeps its own, and forms a network at 5 dBm.
 
 *--help*
 	Print how to use skepd, and exit.

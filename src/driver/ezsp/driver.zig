@@ -206,6 +206,9 @@ pub const Callback = struct {
 /// log, and what it means.
 const events_per_frame = 4;
 
+/// The transmit power of a network formed, when none is asked for, in dBm: zigbee-herdsman's.
+pub const default_radio_power = 5;
+
 pub const Driver = struct {
   startup: startup_layer.Startup,
   step: Step = .idle,
@@ -231,6 +234,9 @@ pub const Driver = struct {
   /// Restarting after a saved network was put back: the network the NCP then resumes is reported
   /// as `formed`.
   restarting: bool = false,
+  /// The transmit power to set at every start, in dBm; the dongle's own if null, and
+  /// `default_radio_power` for a network formed.
+  radio_power: ?i8 = null,
   /// What reading the network is for, which says what to report once it is read.
   reading_for: enum { ready, formed, refreshed } = .ready,
   /// The network being read.
@@ -256,6 +262,7 @@ pub const Driver = struct {
     exporting_network_key,
     reading_trust_center_key,
     reading_ieee,
+    setting_radio_power,
     /// Ready: running the network the dongle holds, if any.
     running,
     // `permitJoin`:
@@ -286,7 +293,8 @@ pub const Driver = struct {
 
   pub fn start(d: *Driver) void {
     const options = d.startup.link.options;
-    d.* = .{ .startup = .init(options), .step = .starting };
+    const radio_power = d.radio_power;
+    d.* = .{ .startup = .init(options), .step = .starting, .radio_power = radio_power };
     d.startup.start();
   }
 
@@ -792,6 +800,23 @@ pub const Driver = struct {
           const network = d.ready.network orelse return d.fail(.restored_network_lost);
           d.step = .running;
           return d.post(.{ .formed = network });
+        }
+        // A network the dongle runs, at the power asked for.
+        if (d.radio_power) |power| {
+          if (d.ready.network != null) {
+            d.step = .setting_radio_power;
+            var out: [1]u8 = undefined;
+            return d.send(.set_radio_power, command.setRadioPower(&out, power), now);
+          }
+        }
+        d.step = .running;
+        d.post(.{ .ready = d.ready });
+      },
+      .setting_radio_power => {
+        const status = d.statusOf(received, .set_radio_power) orelse return;
+        // The dongle keeps its own power: worth a warning, not a failure.
+        if (!status.is(.ok)) {
+          d.post(.{ .command_refused = .{ .command = .set_radio_power, .status = status } });
         }
         d.step = .running;
         d.post(.{ .ready = d.ready });
@@ -1354,9 +1379,16 @@ fn answer(ncp: *Ncp, id: frame.FrameId, status: u8) !void {
 /// Takes the driver to `ready`, with or without a network on the dongle.
 fn readyNcp(driver: *Driver, network: bool) !Ncp {
   var ncp = try started(driver);
-  try configured(&ncp, &.{});
+  try readyFrom(driver, &ncp, network);
+  return ncp;
+}
+
+/// Takes a driver whose startup is done to `ready`, with or without a network on the dongle.
+fn readyFrom(driver: *Driver, ncp_pointer: *Ncp, network: bool) !void {
+  var ncp = ncp_pointer;
+  try configured(ncp, &.{});
   if (network) {
-    try answer(&ncp, .network_init, 0x00);
+    try answer(ncp, .network_init, 0x00);
     ncp.respond(&hex("009001190090"));
     const sent = ncp.take() orelse return error.TestExpectedCommand;
     ncp.respond(
@@ -1374,14 +1406,24 @@ fn readyNcp(driver: *Driver, network: bool) !Ncp {
             "00f8ff07",
         ),
     );
-    try keysRead(&ncp, 70000);
+    try keysRead(ncp, 70000);
   } else {
-    try answer(&ncp, .network_init, 0x93);
+    try answer(ncp, .network_init, 0x93);
   }
   const sent = ncp.take() orelse return error.TestExpectedCommand;
   ncp.respond(&[_]u8{ sent[0], 0x80, 0x01, 0x26, 0x00 } ++ hex("1de149feffb6c67c"));
+  if (network) {
+    if (driver.radio_power) |power| {
+      const set = ncp.take() orelse return error.TestExpectedCommand;
+      try testing.expectEqual(
+        @backingInt(frame.FrameId.set_radio_power),
+        std.mem.readInt(u16, set[3..5], .little),
+      );
+      try testing.expectEqual(@as(u8, @bitCast(power)), set[5]);
+      ncp.respond(&.{ set[0], 0x80, 0x01, 0x99, 0x00, 0x00 });
+    }
+  }
   try testing.expect(skipCallbacks(driver).? == .ready);
-  return ncp;
 }
 
 const form_parameters: FormParameters = .{
@@ -1740,6 +1782,18 @@ test "messages go out, and come in" {
   const refused = skipCallbacks(&driver).?.send_done;
   try testing.expectEqual(10, refused.tag);
   try testing.expectEqual(0x70, refused.refused.?.status.value);
+}
+
+test "the transmit power asked for is set at every start" {
+  var driver: Driver = .init(.{ .software_flow_control = true });
+  driver.radio_power = 8;
+  var ncp: Ncp = .{ .host = &driver };
+  try ncp.connect();
+  try handshake(&ncp, 8);
+  try readyFrom(&driver, &ncp, true);
+  // Kept by a start again.
+  driver.start();
+  try testing.expectEqual(8, driver.radio_power);
 }
 
 test "a refused security state fails the driver" {

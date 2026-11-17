@@ -72,6 +72,8 @@ publishes the section of each released version as its release notes.
   and forgotten, or left by itself.
 - skep.h gives libskep's limits: SKEP_MAX_PERMIT_JOIN, SKEP_MAX_ATTRIBUTES,
   SKEP_MAX_REQUESTS and SKEP_MAX_TRANSITION.
+- The `tx-power` option sets the radio's transmit power at every start;
+  skepd takes `--tx-power`.
 - The `flow-control` option tells libskep how the caller opened the port,
   so that it warns of XON or XOFF on a port using RTS/CTS; skepd sets it
   from `--rtscts`.

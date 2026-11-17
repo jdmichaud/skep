@@ -166,10 +166,11 @@ pub const Driver = union(Name) {
   ezsp: ezsp_adapter.Adapter,
   sim: sim.Driver,
 
-  /// A driver, for a port opened with `flow_control`, or the driver's usual one if null.
-  pub fn init(name: Name, flow_control: ?FlowControl) Driver {
+  /// A driver, for a port opened with `flow_control`, or the driver's usual one if null, with
+  /// the radio's transmit power in dBm, or the dongle's own if null.
+  pub fn init(name: Name, flow_control: ?FlowControl, tx_power: ?i8) Driver {
     return switch (name) {
-      .ezsp => .{ .ezsp = .init(flow_control) },
+      .ezsp => .{ .ezsp = .init(flow_control, tx_power) },
       .sim => .{ .sim = .{} },
     };
   }

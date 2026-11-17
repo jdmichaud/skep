@@ -711,6 +711,9 @@ test "the port's flow control reaches the driver" {
   const ctx = try testContext(&testing.allocator);
   defer skep_free(ctx);
   try testing.expectEqual(err(.INVAL), skep_set_option(ctx, "flow-control", "xon"));
+  try testing.expectEqual(0, skep_set_option(ctx, "tx-power", "-3"));
+  try testing.expectEqual(-3, ctx.options.tx_power.?);
+  try testing.expectEqual(err(.INVAL), skep_set_option(ctx, "tx-power", "200"));
 }
 
 test "the sim driver resumes the network of the simulated dongle" {

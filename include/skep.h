@@ -162,6 +162,10 @@ void skep_free(skep_ctx *ctx);
  *                    disagree, which libskep logs as a warning. Default:
  *                    the driver's usual one, as skep_get_serial_defaults()
  *                    gives it.
+ *   tx-power         The radio's transmit power, in dBm, which the dongle
+ *                    is set to at every start; within what the dongle and
+ *                    the local regulations allow. Default: the dongle's
+ *                    own, and 5 dBm for a network formed.
  *
  * Used only when a new network is formed (no imported state, and no
  * network on the dongle or replace-network set):

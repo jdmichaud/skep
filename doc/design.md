@@ -118,6 +118,11 @@ the daemon `skepd` and the command-line tool `skep`.
   an event and hold its output back until the event has been taken;
   timing between steps uses its deadlines. Not in skep.h until a driver
   needs it: the `ezsp` driver does not.
+- The radio's transmit power is the application's to choose, within
+  what the dongle and the local regulations allow (`tx-power`, which
+  skepd sets from `--tx-power`): the driver sets it at every start.
+  Without it, a dongle keeps its own, and forms a network at
+  zigbee-herdsman's 5 dBm.
 - Software flow control (XON/XOFF) is handled by libskep: the driver
   pauses its output on XOFF, so the caller opens the port in raw mode
   whatever the dongle uses. The caller says how it opened the port (the

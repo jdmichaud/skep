@@ -22,13 +22,16 @@ pub const serial_defaults: driver.SerialDefaults = .{
 pub const Adapter = struct {
   driver: ezsp.driver.Driver,
 
-  /// For a port opened with `flow_control`, or the usual one if null.
-  pub fn init(flow_control: ?driver.FlowControl) Adapter {
-    return .{
+  /// For a port opened with `flow_control`, or the usual one if null, and a dongle that
+  /// transmits at `tx_power` dBm, or at its own power if null.
+  pub fn init(flow_control: ?driver.FlowControl, tx_power: ?i8) Adapter {
+    var a: Adapter = .{
       .driver = .init(.{
         .software_flow_control = (flow_control orelse serial_defaults.flow_control) == .software,
       }),
     };
+    a.driver.radio_power = tx_power;
+    return a;
   }
 
   pub fn start(a: *Adapter) void {
@@ -41,8 +44,7 @@ pub const Adapter = struct {
       .pan_id = f.network.pan_id,
       .extended_pan_id = f.network.extended_pan_id,
       .update_id = f.network.update_id,
-      // zigbee-herdsman's default.
-      .tx_power = 5,
+      .tx_power = a.driver.radio_power orelse ezsp.driver.default_radio_power,
       .network_key = f.security.network_key,
       .network_key_sequence_number = f.security.network_key_sequence_number,
       .trust_center_link_key = f.security.trust_center_link_key,
