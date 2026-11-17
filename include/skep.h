@@ -162,6 +162,12 @@ void skep_free(skep_ctx *ctx);
  *                    disagree, which libskep logs as a warning. Default:
  *                    the driver's usual one, as skep_get_serial_defaults()
  *                    gives it.
+ *   setup            "full": libskep interviews devices that join, then
+ *                    binds the clusters and configures the reporting that
+ *                    its device tables give, so that they report.
+ *                    "interview": the interview only; the application
+ *                    binds and configures what it wants, with the requests
+ *                    below. Default: "full".
  *   tx-power         The radio's transmit power, in dBm, which the dongle
  *                    is set to at every start; within what the dongle and
  *                    the local regulations allow. Default: the dongle's

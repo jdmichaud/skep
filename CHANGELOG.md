@@ -74,6 +74,8 @@ publishes the section of each released version as its release notes.
   SKEP_MAX_REQUESTS and SKEP_MAX_TRANSITION.
 - A device's firmware update query is reported as a command, though libskep
   still answers it, with no image.
+- The `setup` option, and skepd's `--setup`, let the application set devices
+  up itself: `interview` stops after the interview.
 - The `tx-power` option sets the radio's transmit power at every start;
   skepd takes `--tx-power`.
 - The `flow-control` option tells libskep how the caller opened the port,

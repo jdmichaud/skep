@@ -23,7 +23,7 @@ const Io = std.Io;
 const usage =
   \\usage: skepd --device <path> [--state <path>] [--socket <path>] [--driver <name>]
   \\             [--log-level <level>] [--replace-network] [--baud <rate>] [--rtscts]
-  \\             [--tx-power <dBm>]
+  \\             [--tx-power <dBm>] [--setup <how>]
   \\
   \\Runs the Zigbee network of the dongle on <path>. Stops cleanly on SIGTERM or SIGINT.
   \\
@@ -43,6 +43,8 @@ const usage =
   \\  --rtscts            hardware flow control, if not the driver's usual one
   \\  --tx-power <dBm>    the radio's transmit power, set at every start; the dongle's own
   \\                      by default
+  \\  --setup <how>       full (default): devices that join are interviewed, bound and set to
+  \\                      report; interview: interviewed only, clients do the rest
   \\  --help              print this, and exit
   \\
   \\skepd(8) tells more.
@@ -67,6 +69,7 @@ const Options = struct {
   baudrate: ?u32 = null,
   rtscts: ?bool = null,
   tx_power: ?[:0]const u8 = null,
+  setup: ?[:0]const u8 = null,
 };
 
 fn parseOptions(args: []const [:0]const u8) ?Options {
@@ -97,6 +100,8 @@ fn parseOptions(args: []const [:0]const u8) ?Options {
       options.log_level = value;
     } else if (std.mem.eql(u8, arg, "--tx-power")) {
       options.tx_power = value;
+    } else if (std.mem.eql(u8, arg, "--setup")) {
+      options.setup = value;
     } else if (std.mem.eql(u8, arg, "--baud")) {
       options.baudrate = std.fmt.parseInt(u32, value, 10) catch return null;
     } else {
@@ -650,6 +655,12 @@ pub fn main(init: std.process.Init) !u8 {
   if (options.tx_power) |power| {
     if (c.skep_set_option(ctx, "tx-power", power.ptr) != 0) {
       try log.print("skepd: --tx-power {s}: dBm, from -128 to 127\n", .{ power });
+      return 2;
+    }
+  }
+  if (options.setup) |how| {
+    if (c.skep_set_option(ctx, "setup", how.ptr) != 0) {
+      try log.print("skepd: --setup {s}: full or interview\n", .{ how });
       return 2;
     }
   }

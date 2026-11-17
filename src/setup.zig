@@ -104,7 +104,7 @@ fn queue(ctx: *Context, d: *State.Device) error{ OutOfMemory }!void {
       break :blk .{ built, false };
     },
     .setup => blk: {
-      const steps = entryOf(d).steps;
+      const steps = stepsOf(ctx, d);
       if (step >= steps.len) return moveTo(ctx, d, .{ .stage = .ready });
       switch (steps[step]) {
         .bind => |b| {
@@ -169,6 +169,14 @@ fn basicEndpoint(d: *const State.Device) u8 {
 }
 
 /// The device's entry; one without steps for a model libskep does not know.
+/// The steps of a device's setup: its entry's, unless the application sets devices up itself.
+fn stepsOf(ctx: *const Context, d: *const State.Device) []const devices.Step {
+  return switch (ctx.options.setup) {
+    .full => entryOf(d).steps,
+    .interview => &.{},
+  };
+}
+
 pub fn entryOf(d: *const State.Device) *const devices.Entry {
   const none: devices.Entry = .{ .model = "", .steps = &.{} };
   return devices.find(d.model orelse return &none) orelse &none;
@@ -293,7 +301,7 @@ fn zclAnswer(ctx: *Context, d: *State.Device, frame: zcl.Frame) void {
       moveTo(ctx, d, .{ .stage = .setup });
     },
     .setup => {
-      const steps = entryOf(d).steps;
+      const steps = stepsOf(ctx, d);
       const step = d.progress.step;
       if (step >= steps.len or steps[step] != .report) return;
       const status = if (command == zcl.Command.configure_reporting_response)
@@ -314,7 +322,7 @@ fn zclAnswer(ctx: *Context, d: *State.Device, frame: zcl.Frame) void {
 /// Moves a device on, which is worth saving, and reports it ready when it is.
 fn moveTo(ctx: *Context, d: *State.Device, progress: State.Progress) void {
   var p = progress;
-  if (p.stage == .setup and p.step >= entryOf(d).steps.len) {
+  if (p.stage == .setup and p.step >= stepsOf(ctx, d).len) {
     p = .{ .stage = .ready };
   }
   d.progress = p;

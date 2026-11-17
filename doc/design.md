@@ -381,6 +381,14 @@ The API is in [include/skep.h](../include/skep.h).
   - Each device records the version of the device table entry it was set
     up with. When the entry changes, for instance with a new libskep that
     corrects a reporting interval, the setup is redone. Not done yet.
+  - The entries' steps are a choice as much as knowledge: how often a
+    sensor reports spends its battery and the network's airtime. So the
+    `setup` option leaves them to the application: `full`, the default,
+    takes them; `interview` stops after the interview, and the
+    application binds and configures reporting itself with requests. The
+    entries' scale corrections apply either way. Should a device need a
+    step merely to work (Tuya's magic packet, a Lumi manufacturer code),
+    such steps become quirks, taken whatever the option says.
 - Devices come and go. A device that rejoins (it lost its parent, or its
   network address changed) keeps its setup; one that joins afresh after a
   factory reset is set up again, as it lost its bindings and reporting.

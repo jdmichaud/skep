@@ -1026,6 +1026,22 @@ fn simBulb() sim.Device {
   };
 }
 
+test "with setup interview, a device is interviewed and set up no further" {
+  var devices = [_]sim.Device{ simBulb() };
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  ctx.sim_dongle.devices = &devices;
+  try testing.expectEqual(0, skep_set_option(ctx, "setup", "interview"));
+  try testing.expectEqual(err(.INVAL), skep_set_option(ctx, "setup", "some"));
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  _ = try startedOrigin(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = bulb_ieee, .nwk = 0x6442, .kind = .joined });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+  try testing.expectEqualStrings("3RCB02070Z", ctx.state.?.device(bulb_ieee).?.model.?);
+  try testing.expectEqual(0, devices[0].binds);
+  try testing.expectEqual(0, devices[0].configurations);
+}
+
 test "a bulb is bound and configured to report its state" {
   var devices = [_]sim.Device{ simBulb() };
   const ctx = try simContext(&testing.allocator, &devices);

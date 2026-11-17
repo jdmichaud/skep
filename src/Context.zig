@@ -88,6 +88,11 @@ const Op = struct {
 /// One join window and one refresh at a time.
 const max_ops = 2;
 
+/// How far libskep sets devices up: the interview, then the bindings and reporting their entries
+/// in devices.zig ask for; or the interview only, the application binding and configuring what it
+/// wants, and spending the devices' battery and airtime as it chooses.
+pub const Setup = enum { full, interview };
+
 pub const Options = struct {
   driver: ?driver_layer.Name = null,
   log_level: driver_layer.Level = .warning,
@@ -97,6 +102,8 @@ pub const Options = struct {
   flow_control: ?driver_layer.FlowControl = null,
   /// The radio's transmit power, in dBm; the dongle's own if null.
   tx_power: ?i8 = null,
+  /// How far libskep sets devices up by itself.
+  setup: Setup = .full,
   channel: u8 = 15,
   pan_id: ?u16 = null,
   extended_pan_id: ?u64 = null,
@@ -163,6 +170,7 @@ pub fn setOption(ctx: *Context, name: []const u8, value: []const u8) c_int {
     ) orelse
       return err(.INVAL),
     .@"tx-power" => o.tx_power = std.fmt.parseInt(i8, value, 10) catch return err(.INVAL),
+    .setup => o.setup = std.meta.stringToEnum(Setup, value) orelse return err(.INVAL),
     .channel => {
       const channel = std.fmt.parseInt(u8, value, 10) catch return err(.INVAL);
       if (channel < 11 or channel > 26) return err(.INVAL);
@@ -198,6 +206,7 @@ const OptionName = enum {
   @"replace-network",
   @"flow-control",
   @"tx-power",
+  setup,
   channel,
   @"pan-id",
   @"extended-pan-id",
