@@ -572,11 +572,14 @@ fn settingErr(e: readings.SettingError) c_int {
   };
 }
 
-const color_control = 0x0300;
+const color_control = zcl.Cluster.color_control;
 
 /// The device's own limits of a reading's attribute: a light's range of colour temperatures.
 fn limitsOf(d: *const State.Device, definition: *const readings.Definition) ?[2]u64 {
-  if (definition.cluster != color_control or definition.attribute != 0x0007) return null;
+  if (definition.cluster != color_control or
+    definition.attribute != zcl.AttributeId.color_control.color_temperature_mireds) {
+    return null;
+  }
   const r = d.color_temperature_range orelse return null;
   return .{ r.min, r.max };
 }

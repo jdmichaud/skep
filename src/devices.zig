@@ -47,17 +47,8 @@ pub const Entry = struct {
   readings: []const readings.Definition = &.{},
 };
 
-pub const Cluster = struct {
-  pub const basic: u16 = 0x0000;
-  pub const power_configuration: u16 = 0x0001;
-  pub const on_off: u16 = 0x0006;
-  pub const level_control: u16 = 0x0008;
-  pub const color_control: u16 = 0x0300;
-  pub const temperature: u16 = 0x0402;
-  pub const humidity: u16 = 0x0405;
-  pub const metering: u16 = 0x0702;
-  pub const electrical_measurement: u16 = 0x0b04;
-};
+pub const Cluster = zcl.Cluster;
+const Attribute = zcl.AttributeId;
 
 /// Seconds: the longest interval zigbee-herdsman-converters asks for.
 const max_interval = 65000;
@@ -86,13 +77,21 @@ pub const entries = [_]Entry{
     .steps = &.{
       .{ .bind = .{ .endpoint = 1, .cluster = Cluster.temperature } },
       // MeasuredValue, in hundredths of a degree: on a change of 1 °C.
-      report(1, Cluster.temperature, 0x0000, zcl.Type.int16, 10, hour, 100),
+      report(1, Cluster.temperature, Attribute.measured_value, zcl.Type.int16, 10, hour, 100),
       .{ .bind = .{ .endpoint = 1, .cluster = Cluster.humidity } },
       // MeasuredValue, in hundredths of a percent: on a change of 1 %.
-      report(1, Cluster.humidity, 0x0000, zcl.Type.uint16, 10, hour, 100),
+      report(1, Cluster.humidity, Attribute.measured_value, zcl.Type.uint16, 10, hour, 100),
       .{ .bind = .{ .endpoint = 1, .cluster = Cluster.power_configuration } },
       // BatteryPercentageRemaining, in halves of a percent: on a change of 5 %.
-      report(1, Cluster.power_configuration, 0x0021, zcl.Type.uint8, hour, max_interval, 10),
+      report(
+        1,
+        Cluster.power_configuration,
+        Attribute.power_configuration.battery_percentage_remaining,
+        zcl.Type.uint8,
+        hour,
+        max_interval,
+        10,
+      ),
     },
   },
   // ThirdReality Smart Color Bulb ZL4, which zigbee-herdsman-converters handles as the ZL1 and
@@ -106,16 +105,64 @@ pub const entries = [_]Entry{
       .{ .bind = .{ .endpoint = 1, .cluster = Cluster.level_control } },
       .{ .bind = .{ .endpoint = 1, .cluster = Cluster.color_control } },
       // OnOff, whenever it changes.
-      report(1, Cluster.on_off, 0x0000, zcl.Type.boolean, 0, max_interval, 0),
+      report(1, Cluster.on_off, Attribute.on_off.on_off, zcl.Type.boolean, 0, max_interval, 0),
       // CurrentLevel: at most every 5 s.
-      report(1, Cluster.level_control, 0x0000, zcl.Type.uint8, 5, max_interval, 1),
+      report(
+        1,
+        Cluster.level_control,
+        Attribute.level_control.current_level,
+        zcl.Type.uint8,
+        5,
+        max_interval,
+        1,
+      ),
       // ColorTemperatureMireds, CurrentX, CurrentY, CurrentHue and CurrentSaturation: at most
       // every 10 s.
-      report(1, Cluster.color_control, 0x0007, zcl.Type.uint16, 10, max_interval, 1),
-      report(1, Cluster.color_control, 0x0003, zcl.Type.uint16, 10, max_interval, 1),
-      report(1, Cluster.color_control, 0x0004, zcl.Type.uint16, 10, max_interval, 1),
-      report(1, Cluster.color_control, 0x0000, zcl.Type.uint8, 10, max_interval, 1),
-      report(1, Cluster.color_control, 0x0001, zcl.Type.uint8, 10, max_interval, 1),
+      report(
+        1,
+        Cluster.color_control,
+        Attribute.color_control.color_temperature_mireds,
+        zcl.Type.uint16,
+        10,
+        max_interval,
+        1,
+      ),
+      report(
+        1,
+        Cluster.color_control,
+        Attribute.color_control.current_x,
+        zcl.Type.uint16,
+        10,
+        max_interval,
+        1,
+      ),
+      report(
+        1,
+        Cluster.color_control,
+        Attribute.color_control.current_y,
+        zcl.Type.uint16,
+        10,
+        max_interval,
+        1,
+      ),
+      report(
+        1,
+        Cluster.color_control,
+        Attribute.color_control.current_hue,
+        zcl.Type.uint8,
+        10,
+        max_interval,
+        1,
+      ),
+      report(
+        1,
+        Cluster.color_control,
+        Attribute.color_control.current_saturation,
+        zcl.Type.uint8,
+        10,
+        max_interval,
+        1,
+      ),
     },
   },
   // ThirdReality Smart Plug E2.
@@ -126,54 +173,78 @@ pub const entries = [_]Entry{
       .{ .bind = .{ .endpoint = 1, .cluster = Cluster.electrical_measurement } },
       .{ .bind = .{ .endpoint = 1, .cluster = Cluster.metering } },
       // OnOff, whenever it changes.
-      report(1, Cluster.on_off, 0x0000, zcl.Type.boolean, 0, hour, 0),
+      report(1, Cluster.on_off, Attribute.on_off.on_off, zcl.Type.boolean, 0, hour, 0),
       // ActivePower, in tenths of a watt: on a change of 1 W.
-      report(1, Cluster.electrical_measurement, 0x050b, zcl.Type.int16, 5, hour, 10),
+      report(
+        1,
+        Cluster.electrical_measurement,
+        Attribute.electrical_measurement.active_power,
+        zcl.Type.int16,
+        5,
+        hour,
+        10,
+      ),
       // RMSCurrent, in milliamperes: on a change of 0.05 A.
-      report(1, Cluster.electrical_measurement, 0x0508, zcl.Type.uint16, 5, hour, 50),
+      report(
+        1,
+        Cluster.electrical_measurement,
+        Attribute.electrical_measurement.rms_current,
+        zcl.Type.uint16,
+        5,
+        hour,
+        50,
+      ),
       // RMSVoltage, in tenths of a volt: on a change of 0.5 V.
-      report(1, Cluster.electrical_measurement, 0x0505, zcl.Type.uint16, 5, hour, 5),
+      report(
+        1,
+        Cluster.electrical_measurement,
+        Attribute.electrical_measurement.rms_voltage,
+        zcl.Type.uint16,
+        5,
+        hour,
+        5,
+      ),
     },
     // Its multipliers and divisors are not to be trusted: zigbee-herdsman-converters fixes them.
     .readings = &.{
       .{
         .cluster = Cluster.electrical_measurement,
-        .attribute = 0x050b,
+        .attribute = Attribute.electrical_measurement.active_power,
         .name = "power",
         .unit = "W",
         .divisor = 10,
       },
       .{
         .cluster = Cluster.metering,
-        .attribute = 0x0000,
+        .attribute = Attribute.metering.current_summation_delivered,
         .name = "energy",
         .unit = "kWh",
         .divisor = 3600000,
       },
       .{
         .cluster = Cluster.electrical_measurement,
-        .attribute = 0x0505,
+        .attribute = Attribute.electrical_measurement.rms_voltage,
         .name = "voltage",
         .unit = "V",
         .divisor = 10,
       },
       .{
         .cluster = Cluster.electrical_measurement,
-        .attribute = 0x0508,
+        .attribute = Attribute.electrical_measurement.rms_current,
         .name = "current",
         .unit = "A",
         .divisor = 1000,
       },
       .{
         .cluster = Cluster.electrical_measurement,
-        .attribute = 0x0510,
+        .attribute = Attribute.electrical_measurement.power_factor,
         .name = "power_factor",
         .unit = "",
         .divisor = 100,
       },
       .{
         .cluster = Cluster.electrical_measurement,
-        .attribute = 0x0300,
+        .attribute = Attribute.electrical_measurement.ac_frequency,
         .name = "frequency",
         .unit = "Hz",
       },

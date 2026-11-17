@@ -119,3 +119,23 @@ test "skep.h's enums are libskep's" {
     );
   }
 }
+
+test "skep/zcl.h's clusters are libskep's" {
+  inline for (.{
+    .{ "basic", "BASIC" },
+    .{ "power_configuration", "POWER_CONFIG" },
+    .{ "identify", "IDENTIFY" },
+    .{ "on_off", "ON_OFF" },
+    .{ "level_control", "LEVEL" },
+    .{ "color_control", "COLOR" },
+    .{ "temperature", "TEMPERATURE" },
+    .{ "humidity", "HUMIDITY" },
+    .{ "metering", "METERING" },
+    .{ "electrical_measurement", "ELECTRICAL" },
+  }) |pair| {
+    try std.testing.expectEqual(
+      @as(c_int, @field(c, "SKEP_CLUSTER_" ++ pair[1])),
+      @as(c_int, @field(zcl.Cluster, pair[0])),
+    );
+  }
+}

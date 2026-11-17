@@ -315,6 +315,84 @@ pub const Frame = struct {
 };
 
 /// Global commands.
+/// The clusters libskep knows, as skep/zcl.h names those it has: abi_test.zig compares them.
+pub const Cluster = struct {
+  pub const basic: u16 = 0x0000;
+  pub const power_configuration: u16 = 0x0001;
+  pub const identify: u16 = 0x0003;
+  pub const on_off: u16 = 0x0006;
+  pub const level_control: u16 = 0x0008;
+  pub const ota_upgrade: u16 = 0x0019;
+  pub const color_control: u16 = 0x0300;
+  pub const temperature: u16 = 0x0402;
+  pub const pressure: u16 = 0x0403;
+  pub const humidity: u16 = 0x0405;
+  pub const metering: u16 = 0x0702;
+  pub const electrical_measurement: u16 = 0x0b04;
+};
+
+/// The attributes libskep uses, by cluster.
+pub const AttributeId = struct {
+  /// Of the measurement clusters: temperature, pressure and humidity.
+  pub const measured_value: u16 = 0x0000;
+
+  pub const basic = struct {
+    pub const manufacturer_name: u16 = 0x0004;
+    pub const model_identifier: u16 = 0x0005;
+  };
+  pub const power_configuration = struct {
+    pub const battery_voltage: u16 = 0x0020;
+    pub const battery_percentage_remaining: u16 = 0x0021;
+  };
+  pub const on_off = struct {
+    pub const on_off: u16 = 0x0000;
+  };
+  pub const level_control = struct {
+    pub const current_level: u16 = 0x0000;
+  };
+  pub const color_control = struct {
+    pub const current_hue: u16 = 0x0000;
+    pub const current_saturation: u16 = 0x0001;
+    pub const current_x: u16 = 0x0003;
+    pub const current_y: u16 = 0x0004;
+    pub const color_temperature_mireds: u16 = 0x0007;
+    pub const physical_min_mireds: u16 = 0x400b;
+    pub const physical_max_mireds: u16 = 0x400c;
+  };
+  pub const metering = struct {
+    pub const current_summation_delivered: u16 = 0x0000;
+  };
+  pub const electrical_measurement = struct {
+    pub const ac_frequency: u16 = 0x0300;
+    pub const rms_voltage: u16 = 0x0505;
+    pub const rms_current: u16 = 0x0508;
+    pub const active_power: u16 = 0x050b;
+    pub const power_factor: u16 = 0x0510;
+  };
+};
+
+/// The cluster-specific commands libskep sends or answers, by cluster.
+pub const ClusterCommand = struct {
+  pub const on_off = struct {
+    pub const off: u8 = 0x00;
+    pub const on: u8 = 0x01;
+    pub const toggle: u8 = 0x02;
+  };
+  pub const level_control = struct {
+    pub const move_to_level_with_on_off: u8 = 0x04;
+  };
+  pub const color_control = struct {
+    pub const move_to_hue: u8 = 0x00;
+    pub const move_to_saturation: u8 = 0x03;
+    pub const move_to_color: u8 = 0x07;
+    pub const move_to_color_temperature: u8 = 0x0a;
+  };
+  pub const ota_upgrade = struct {
+    pub const query_next_image: u8 = 0x01;
+    pub const query_next_image_response: u8 = 0x02;
+  };
+};
+
 pub const Command = struct {
   pub const read_attributes: u8 = 0x00;
   pub const read_attributes_response: u8 = 0x01;

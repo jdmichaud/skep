@@ -208,14 +208,20 @@ pub const Driver = struct {
             while (i + 2 <= request.payload.len) : (i += 2) {
               const id = std.mem.readInt(u16, request.payload[i..][0..2], .little);
               w.writeInt(u16, id, .little) catch unreachable;
-              const text: ?[]const u8 = if (message.cluster != 0x0000) null else switch (id) {
-                0x0004 => dev.manufacturer,
-                0x0005 => dev.model,
+              const text: ?[]const u8 = if (message.cluster != zcl.Cluster.basic)
+                null
+              else switch (id) {
+                zcl.AttributeId.basic.manufacturer_name => dev.manufacturer,
+                zcl.AttributeId.basic.model_identifier => dev.model,
                 else => null,
               };
-              const mireds: ?u16 = if (message.cluster != 0x0300) null else switch (id) {
-                0x400b => if (dev.color_temperature_range) |r| r[0] else null,
-                0x400c => if (dev.color_temperature_range) |r| r[1] else null,
+              const mireds: ?u16 = if (message.cluster != zcl.Cluster.color_control)
+                null
+              else switch (id) {
+                zcl.AttributeId.color_control.physical_min_mireds,
+                => if (dev.color_temperature_range) |r| r[0] else null,
+                zcl.AttributeId.color_control.physical_max_mireds,
+                => if (dev.color_temperature_range) |r| r[1] else null,
                 else => null,
               };
               if (text) |t| {

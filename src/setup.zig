@@ -146,11 +146,10 @@ fn queue(ctx: *Context, d: *State.Device) error{ OutOfMemory }!void {
   });
 }
 
-const attribute_manufacturer: u16 = 0x0004;
-const attribute_model: u16 = 0x0005;
-/// ColorTempPhysicalMinMireds and ColorTempPhysicalMaxMireds, of Color Control.
-const attribute_physical_min_mireds: u16 = 0x400b;
-const attribute_physical_max_mireds: u16 = 0x400c;
+const attribute_manufacturer = zcl.AttributeId.basic.manufacturer_name;
+const attribute_model = zcl.AttributeId.basic.model_identifier;
+const attribute_physical_min_mireds = zcl.AttributeId.color_control.physical_min_mireds;
+const attribute_physical_max_mireds = zcl.AttributeId.color_control.physical_max_mireds;
 
 /// The first endpoint with Color Control, a light's.
 fn colorEndpoint(d: *const State.Device) ?u8 {

@@ -777,9 +777,10 @@ fn onFrame(ctx: *Context, frame: *const driver_layer.Frame) void {
 }
 
 /// The OTA Upgrade cluster, and its commands libskep answers.
-const ota_cluster: u16 = 0x0019;
-const ota_query_next_image: u8 = 0x01;
-const ota_query_next_image_response: u8 = 0x02;
+const ota_cluster = zcl.Cluster.ota_upgrade;
+const ota_query_next_image = zcl.ClusterCommand.ota_upgrade.query_next_image;
+const ota_query_next_image_response = zcl.ClusterCommand.ota_upgrade.query_next_image_response;
+/// The status of a Query Next Image Response that offers no image.
 const ota_no_image_available: u8 = 0x98;
 
 /// What a device sent by itself: attribute reports, and cluster commands. libskep answers on the

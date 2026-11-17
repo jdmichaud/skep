@@ -79,61 +79,127 @@ pub const CSetting = extern struct {
 /// first.
 pub const standard = [_]Definition{
   // On/Off: 1 for on, 0 for off.
-  .{ .cluster = 0x0006, .attribute = 0x0000, .name = "on", .unit = "", .set = .on_off },
+  .{
+    .cluster = zcl.Cluster.on_off,
+    .attribute = zcl.AttributeId.on_off.on_off,
+    .name = "on",
+    .unit = "",
+    .set = .on_off,
+  },
   // Level Control: CurrentLevel, 0 to 254, set by Move to Level with On/Off, which switches the
   // light off at 0 and on above.
   .{
-    .cluster = 0x0008,
-    .attribute = 0x0000,
+    .cluster = zcl.Cluster.level_control,
+    .attribute = zcl.AttributeId.level_control.current_level,
     .name = "level",
     .unit = "%",
     .divisor = 2.54,
-    .set = .{ .move = .{ .command = 0x04, .type = zcl.Type.uint8, .max = 254 } },
+    .set = .{
+      .move = .{
+        .command = zcl.ClusterCommand.level_control.move_to_level_with_on_off,
+        .type = zcl.Type.uint8,
+        .max = 254,
+      },
+    },
   },
   // Color Control: ColorTemperatureMireds, in kelvins; CurrentHue, 0 to 254 for the whole circle;
   // CurrentSaturation, 0 to 254; CurrentX and CurrentY, the CIE 1931 chromaticity, in 65536ths.
   .{
-    .cluster = 0x0300,
-    .attribute = 0x0007,
+    .cluster = zcl.Cluster.color_control,
+    .attribute = zcl.AttributeId.color_control.color_temperature_mireds,
     .name = "color_temperature",
     .unit = "K",
     .divisor = 1_000_000,
     .inverse = true,
     // Move to Color Temperature.
-    .set = .{ .move = .{ .command = 0x0a, .type = zcl.Type.uint16, .max = 0xfeff } },
+    .set = .{
+      .move = .{
+        .command = zcl.ClusterCommand.color_control.move_to_color_temperature,
+        .type = zcl.Type.uint16,
+        .max = 0xfeff,
+      },
+    },
   },
   // Move to Hue, the shortest way round.
   .{
-    .cluster = 0x0300,
-    .attribute = 0x0000,
+    .cluster = zcl.Cluster.color_control,
+    .attribute = zcl.AttributeId.color_control.current_hue,
     .name = "hue",
     .unit = "°",
     .divisor = 254.0 / 360.0,
-    .set = .{ .move = .{ .command = 0x00, .type = zcl.Type.uint8, .max = 254, .direction = true } },
+    .set = .{
+      .move = .{
+        .command = zcl.ClusterCommand.color_control.move_to_hue,
+        .type = zcl.Type.uint8,
+        .max = 254,
+        .direction = true,
+      },
+    },
   },
   // Move to Saturation.
   .{
-    .cluster = 0x0300,
-    .attribute = 0x0001,
+    .cluster = zcl.Cluster.color_control,
+    .attribute = zcl.AttributeId.color_control.current_saturation,
     .name = "saturation",
     .unit = "%",
     .divisor = 2.54,
-    .set = .{ .move = .{ .command = 0x03, .type = zcl.Type.uint8, .max = 254 } },
+    .set = .{
+      .move = .{
+        .command = zcl.ClusterCommand.color_control.move_to_saturation,
+        .type = zcl.Type.uint8,
+        .max = 254,
+      },
+    },
   },
-  .{ .cluster = 0x0300, .attribute = 0x0003, .name = "color_x", .unit = "", .divisor = 65536 },
-  .{ .cluster = 0x0300, .attribute = 0x0004, .name = "color_y", .unit = "", .divisor = 65536 },
+  .{
+    .cluster = zcl.Cluster.color_control,
+    .attribute = zcl.AttributeId.color_control.current_x,
+    .name = "color_x",
+    .unit = "",
+    .divisor = 65536,
+  },
+  .{
+    .cluster = zcl.Cluster.color_control,
+    .attribute = zcl.AttributeId.color_control.current_y,
+    .name = "color_y",
+    .unit = "",
+    .divisor = 65536,
+  },
   // Temperature Measurement: hundredths of a degree.
-  .{ .cluster = 0x0402, .attribute = 0x0000, .name = "temperature", .unit = "°C", .divisor = 100 },
+  .{
+    .cluster = zcl.Cluster.temperature,
+    .attribute = zcl.AttributeId.measured_value,
+    .name = "temperature",
+    .unit = "°C",
+    .divisor = 100,
+  },
   // Relative Humidity Measurement: hundredths of a percent.
-  .{ .cluster = 0x0405, .attribute = 0x0000, .name = "humidity", .unit = "%", .divisor = 100 },
+  .{
+    .cluster = zcl.Cluster.humidity,
+    .attribute = zcl.AttributeId.measured_value,
+    .name = "humidity",
+    .unit = "%",
+    .divisor = 100,
+  },
   // Pressure Measurement: tenths of a kilopascal, which are hectopascals.
-  .{ .cluster = 0x0403, .attribute = 0x0000, .name = "pressure", .unit = "hPa" },
+  .{
+    .cluster = zcl.Cluster.pressure,
+    .attribute = zcl.AttributeId.measured_value,
+    .name = "pressure",
+    .unit = "hPa",
+  },
   // Power Configuration: BatteryPercentageRemaining in halves of a percent, BatteryVoltage in
   // tenths of a volt.
-  .{ .cluster = 0x0001, .attribute = 0x0021, .name = "battery", .unit = "%", .divisor = 2 },
   .{
-    .cluster = 0x0001,
-    .attribute = 0x0020,
+    .cluster = zcl.Cluster.power_configuration,
+    .attribute = zcl.AttributeId.power_configuration.battery_percentage_remaining,
+    .name = "battery",
+    .unit = "%",
+    .divisor = 2,
+  },
+  .{
+    .cluster = zcl.Cluster.power_configuration,
+    .attribute = zcl.AttributeId.power_configuration.battery_voltage,
     .name = "battery_voltage",
     .unit = "V",
     .divisor = 10,
@@ -216,7 +282,9 @@ pub fn setting(
   const set = definition.set orelse return error.Invalid;
   if (!std.math.isFinite(value)) return error.Invalid;
   switch (set) {
-    .on_off => return .{ .id = if (value != 0) 0x01 else 0x00 },
+    .on_off => return .{
+      .id = if (value != 0) zcl.ClusterCommand.on_off.on else zcl.ClusterCommand.on_off.off,
+    },
     .move => |m| {
       const tenths = try transitionOf(transition);
       if (definition.inverse and value <= 0) return error.OutOfRange;
@@ -258,7 +326,7 @@ pub fn colorSetting(rgb: u32, transition: f64) SettingError!Command {
   const z = 0.0193 * r + 0.1192 * g + 0.9505 * b;
   const sum = x + y + z;
   if (sum == 0) return error.Invalid;
-  var c: Command = .{ .id = 0x07 };
+  var c: Command = .{ .id = zcl.ClusterCommand.color_control.move_to_color };
   for ([_]f64{ x / sum, y / sum }) |coordinate| {
     c.add(.unsigned(zcl.Type.uint16, @intFromFloat(@min(@round(coordinate * 65536), 0xfeff))));
   }
