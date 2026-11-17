@@ -163,3 +163,7 @@ publishes the section of each released version as its release notes.
   rather than on every change: each save rewrites and syncs the whole
   file, which a device causing many changes turned into a stream of
   writes. SIGHUP stops it cleanly, rather than killing it unsaved.
+- libskep queued a reply to every frame from a device that asked for a
+  Default Response, or for a firmware image, one sent at a time: a device
+  sending them fast grew the queue without end. One reply waits per
+  device at most; the device goes without the others.

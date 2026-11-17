@@ -1612,6 +1612,40 @@ test "a device asked to leave is forgotten even if it does not answer" {
   try testing.expectEqual(0, count);
 }
 
+test "a device that asks for answers faster than it gets them goes without some" {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  try openWindow(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+  const sim_driver = &ctx.driver.?.sim;
+  // Reports asking for a Default Response, in one burst.
+  for (0..10) |i| {
+    var report: driver_layer.Frame = .{
+      .address = 0x1bce,
+      .profile = 0x0104,
+      .cluster = 0x0006,
+      .source_endpoint = 1,
+      .destination_endpoint = 1,
+    };
+    report.setPayload(&.{ 0x08, @intCast(i), 0x0a, 0x00, 0x00, 0x10, 0x01 });
+    sim_driver.receive(report);
+  }
+  try testing.expectEqual(0, skep_advance(ctx, 0));
+  while (skep_next_event(ctx)) |event| {
+    skep_event_free(event);
+  }
+  // The first, sent at once, and one waiting behind it: the rest go unanswered.
+  var replies: usize = 0;
+  for (ctx.exchanges.list.items) |e| {
+    if (e.device == sensor_ieee and e.purpose == .reply) {
+      replies += 1;
+    }
+  }
+  try testing.expect(replies <= 2);
+}
+
 test "libskep answers devices on the coordinator's behalf" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&testing.allocator, &devices);

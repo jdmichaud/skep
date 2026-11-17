@@ -404,6 +404,11 @@ pub fn reply(
   header: zcl.Header,
   payload: []const u8,
 ) void {
+  // One reply waiting per device: a device that sends faster than it is answered goes without
+  // some, rather than libskep queueing them without end.
+  for (ctx.exchanges.list.items) |e| {
+    if (e.device == d.ieee and e.purpose == .reply and e.phase == .waiting) return;
+  }
   var frame: driver_layer.Frame = .{
     .address = 0,
     .profile = to.profile,
