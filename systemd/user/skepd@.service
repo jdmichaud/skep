@@ -13,7 +13,22 @@ Type=notify
 # Found in /usr/local/bin or /usr/bin; see skepd(8) for another prefix.
 ExecStart=skepd --device /dev/%I
 Restart=on-failure
+# Not at once: restarting a crash loop at once reaches the start limit, and
+# the service would stay down.
+RestartSec=5s
+# Bounds: 32 clients, what they leave unread, and the state.
+LimitNOFILE=256
+MemoryMax=256M
+TasksMax=16
+UMask=0077
 NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
 
 [Install]
 WantedBy=default.target

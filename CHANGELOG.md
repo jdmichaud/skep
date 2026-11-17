@@ -184,3 +184,8 @@ publishes the section of each released version as its release notes.
 - `skep watch` kept every event it printed in memory.
 - skepd could cut an error message inside a UTF-8 character, which then
   reached clients as an array of numbers.
+- skepd's systemd units restart it after 5 seconds, so that a crash loop
+  no longer stops it for good; bound its file descriptors, memory and
+  tasks; and filter its system calls. The system unit also drops every
+  capability and gives it no network: `systemd-analyze security` rates
+  it 1.1, from 5.3.

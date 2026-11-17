@@ -13,6 +13,9 @@ Type=notify
 # Found in /usr/local/bin or /usr/bin; see skepd(8) for another prefix.
 ExecStart=skepd --device /dev/%I
 Restart=on-failure
+# Not at once: restarting a crash loop at once reaches the start limit, and
+# the service would stay down.
+RestartSec=5s
 User=skep
 Group=skep
 # Access to the dongle: dialout on Debian and Fedora, uucp on Arch.
@@ -23,7 +26,19 @@ RuntimeDirectoryMode=0750
 # The state, network key included, and device names: for skep only.
 StateDirectory=skep
 StateDirectoryMode=0700
+# Bounds: 32 clients, what they leave unread, and the state.
+LimitNOFILE=256
+MemoryMax=256M
+TasksMax=16
+UMask=0077
+# skepd needs no privilege, nor the network: its socket and systemd's are
+# files, which a network namespace of its own does not hide.
+CapabilityBoundingSet=
 NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+PrivateNetwork=yes
+ProtectProc=invisible
+ProcSubset=pid
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
@@ -39,6 +54,7 @@ RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
 
 [Install]
 WantedBy=multi-user.target
