@@ -692,6 +692,14 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   center that they rejoined through it: recording them at any time would
   let one device grow the state until it no longer loads. A device
   announces only itself, from the address it announces.
+- A removed device keeps the network key, and can rejoin with it. The
+  network key is rotated on request (`skep_rotate_network_key()`,
+  `skep rekey`), never by libskep on its own: the new key goes to each
+  device libskep knows, encrypted with its own link key, rather than
+  broadcast under the current network key, which every device that knew
+  it could read; then the network switches to it. The trust center learns
+  the key from the first device it is sent to, so with no device there is
+  no rotation.
 
 ## Milestones
 

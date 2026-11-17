@@ -63,6 +63,7 @@ test "skep.h's limits are libskep's" {
   try std.testing.expectEqual(c.SKEP_MAX_TRANSITION, readings.max_transition);
   try std.testing.expectEqual(c.SKEP_MAX_DEVICES, State.max_devices);
   try std.testing.expectEqual(c.SKEP_MAX_STATE_SIZE, State.max_written_len);
+  try std.testing.expectEqual(c.SKEP_KEY_SWITCH_DELAY * 1000, Context.key_switch_delay);
 }
 
 /// Each value of a Zig enum, by name, against the header's constant of that name.

@@ -60,6 +60,8 @@ stopping: bool = false,
 window_seconds: u8 = 0,
 /// The dongle's join window is open, as it last said.
 window_open: bool = false,
+/// The network key rotation under way, if any.
+rekey: ?Rekey = null,
 /// The trust center admits new devices: from when a join window is opened until libskep has
 /// closed it. Only then are devices libskep does not know recorded, whether they join, rejoin or
 /// announce themselves: at any other time, such a device is one the trust center did not let in,
@@ -86,14 +88,30 @@ const Busy = union(enum) {
 
 /// Something the driver is asked to do.
 const Op = struct {
-  kind: enum { permit_join, refresh },
+  kind: enum { permit_join, refresh, rekey },
   /// The request it ends; null once canceled, and for the refresh `stop` makes.
   request: ?u32,
   seconds: u8 = 0,
 };
 
-/// One join window and one refresh at a time.
-const max_ops = 2;
+/// One join window, one refresh and one key rotation at a time.
+const max_ops = 3;
+
+/// How long devices get to take a new network key before the network switches to it, in ms:
+/// sleepy ones collect it from their parents when they wake up, and parents hold it 7.68 s.
+pub const key_switch_delay = 15_000;
+
+/// A network key rotation under way: the new key, the device it goes to next, and when to switch
+/// to it once every device was sent it.
+const Rekey = struct {
+  key: [16]u8,
+  next: usize = 0,
+  /// The device it is being sent to.
+  sending: u64 = 0,
+  /// How many devices took it.
+  sent: usize = 0,
+  switch_at: ?u64 = null,
+};
 
 /// How far libskep sets devices up: the interview, then the bindings and reporting their entries
 /// in devices.zig ask for; or the interview only, the application binding and configuring what it
@@ -267,6 +285,22 @@ pub fn permitJoin(ctx: *Context, seconds: c_uint, request: *u32) c_int {
   return 0;
 }
 
+/// Gives the network a new key, as `skep_rotate_network_key`.
+pub fn rotateNetworkKey(ctx: *Context, request: *u32) c_int {
+  if (ctx.status != .running or ctx.stopping) return err(.NETDOWN);
+  if (ctx.pending(.rekey)) return err(.NOBUFS);
+  // The trust center learns the key from the first device it is sent to: none, and it could not.
+  for (ctx.state.?.devices.items) |d| {
+    if (d.nwk != null) break;
+  } else {
+    return err(.NODEV);
+  }
+  const id = ctx.newRequest();
+  ctx.push(.{ .kind = .rekey, .request = id });
+  request.* = id;
+  return 0;
+}
+
 /// Reads the security counters from the dongle again, as `skep_refresh_state`.
 pub fn refreshState(ctx: *Context, request: *u32) c_int {
   if (ctx.status != .running or ctx.stopping) return err(.NETDOWN);
@@ -387,7 +421,42 @@ pub fn kick(ctx: *Context) void {
       d.permitJoin(op.seconds);
     },
     .refresh => d.refresh(),
+    .rekey => {
+      var key: [16]u8 = undefined;
+      ctx.random.random().bytes(&key);
+      ctx.rekey = .{ .key = key };
+      ctx.rekeyNext();
+    },
   }
+}
+
+/// Sends the new network key to the next device with an address. Once each was, the switch waits
+/// for sleepy ones to collect it; with none that took it, the network keeps its key.
+fn rekeyNext(ctx: *Context) void {
+  const r = &ctx.rekey.?;
+  const devices = ctx.state.?.devices.items;
+  while (r.next < devices.len) {
+    const device = devices[r.next];
+    r.next += 1;
+    const nwk = device.nwk orelse continue;
+    r.sending = device.ieee;
+    return ctx.driver.?.sendNetworkKey(nwk, device.ieee, r.key);
+  }
+  if (r.sent == 0) {
+    ctx.logMessage(.err, "no device took the new network key: the network keeps its key");
+    return ctx.rekeyDone(err(.HOSTUNREACH));
+  }
+  r.switch_at = ctx.now +| key_switch_delay;
+}
+
+/// Ends the key rotation, and its request.
+fn rekeyDone(ctx: *Context, error_code: c_int) void {
+  ctx.rekey = null;
+  const op = ctx.done();
+  if (op.request) |id| {
+    ctx.requestEnded(id, error_code, 0);
+  }
+  ctx.kick();
 }
 
 /// The driver did the first thing asked of it.
@@ -452,6 +521,7 @@ fn finish(ctx: *Context, error_code: c_int) void {
   // A dongle starts with its trust center admitting rejoins only.
   ctx.window_open = false;
   ctx.admitting = false;
+  ctx.rekey = null;
   ctx.driver = null;
   ctx.status = .stopped;
   ctx.network = null;
@@ -589,17 +659,27 @@ pub fn outputDone(ctx: *Context, len: usize, now: u64) void {
 
 pub fn nextDeadline(ctx: *const Context) ?u64 {
   const d = if (ctx.driver) |*d| d else return null;
-  const driver_deadline = d.nextDeadline();
-  const exchange_deadline = exchange.nextDeadline(ctx);
-  if (driver_deadline == null) return exchange_deadline;
-  if (exchange_deadline == null) return driver_deadline;
-  return @min(driver_deadline.?, exchange_deadline.?);
+  var deadline = d.nextDeadline();
+  for ([_]?u64{ exchange.nextDeadline(ctx), if (ctx.rekey) |r| r.switch_at else null }) |other| {
+    const t = other orelse continue;
+    deadline = if (deadline) |earlier| @min(earlier, t) else t;
+  }
+  return deadline;
 }
 
 pub fn advance(ctx: *Context, now: u64) c_int {
   ctx.now = now;
   if (ctx.driver) |*d| {
     d.advance(now);
+    // The devices had their time to take the new key.
+    if (ctx.rekey) |*r| {
+      if (r.switch_at) |t| {
+        if (now >= t) {
+          r.switch_at = null;
+          d.switchNetworkKey();
+        }
+      }
+    }
   }
   return ctx.process();
 }
@@ -642,7 +722,22 @@ fn process(ctx: *Context) c_int {
       .refreshed => |held| {
         const op = ctx.done();
         const s = &ctx.state.?;
-        if (!s.holds(held)) {
+        var error_code: c_int = 0;
+        if (op.kind == .rekey) {
+          const switched = held.network.extended_pan_id == s.network.extended_pan_id and
+            std.mem.eql(u8, &held.security.network_key, &ctx.rekey.?.key);
+          ctx.rekey = null;
+          if (switched) {
+            ctx.logMessage(.info, "the network switched to a new key");
+            ctx.network = held.network;
+            if (s.update(ctx.ieee, held)) {
+              ctx.stateChanged();
+            }
+          } else {
+            ctx.logMessage(.err, "the dongle did not switch to the new network key");
+            error_code = err(.IO);
+          }
+        } else if (!s.holds(held)) {
           // The network runs on: the dongle cannot have replaced it, nor its keys, which libskep
           // keeps, and their counters with them.
           ctx.logMessage(
@@ -658,7 +753,7 @@ fn process(ctx: *Context) c_int {
         if (op.request) |id| {
           ctx.flushStateChanged();
           const event = ctx.spares.pop().?;
-          requestDone(event, id, 0);
+          requestDone(event, id, error_code);
           ctx.events.push(event);
         }
         // Any refresh will do for stopping.
@@ -705,6 +800,29 @@ fn process(ctx: *Context) c_int {
       .delivered => |delivered| exchange.delivered(ctx, delivered.tag, delivered.ok),
       .message => |frame| ctx.onFrame(&frame),
       .join_window => |open| ctx.onJoinWindow(open),
+      .key_sent => |failure| {
+        const r = &ctx.rekey.?;
+        if (failure) |f| {
+          const message: driver_layer.Message = .init(
+            "device {x:0>16} was not sent the new network key ({s}): once the network switches, " ++
+              "it rejoins, or is paired again",
+            .{ r.sending, f.message.text() },
+          );
+          ctx.logMessage(.warning, message.text());
+        } else {
+          r.sent += 1;
+        }
+        ctx.rekeyNext();
+      },
+      .key_switched => |failure| {
+        if (failure) |f| {
+          ctx.logMessage(.err, f.message.text());
+          ctx.rekeyDone(err(errnoOf(f.kind)));
+        } else {
+          // What the dongle holds now: the new key, it must be.
+          ctx.driver.?.refresh();
+        }
+      },
       .device => |device| switch (device.kind) {
         .joined, .rejoined => ctx.onAdmitted(device),
         // libskep keeps a device that left: it may come back.

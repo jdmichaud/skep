@@ -62,6 +62,9 @@ pub const Driver = struct {
   coordinator: bool = true,
   /// The last `form`, if any.
   formed: ?driver.Form = null,
+  /// The network key sent to devices, until the switch, and to how many.
+  next_key: ?[16]u8 = null,
+  keys_sent: usize = 0,
 
   pub fn start(d: *Driver) void {
     d.pending_len = 0;
@@ -86,6 +89,23 @@ pub const Driver = struct {
     }
     d.network = held;
     d.post(.{ .formed = held });
+  }
+
+  pub fn sendNetworkKey(d: *Driver, _: u16, _: u64, key: [16]u8) void {
+    d.next_key = key;
+    d.keys_sent += 1;
+    d.post(.{ .key_sent = null });
+  }
+
+  pub fn switchNetworkKey(d: *Driver) void {
+    const security = &d.network.?.security;
+    if (d.next_key) |key| {
+      security.network_key = key;
+      security.network_key_sequence_number +%= 1;
+      security.network_frame_counter = 0;
+      d.next_key = null;
+    }
+    d.post(.{ .key_switched = null });
   }
 
   pub fn refresh(d: *Driver) void {

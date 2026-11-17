@@ -9,6 +9,11 @@ publishes the section of each released version as its release notes.
 
 ### Added
 
+- Network key rotation: `skep_rotate_network_key()`, skepd's
+  `rotate_network_key` method and `skep rekey` give the network a new,
+  random key, sent to each device encrypted with its own link key, then
+  switched to. A device removed from the network that still listens
+  cannot read it.
 - The ThirdReality Smart Color Bulb ZL4 (3RCB02070Z): bound and configured
   to report its on/off state, level and colour once it joins.
 - The libskep C API, `skep.h` and `skep/zcl.h`, which says what is

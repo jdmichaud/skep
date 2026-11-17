@@ -355,7 +355,8 @@ fn fuzzDongle(_: void, smith: *testing.Smith) !void {
       },
       .call => {
         var request: u32 = 0;
-        switch (smith.valueRangeAtMost(u8, 0, 4)) {
+        switch (smith.valueRangeAtMost(u8, 0, 5)) {
+          5 => _ = ctx.rotateNetworkKey(&request),
           0 => _ = ctx.permitJoin(smith.valueRangeAtMost(u8, 0, 254), &request),
           1 => _ = ctx.refreshState(&request),
           2 => if (ctx.state) |s| {

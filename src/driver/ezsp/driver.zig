@@ -152,6 +152,10 @@ pub const Event = union(enum) {
   refreshed: Network,
   /// `permitJoin` was done: null if the NCP did it, what it refused otherwise.
   permit_join_done: ?Refused,
+  /// `sendNetworkKey` was done: null if the NCP sent the key, what it refused otherwise.
+  key_sent: ?Refused,
+  /// `switchNetworkKey` was done: null if the NCP switched, what it refused otherwise.
+  key_switched: ?Refused,
   /// The join window opened (true) or closed.
   join_window: bool,
   device: DeviceChange,
@@ -274,6 +278,9 @@ pub const Driver = struct {
     clearing_transient_keys,
     setting_join_policy,
     permitting,
+    // `sendNetworkKey` and `switchNetworkKey`:
+    sending_key,
+    switching_key,
     // `send`:
     sending,
     // `form`:
@@ -474,6 +481,27 @@ pub const Driver = struct {
     }
   }
 
+  /// Sends the network key to come to a device, encrypted with the device's own link key, once the
+  /// network is up: a device the trust center did not give a link key cannot read it. The first
+  /// call makes it the trust center's next key too. Reports `key_sent`.
+  pub fn sendNetworkKey(d: *Driver, nwk: u16, ieee: u64, key: [16]u8) void {
+    if (!d.mayStart()) return;
+    d.step = .sending_key;
+    var out: [26]u8 = undefined;
+    std.mem.writeInt(u16, out[0..2], nwk, .little);
+    std.mem.writeInt(u64, out[2..10], ieee, .little);
+    out[10..26].* = key;
+    d.send(.unicast_nwk_key_update, &out, d.now);
+  }
+
+  /// Tells every device, and the trust center, to switch to the network key sent before, once
+  /// the network is up. Reports `key_switched`.
+  pub fn switchNetworkKey(d: *Driver) void {
+    if (!d.mayStart()) return;
+    d.step = .switching_key;
+    d.send(.broadcast_network_key_switch, &.{}, d.now);
+  }
+
   /// Whether the NCP owes an answer, by `sent_at` plus the response timeout: not before the
   /// command is written, which the application may do after calling `advance`.
   fn answerDue(d: *const Driver) bool {
@@ -636,7 +664,8 @@ pub const Driver = struct {
       return;
     }
     if (received.sequence != d.sequence) return;
-    if (received.id == .invalid_command) {
+    // A command the NCP does not know fails the driver, but for those it can do without.
+    if (received.id == .invalid_command and d.step != .sending_key and d.step != .switching_key) {
       const status = if (received.parameters.len > 0) received.parameters[0] else 0;
       return d.fail(.{ .invalid_command = status });
     }
@@ -695,6 +724,28 @@ pub const Driver = struct {
         d.step = .permitting;
         var out: [1]u8 = undefined;
         d.send(.permit_joining, command.permitJoining(&out, d.permit_seconds), now);
+      },
+      .sending_key, .switching_key => {
+        const id: frame.FrameId = if (d.step == .sending_key)
+          .unicast_nwk_key_update
+        else
+          .broadcast_network_key_switch;
+        // An NCP that does not know the command refuses it.
+        const refused: ?Refused = if (received.id == .invalid_command)
+          .{
+            .command = id,
+            .status = .{
+              .value = if (received.parameters.len > 0) received.parameters[0] else 0,
+              .sl = false,
+            },
+          }
+        else blk: {
+          const status = d.statusOf(received, id) orelse return;
+          break :blk if (status.is(.ok)) null else .{ .command = id, .status = status };
+        };
+        const sending = d.step == .sending_key;
+        d.step = .running;
+        d.post(if (sending) .{ .key_sent = refused } else .{ .key_switched = refused });
       },
       .sending => {
         if (received.id != .send_unicast and received.id != .send_broadcast) {
@@ -1950,6 +2001,31 @@ test "an NCP that answers commands it was not sent fails the driver" {
     sequence +%= 1;
   }
   try testing.expect(skipCallbacks(&driver).? == .failed);
+}
+
+test "a new network key goes to a device under its link key, then the network switches" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, true);
+  const key: [16]u8 = @splat(0x5a);
+  driver.sendNetworkKey(0x1bce, 0xf44250000d350000, key);
+  const sent = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqualSlices(
+    u8,
+    &(hex("a900" ++ "ce1b" ++ "0000350d005042f4") ++ key),
+    sent[3..],
+  );
+  ncp.respond(&.{ sent[0], 0x80, 0x01, 0xa9, 0x00, 0x00 });
+  try testing.expectEqual(null, skipCallbacks(&driver).?.key_sent);
+  driver.switchNetworkKey();
+  const switched = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqualSlices(u8, &hex("7400"), switched[3..]);
+  // An NCP that does not know the command refuses it.
+  ncp.respond(&.{ switched[0], 0x80, 0x01, 0x58, 0x00, 0x31 });
+  const refused = skipCallbacks(&driver).?.key_switched.?;
+  try testing.expectEqual(frame.FrameId.broadcast_network_key_switch, refused.command);
+  try testing.expectEqual(0x31, refused.status.value);
+  // And the driver goes on.
+  try testing.expectEqual(.running, driver.step);
 }
 
 test "operations asked for once the driver failed are dropped" {

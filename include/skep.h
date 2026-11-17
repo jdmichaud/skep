@@ -109,6 +109,7 @@ struct skep_allocator {
 #define SKEP_MAX_TRANSITION 6553.4 /* seconds a setting may take */
 #define SKEP_MAX_DEVICES 1024      /* devices libskep records */
 #define SKEP_MAX_STATE_SIZE 33554432 /* bytes of the longest state exported */
+#define SKEP_KEY_SWITCH_DELAY 15     /* seconds before a new key is switched to */
 
 /*
  * Create a context. Configure it with skep_set_option() and, if a state
@@ -686,6 +687,31 @@ int skep_export_state(const skep_ctx *ctx, uint8_t *buf, size_t size, size_t *le
  * Errors: -ENETDOWN, -ENOBUFS (a refresh is already pending).
  */
 int skep_refresh_state(skep_ctx *ctx, uint32_t *request);
+
+/*
+ * Give the network a new, random key. libskep sends it to each device it
+ * knows, encrypted with that device's own link key, waits
+ * SKEP_KEY_SWITCH_DELAY seconds for sleepy devices to collect it from their
+ * parents, then has the whole network switch to it. A device that knows
+ * the current key but was not sent the new one cannot read it: one removed
+ * that still listens, for one. Rotating the key after removing a device
+ * that is no longer trusted keeps it out.
+ *
+ * A device that missed the new key, asleep all along, rejoins through
+ * the trust center when it finds it no longer understands the network,
+ * if it obtained a link key of its own when it joined; otherwise it must
+ * be paired again. libskep logs the devices it could not send the key to.
+ *
+ * A request like those under Requests: it ends with
+ * SKEP_EVENT_REQUEST_DONE once the dongle holds the new key, after
+ * SKEP_EVENT_STATE_CHANGED; with -EHOSTUNREACH if no device took the key,
+ * in which case the network keeps its own, or -EIO if the dongle did not
+ * switch.
+ *
+ * Errors: -ENETDOWN, -ENOBUFS (a rotation is already pending), -ENODEV (no
+ * device to send the key to, from which the dongle learns it too).
+ */
+int skep_rotate_network_key(skep_ctx *ctx, uint32_t *request);
 
 /*
  * Load a state saved by skep_export_state(). Only before skep_start().

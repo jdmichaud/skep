@@ -87,6 +87,10 @@ export fn skep_output(ctx: *Context, data: *[*]const u8) usize {
   return bytes.len;
 }
 
+export fn skep_rotate_network_key(ctx: *Context, request: *u32) c_int {
+  return ctx.rotateNetworkKey(request);
+}
+
 export fn skep_output_done(ctx: *Context, len: usize, now: u64) void {
   ctx.outputDone(len, now);
 }
@@ -1682,6 +1686,50 @@ test "a device asked to leave is forgotten even if it does not answer" {
   var count: usize = 1;
   try testing.expectEqual(0, skep_get_devices(ctx, null, 0, &count));
   try testing.expectEqual(0, count);
+}
+
+test "the network key is sent to each device, then switched to" {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  var request: u32 = 0;
+  // No device to send it to, from which the dongle learns it too.
+  try testing.expectEqual(err(.NODEV), skep_rotate_network_key(ctx, &request));
+  try openWindow(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+  while (skep_next_event(ctx)) |event| {
+    skep_event_free(event);
+  }
+  const old = ctx.state.?.network_key;
+  const sequence = ctx.state.?.network_key_sequence_number;
+  try testing.expectEqual(0, skep_rotate_network_key(ctx, &request));
+  var second: u32 = 0;
+  try testing.expectEqual(err(.NOBUFS), skep_rotate_network_key(ctx, &second));
+  // Sent to the device, then the switch waits for sleepy ones to collect it.
+  try testing.expectEqual(null, try nextEventType(ctx));
+  try testing.expectEqual(1, ctx.driver.?.sim.keys_sent);
+  var deadline: u64 = 0;
+  try testing.expectEqual(1, skep_next_deadline(ctx, &deadline));
+  try testing.expectEqual(Context.key_switch_delay, deadline);
+  try testing.expectEqual(0, skep_advance(ctx, deadline - 1));
+  try testing.expectEqual(old, ctx.driver.?.sim.network.?.security.network_key);
+  try testing.expectEqual(0, skep_advance(ctx, deadline));
+  const changed = (try nextOfType(ctx, .state_changed)) orelse return error.TestExpectedState;
+  skep_event_free(changed);
+  const done = skep_next_event(ctx).?;
+  defer skep_event_free(done);
+  try testing.expectEqual(request, skep_event_get_request(done));
+  try testing.expectEqual(0, skep_event_get_error(done));
+  const s = &ctx.state.?;
+  try testing.expect(!std.mem.eql(u8, &old, &s.network_key));
+  try testing.expectEqual(ctx.driver.?.sim.network.?.security.network_key, s.network_key);
+  try testing.expectEqual(sequence +% 1, s.network_key_sequence_number);
+  // A refresh after it is taken: the dongle holds the state's key.
+  try testing.expectEqual(0, skep_refresh_state(ctx, &request));
+  const refreshed = (try nextOfType(ctx, .request_done)).?;
+  defer skep_event_free(refreshed);
+  try testing.expectEqual(0, skep_event_get_error(refreshed));
 }
 
 test "libskep keeps so many endpoints of a device" {

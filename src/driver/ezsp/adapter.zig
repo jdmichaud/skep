@@ -85,6 +85,14 @@ pub const Adapter = struct {
     a.driver.permitJoin(seconds);
   }
 
+  pub fn sendNetworkKey(a: *Adapter, nwk: u16, ieee: u64, key: [16]u8) void {
+    a.driver.sendNetworkKey(nwk, ieee, key);
+  }
+
+  pub fn switchNetworkKey(a: *Adapter) void {
+    a.driver.switchNetworkKey();
+  }
+
   pub fn input(a: *Adapter, bytes: []const u8, now: u64) void {
     a.driver.input(bytes, now);
   }
@@ -143,6 +151,12 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
       .permit_join_done = if (refused) |r| fromEzspFailure(.{ .refused = r }) else null,
     },
     .join_window => |open| .{ .join_window = open },
+    .key_sent => |refused| .{
+      .key_sent = if (refused) |r| fromEzspFailure(.{ .refused = r }) else null,
+    },
+    .key_switched => |refused| .{
+      .key_switched = if (refused) |r| fromEzspFailure(.{ .refused = r }) else null,
+    },
     .send_done => |done| .{
       .send_done = .{
         .tag = done.tag,

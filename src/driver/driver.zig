@@ -156,6 +156,10 @@ pub const Event = union(enum) {
   refreshed: Held,
   /// `permitJoin` was done: null if it worked, why not otherwise.
   permit_join_done: ?Failure,
+  /// `sendNetworkKey` was done: null if the key went out, why not otherwise.
+  key_sent: ?Failure,
+  /// `switchNetworkKey` was done: null if it worked, why not otherwise.
+  key_switched: ?Failure,
   /// The join window opened (true) or closed.
   join_window: bool,
   device: Device,
@@ -224,6 +228,24 @@ pub const Driver = union(Name) {
   pub fn permitJoin(d: *Driver, seconds: u8) void {
     switch (d.*) {
       inline else => |*driver| driver.permitJoin(seconds),
+    }
+  }
+
+  /// Sends the network key to come to a device, encrypted with the device's own link key, so
+  /// that a device that knows only the current network key cannot read it: one removed from the
+  /// network, for one. The first call makes it the trust center's next key. Once the network is
+  /// up. Reports `key_sent`.
+  pub fn sendNetworkKey(d: *Driver, nwk: u16, ieee: u64, key: [16]u8) void {
+    switch (d.*) {
+      inline else => |*driver| driver.sendNetworkKey(nwk, ieee, key),
+    }
+  }
+
+  /// Switches the network, every device and the trust center, to the key sent before. Reports
+  /// `key_switched`.
+  pub fn switchNetworkKey(d: *Driver) void {
+    switch (d.*) {
+      inline else => |*driver| driver.switchNetworkKey(),
     }
   }
 
