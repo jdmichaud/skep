@@ -39,6 +39,10 @@ events: Event.Queue = .{},
 /// Events allocated ahead, so that taking an event from the driver never loses it to a failed
 /// allocation, and `linkLost` can report without allocating.
 spares: Event.Queue = .{},
+/// The state changed since SKEP_EVENT_STATE_CHANGED last said so. One event says it, after the
+/// step that changed it, however many changes the step made: an interview moving through
+/// several stages at once among them.
+state_changed_pending: bool = false,
 /// The id of the next request.
 next_request: u32 = 1,
 /// What the driver was asked to do and has not done, in order: one thing at a time, the first
@@ -103,9 +107,9 @@ pub const Options = struct {
 /// The names of `driver_layer.Level`, in its order.
 const LogLevelName = enum { @"error", warning, info, debug };
 
-/// Spare events kept ready, as many as a driver event can lead to: a failure is logged, ends
-/// both requests and stops the context; a device that leaves on request ends the request, is
-/// reported gone, and changes the state.
+/// Spare events kept ready, as many as a driver event can lead to, besides the state change,
+/// which takes one after, and log messages, which take none: a failure ends both requests and
+/// stops the context; a device that leaves on request ends the request and is reported gone.
 const spare_count = 2 + max_ops;
 
 /// Creates a context. With `allocator` null, memory comes from the C library.
@@ -396,8 +400,10 @@ pub fn linkLost(ctx: *Context) void {
 fn finish(ctx: *Context, error_code: c_int) void {
   ctx.cancelRequests();
   exchange.cancelAll(ctx);
-  // After the canceled requests, which may still wait for events.
+  // After the canceled requests, which may still wait for events, and the state's last change,
+  // which an application stopping on the event must have saved.
   if (ctx.canceled_len == 0) {
+    ctx.flushStateChanged();
     if (ctx.spares.pop()) |event| {
       event.type = .stopped;
       event.error_code = error_code;
@@ -441,6 +447,8 @@ pub fn cancelRequest(ctx: *Context, id: u32) void {
 /// SKEP_EVENT_REQUEST_DONE, to fill in and push. Takes a spare event, of which the caller made
 /// sure one was left.
 pub fn requestEvent(ctx: *Context, id: u32, error_code: c_int, status: u8) *Event {
+  // What the request changed comes first.
+  ctx.flushStateChanged();
   const event = ctx.spares.pop().?;
   requestDone(event, id, error_code);
   event.status = status;
@@ -565,6 +573,8 @@ fn process(ctx: *Context) c_int {
     ctx.events.push(event);
   }
   ctx.fillSpares() catch return err(.NOMEM);
+  ctx.flushStateChanged();
+  ctx.fillSpares() catch return err(.NOMEM);
   if (ctx.stopped_pending) |error_code| {
     ctx.stopped_pending = null;
     const event = ctx.spares.pop().?;
@@ -589,6 +599,7 @@ fn process(ctx: *Context) c_int {
           ctx.stateChanged();
         }
         if (op.request) |id| {
+          ctx.flushStateChanged();
           const event = ctx.spares.pop().?;
           requestDone(event, id, 0);
           ctx.events.push(event);
@@ -676,14 +687,19 @@ fn process(ctx: *Context) c_int {
       .log => |entry| ctx.logMessage(entry.level, entry.message.text()),
     }
     ctx.fillSpares() catch return err(.NOMEM);
+    ctx.flushStateChanged();
+    ctx.fillSpares() catch return err(.NOMEM);
   }
   // Exchanges overdue, one at a time, each with its spare events.
   if (ctx.status == .running) {
     while (exchange.checkTimes(ctx)) {
       ctx.fillSpares() catch return err(.NOMEM);
+      ctx.flushStateChanged();
+      ctx.fillSpares() catch return err(.NOMEM);
     }
   }
   ctx.kick();
+  ctx.flushStateChanged();
   return 0;
 }
 
@@ -910,7 +926,15 @@ fn started(ctx: *Context, held: driver_layer.Held, origin: Event.Origin) void {
 }
 
 pub fn stateChanged(ctx: *Context) void {
-  const event = ctx.spares.pop().?;
+  ctx.state_changed_pending = true;
+}
+
+/// Says that the state changed, if it did, with a spare event, which the caller refills. Without
+/// one, it says it after the next step.
+fn flushStateChanged(ctx: *Context) void {
+  if (!ctx.state_changed_pending) return;
+  const event = ctx.spares.pop() orelse return;
+  ctx.state_changed_pending = false;
   event.type = .state_changed;
   ctx.events.push(event);
 }
@@ -944,10 +968,12 @@ fn newNetwork(ctx: *Context) driver_layer.Form {
   return f;
 }
 
-/// Queues a log message if the log level lets it through. Uses a spare event.
+/// Queues a log message if the log level lets it through. Its event is its own, not a spare one,
+/// so that a message never takes an event something else must have; out of memory, the message
+/// is lost.
 fn logMessage(ctx: *Context, level: driver_layer.Level, message: []const u8) void {
   if (@backingInt(level) > @backingInt(ctx.options.log_level)) return;
-  const event = ctx.spares.pop().?;
+  const event = Event.create(ctx.c_allocator) catch return;
   event.type = .log;
   event.setLog(@backingInt(level), message);
   ctx.events.push(event);

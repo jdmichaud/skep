@@ -1406,6 +1406,8 @@ test "libskep answers devices on the coordinator's behalf" {
   defer skep_free(ctx);
   ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
   skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+  // The state, which the setup changed, after the step that made the device ready.
+  skep_event_free((try nextOfType(ctx, .state_changed)) orelse return error.TestExpectedState);
   const sim_driver = &ctx.driver.?.sim;
 
   // A firmware update query, as the plug asks: no image, and no event.
