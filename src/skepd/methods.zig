@@ -8,6 +8,8 @@ const build_options = @import("build_options");
 const c = @import("skep_h");
 const Protocol = @import("protocol.zig");
 const Names = @import("Names.zig");
+const describe = @import("describe.zig");
+const events = @import("events.zig");
 const Server = @import("Server.zig");
 const libskep = @import("libskep.zig");
 const values = @import("values.zig");
@@ -18,7 +20,6 @@ const Method = Protocol.Method;
 const Params = Protocol.Params;
 const Stringify = std.json.Stringify;
 const target_members = Protocol.target_members;
-const max_attributes = Protocol.max_attributes;
 
 pub fn version(
   p: *Protocol,
@@ -62,7 +63,7 @@ pub fn network(
   ps: Params,
 ) Error!void {
   try p.params(ps, &.{});
-  try p.network(client, id);
+  try describe.network(p, client, id);
 }
 
 pub fn permit_join(
@@ -108,7 +109,7 @@ pub fn devices(
   try out.j.beginArray();
   for (addresses[0..@min(count, addresses.len)]) |ieee| {
     try out.j.beginObject();
-    try p.describe(&out.j, a, ieee);
+    try describe.deviceMembers(p, &out.j, a, ieee);
     try out.j.endObject();
   }
   try out.j.endArray();
@@ -132,7 +133,7 @@ pub fn device(
   out.init(p.gpa);
   defer out.deinit();
   try p.result(&out, id);
-  try p.describe(&out.j, a, ieee);
+  try describe.deviceMembers(p, &out.j, a, ieee);
   p.send(client, &out);
 }
 
@@ -171,7 +172,7 @@ pub fn rename(
     return p.fail("EIO", "{s}: {s}: {t}", .{ p.names_path, failure.step, failure.errno });
   }
   p.empty(client, id);
-  p.renamed(ieee, old);
+  events.renamed(p, ieee, old);
 }
 
 pub fn setup(
