@@ -3,6 +3,7 @@
 //! that they cannot drift apart; skep's main runs what parse() makes of the command line.
 
 const std = @import("std");
+const output = @import("output.zig");
 
 const Io = std.Io;
 const Stringify = std.json.Stringify;
@@ -113,6 +114,8 @@ pub const Command = struct {
   more: []const u8 = "",
   /// Writes the members of its request's params.
   params: *const fn (j: *Stringify, call: *const Call) Stringify.Error!void,
+  /// Prints its answer; nothing but a refusal if none.
+  render: ?output.Render = null,
 };
 
 /// The most options a command takes.
@@ -234,6 +237,7 @@ pub const commands = [_]Command{
     .summary = "the versions of skepd, libskep and their protocol",
     .help = "Prints the versions of skepd, of the libskep it runs on, and of skep-protocol(7).",
     .params = noParams,
+    .render = output.version,
   },
   .{
     .names = &.{ "network" },
@@ -245,6 +249,7 @@ pub const commands = [_]Command{
     \\devices may still join.
     ,
     .params = noParams,
+    .render = output.network,
   },
   .{
     .names = &.{ "permit" },
@@ -266,6 +271,7 @@ pub const commands = [_]Command{
     .summary = "let new devices join, 60 s by default, 0 to stop",
     .help = "Lets new devices join the network for a while.",
     .params = permitParams,
+    .render = output.permit,
   },
   .{
     .names = &.{ "devices" },
@@ -277,6 +283,7 @@ pub const commands = [_]Command{
     \\and the first three readings they reported, or how far their setup got.
     ,
     .params = noParams,
+    .render = output.devices,
   },
   .{
     .names = &.{ "device" },
@@ -288,6 +295,7 @@ pub const commands = [_]Command{
     \\endpoints and clusters, and its readings, as get gives them.
     ,
     .params = deviceParams,
+    .render = output.device,
   },
   .{
     .names = &.{ "get" },
@@ -314,6 +322,7 @@ pub const commands = [_]Command{
     ,
     .more = readings_help,
     .params = deviceParams,
+    .render = output.get,
   },
   .{
     .names = &.{ "read" },
@@ -335,6 +344,7 @@ pub const commands = [_]Command{
     ,
     .more = readings_help,
     .params = readParams,
+    .render = output.read,
   },
   .{
     .names = &.{ "set" },
@@ -433,6 +443,7 @@ pub const commands = [_]Command{
     .summary = "write an attribute",
     .help = "Writes an attribute of a cluster of the device.",
     .params = writeParams,
+    .render = output.refusals,
   },
   .{
     .names = &.{ "report" },
@@ -463,6 +474,7 @@ pub const commands = [_]Command{
     \\<min> seconds, and at least every <max> seconds.
     ,
     .params = reportParams,
+    .render = output.refusals,
   },
   .{
     .names = &.{ "bind" },
