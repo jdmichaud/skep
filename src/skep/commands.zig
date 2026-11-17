@@ -505,7 +505,25 @@ pub const commands = [_]Command{
     .params = commandParams,
   },
   .{
-    .names = &.{ "on", "off", "toggle" },
+    .names = &.{ "on", "off" },
+    .method = "set",
+    .forms = &.{.{
+      .arguments = &.{
+        device,
+        optional(
+          upTo(
+            argument("endpoint", .integer, "the number of the endpoint, the first one by default"),
+            255,
+          ),
+        ),
+      },
+    }},
+    .summary = "switch a device on or off",
+    .help = "Switches the device on or off, as set <device> on or off does.",
+    .params = switchParams,
+  },
+  .{
+    .names = &.{ "toggle" },
     .method = "command",
     .forms = &.{.{
       .arguments = &.{
@@ -515,9 +533,9 @@ pub const commands = [_]Command{
         ),
       },
     }},
-    .summary = "switch a device on, off, or the other way",
-    .help = "Switches the device on, off, or the other way, with its On/Off cluster.",
-    .params = switchParams,
+    .summary = "switch a device the other way",
+    .help = "Switches the device on if it is off, off if it is on: its On/Off cluster's Toggle command.",
+    .params = toggleParams,
   },
   .{
     .names = &.{ "watch" },
@@ -1030,11 +1048,29 @@ fn commandParams(j: *Stringify, call: *const Call) Stringify.Error!void {
 }
 
 /// on, off and toggle: On/Off's commands 1, 0 and 2.
+/// on and off: the setting of the reading "on", which skepd knows how to make.
 fn switchParams(j: *Stringify, call: *const Call) Stringify.Error!void {
+  try deviceParams(j, call);
+  if (call.get("endpoint")) |e| {
+    try j.objectField("endpoint");
+    try j.write(integerOf(e).?);
+  }
+  try j.objectField("reading");
+  try j.write("on");
+  try j.objectField("value");
+  try j.write(eq(call.name, "on"));
+  if (call.global.timeout) |t| {
+    try j.objectField("timeout");
+    try writeSeconds(j, t);
+  }
+}
+
+/// toggle: the On/Off cluster's Toggle command, which no setting is.
+fn toggleParams(j: *Stringify, call: *const Call) Stringify.Error!void {
   const endpoint_id = if (call.get("endpoint")) |e| integerOf(e).? else 1;
   try writeTarget(j, call.get("device").?, endpoint_id, 0x0006, call.global.timeout);
   try j.objectField("command");
-  try j.write(@as(u8, if (eq(call.name, "off")) 0 else if (eq(call.name, "on")) 1 else 2));
+  try j.write(2);
 }
 
 /// Seconds as typed, which check() found to be a number.
@@ -1260,8 +1296,12 @@ test "command lines become requests" {
   );
   // Options after the command too.
   try expectParsed(
-    &.{ "on", "plug", "--timeout", "5" },
-    "\"params\":{\"device\":\"plug\",\"endpoint\":1,\"cluster\":6,\"timeout\":5,\"command\":1}",
+    &.{ "toggle", "plug", "--timeout", "5" },
+    "\"params\":{\"device\":\"plug\",\"endpoint\":1,\"cluster\":6,\"timeout\":5,\"command\":2}",
+  );
+  try expectParsed(
+    &.{ "off", "plug" },
+    "\"method\":\"set\",\"params\":{\"device\":\"plug\",\"reading\":\"on\",\"value\":false}}",
   );
   try expectParsed(
     &.{ "read", "plug", "1", "0x0b04", "0x050b", "1285" },
@@ -1361,7 +1401,7 @@ test "every command has its help" {
   );
   try expectParsed(
     &.{ "toggle", "lamp", "--help" },
-    "usage: skep [<options>] on|off|toggle <device> [<endpoint>]\n",
+    "usage: skep [<options>] toggle <device> [<endpoint>]\n",
   );
   for (commands) |command| {
     for (command.names) |name| {

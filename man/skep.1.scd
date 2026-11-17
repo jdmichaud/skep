@@ -97,9 +97,13 @@ temperature in °C rather than the hundredths of a degree the device sends.
 	Send a cluster command, with its arguments in order, such as
 	uint8:128 uint16:10.
 
-*on*, *off*, *toggle* _device_ [_endpoint_]
-	Switch the device on, off, or the other way, with the On/Off cluster of
-	the endpoint, 1 by default.
+*on*, *off* _device_ [_endpoint_]
+	Switch the device on or off, as *set* does: the first endpoint that can
+	be switched, unless given.
+
+*toggle* _device_ [_endpoint_]
+	Switch the device the other way, with the Toggle command of the On/Off
+	cluster of the endpoint, 1 by default.
 
 *watch*
 	Print what happens on the network, one event per line, until
