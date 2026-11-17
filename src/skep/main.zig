@@ -85,11 +85,17 @@ const commands = [_]Command{
     .forms = &.{ "set <device> <reading> <value> [--transition <seconds>]" },
     .summary = "set a reading, such as level 50%, or a colour: color #ff8000",
     .help =
-    \\Sets a reading: a light's or a plug's on, to yes or no; a light's level, such as 50%; its
-    \\color_temperature, such as 2700K; its hue or saturation. Or sets a light's colour: color
-    \\and an sRGB colour, such as #ff8000, whose brightness is the level's.
+    \\Sets a reading of the device, or a light's colour:
     \\
-    \\  --transition <seconds>  how long a light takes to get there, 0 by default
+    \\  on yes|no                    a light or a plug, on or off
+    \\  level <percent>              a light's brightness, such as 50%; 0 switches it off
+    \\  color_temperature <kelvins>  a light's white, such as 2700K
+    \\  hue <degrees>                a light's hue, such as 120
+    \\  saturation <percent>         a light's saturation, such as 80%
+    \\  color <#rrggbb>              a light's colour, in sRGB, such as #ff8000; its brightness
+    \\                               is the level's
+    \\
+    \\  --transition <seconds>       how long a light takes to get there, 0 by default
     ,
   },
   .{
