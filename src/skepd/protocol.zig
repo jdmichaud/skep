@@ -21,7 +21,10 @@ const Protocol = @This();
 /// The protocol's version: raised only by changes that break clients.
 pub const version = 1;
 /// Most requests of one client pending at once, so that one client cannot take all of libskep's.
-pub const max_pending_per_client = 16;
+pub const max_pending_per_client = 8;
+/// Most lines of a client handled in a turn of the loop: one that sends many at once delays the
+/// others, the dongle and signals by so many at most.
+pub const max_lines_per_turn = 64;
 /// Most attributes in a request, as libskep takes.
 pub const max_attributes = c.SKEP_MAX_ATTRIBUTES;
 
@@ -33,6 +36,8 @@ names: Names,
 names_path: [:0]const u8,
 /// The clients' requests that libskep is doing, by libskep's request id.
 pending: std.AutoHashMapUnmanaged(u32, Pending) = .empty,
+/// The clients that watch events, by id.
+watchers: std.AutoArrayHashMapUnmanaged(u32, void) = .empty,
 /// The error that took the network down, while it is down because of one.
 down_error: ?c_int = null,
 /// When the join window closes, on the monotonic clock, while it is open.
@@ -94,6 +99,7 @@ pub const Error = error{ Fail, OutOfMemory, WriteFailed };
 pub fn deinit(p: *Protocol) void {
   p.readings.deinit();
   p.pending.deinit(p.gpa);
+  p.watchers.deinit(p.gpa);
   p.names.deinit();
   p.server.deinit();
 }
@@ -161,10 +167,13 @@ pub fn errnoCode(buffer: *[24]u8, r: c_int) []const u8 {
 
 // Reading clients.
 
-/// Handles the lines clients sent.
+/// Handles the lines clients sent, `max_lines_per_turn` of each at most: the loop calls it
+/// again, without waiting, while lines are left.
 pub fn serve(p: *Protocol) void {
   for (p.server.clients.items) |client| {
-    while (!client.closing and !client.close_when_written) {
+    defer client.compact();
+    for (0..max_lines_per_turn) |_| {
+      if (client.closing or client.close_when_written) break;
       const line = client.nextLine() orelse break;
       if (std.mem.trim(u8, line, " \t\r").len > 0) {
         p.handle(client, line);
@@ -369,15 +378,31 @@ pub fn deadlineOf(p: *Protocol, value: ?std.json.Value) Error!u64 {
 
 /// Whether the client may have one more request pending.
 pub fn room(p: *Protocol, client: *const Server.Client) Error!void {
-  if (client.pending >= max_pending_per_client) {
-    return p.fail("ENOBUFS", "16 requests pending", .{});
+  if (p.pendingOf(client.id) >= max_pending_per_client) {
+    return p.fail("ENOBUFS", "{d} requests pending", .{ max_pending_per_client });
   }
 }
 
+/// How many requests of a client are pending.
+fn pendingOf(p: *const Protocol, client: u32) usize {
+  var n: usize = 0;
+  var it = p.pending.valueIterator();
+  while (it.next()) |pending| {
+    if (pending.client == client) {
+      n += 1;
+    }
+  }
+  return n;
+}
+
 /// Waits for libskep's request `req`, which answers a client's.
-pub fn wait(p: *Protocol, client: *Server.Client, req: u32, pending: Pending) Error!void {
+pub fn wait(p: *Protocol, req: u32, pending: Pending) Error!void {
   try p.pending.put(p.gpa, req, pending);
-  client.pending += 1;
+}
+
+/// Sends events to a client from now on.
+pub fn watch(p: *Protocol, client: *const Server.Client) Error!void {
+  try p.watchers.put(p.gpa, client.id, {});
 }
 
 // Responses.
@@ -492,7 +517,7 @@ pub fn clientOf(p: *Protocol, id: u32) ?*Server.Client {
 pub fn broadcast(p: *Protocol, m: *Message) void {
   const line = m.finish() catch return;
   for (p.server.clients.items) |client| {
-    if (client.watching) {
+    if (p.watchers.contains(client.id)) {
       p.server.send(client, line);
     }
   }
@@ -503,7 +528,8 @@ pub fn dropFinished(p: *Protocol) void {
   var i: usize = 0;
   while (i < p.server.clients.items.len) {
     const client = p.server.clients.items[i];
-    if (!Server.finished(client)) {
+    const owed = p.pendingOf(client.id) > 0 or p.watchers.contains(client.id);
+    if (!Server.finished(client, owed)) {
       i += 1;
       continue;
     }
@@ -513,6 +539,7 @@ pub fn dropFinished(p: *Protocol) void {
         _ = c.skep_cancel(p.ctx, entry.key_ptr.*);
       }
     }
+    _ = p.watchers.swapRemove(client.id);
     p.server.drop(client);
   }
 }
@@ -573,7 +600,6 @@ const TestBench = struct {
       ),
     };
     b.client = try connect(b.protocol.server.path);
-    try b.protocol.server.accept();
     b.pump();
   }
 
@@ -612,9 +638,12 @@ const TestBench = struct {
         _ = p.event(e);
         c.skep_event_free(e);
       }
-      for (p.server.clients.items) |client| {
-        p.server.read(client);
-      }
+      // As skepd's loop does, without waiting.
+      var fds: std.ArrayList(linux.pollfd) = .empty;
+      defer fds.deinit(p.gpa);
+      p.server.pollFds(p.gpa, &fds, p.now) catch unreachable;
+      _ = std.posix.poll(fds.items, 0) catch unreachable;
+      p.server.polled(fds.items, p.now) catch unreachable;
       p.serve();
       for (p.server.clients.items) |client| {
         Server.flush(client);
@@ -824,6 +853,50 @@ test "a client done sending still gets its answers" {
   try testing.expectEqual(0, bench.protocol.server.clients.items.len);
 }
 
+test "a flood of lines is handled a turn at a time, and read as it is" {
+  var bench: TestBench = undefined;
+  try bench.init();
+  defer bench.deinit();
+  const blank: [60000]u8 = @splat('\n');
+  _ = linux.write(bench.client, &blank, blank.len);
+  const version_request = "{\"id\": 1, \"method\": \"version\"}\n";
+  _ = linux.write(bench.client, version_request.ptr, version_request.len);
+  bench.pump();
+  // A read at most per turn, and only once the lines read before are handled.
+  const client = bench.protocol.server.clients.items[0];
+  try testing.expect(client.input.items.len <= 4096);
+  try testing.expect(bench.protocol.server.hasLines());
+  var buffer: [256]u8 = undefined;
+  for (0..1000) |_| {
+    bench.pump();
+    const got = bench.received(&buffer);
+    if (got.len > 0) return expectContains(got, "{\"id\":1,\"result\":");
+  }
+  return error.TestExpectedAnswer;
+}
+
+test "skepd takes so many clients at once, and no more" {
+  var bench: TestBench = undefined;
+  try bench.init();
+  defer bench.deinit();
+  var fds: [Server.max_clients + 8]linux.fd_t = undefined;
+  var address: linux.sockaddr.un = .{ .path = @splat(0) };
+  const path = bench.protocol.server.path;
+  @memcpy(address.path[0..path.len], path);
+  for (&fds) |*fd| {
+    // Not blocking: once skepd takes no more, its queue of connections fills.
+    fd.* = @intCast(
+      linux.socket(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC, 0),
+    );
+    _ = linux.connect(fd.*, @ptrCast(&address), @sizeOf(linux.sockaddr.un));
+    bench.pump();
+  }
+  defer for (fds) |fd| {
+    _ = linux.close(fd);
+  };
+  try testing.expectEqual(Server.max_clients, bench.protocol.server.clients.items.len);
+}
+
 test "fuzz: whatever a client sends, skepd answers in JSON" {
   var bench: TestBench = undefined;
   try bench.init();
@@ -859,8 +932,7 @@ pub fn fuzzRequest(bench: *TestBench, smith: *testing.Smith) !void {
     _ = c.skep_cancel(p.ctx, entry.key_ptr.*);
   }
   p.pending.clearAndFree(p.gpa);
-  client.pending = 0;
-  client.watching = false;
+  p.watchers.clearAndFree(p.gpa);
   p.names.deinit();
   p.names = .{ .gpa = p.gpa };
   while (c.skep_next_event(p.ctx)) |e| {

@@ -1,6 +1,10 @@
 //! skepd's side of its Unix socket: listening, accepting clients, cutting what they send into
 //! lines, and holding what is to be written to them until they can take it. What the lines say is
 //! the protocol's business, in protocol.zig.
+//!
+//! What a client may cost is bounded, so that a client that floods skepd, or never reads, delays
+//! the others, the dongle and signals by a turn of the loop at most: `max_line` of input read at a
+//! time, read only once the lines before are handled, `max_unread` of output, and `max_clients`.
 
 const std = @import("std");
 
@@ -14,22 +18,27 @@ fd: linux.fd_t,
 path: [:0]const u8,
 clients: std.ArrayList(*Client) = .empty,
 next_client: u32 = 1,
+/// When to accept clients again, after the system ran out of what a client takes.
+accept_after: u64 = 0,
 
 /// Longest line a client may send, its newline included.
 pub const max_line = 65536;
-/// Most a client may leave unread before it is dropped: a client that watches events and does
-/// not read them must not make skepd hold them forever.
+/// Most a client may leave unread, besides the line being added, before it is dropped: a client
+/// that watches events and does not read them must not make skepd hold them forever.
 pub const max_unread = 1 << 20;
+/// Most clients at once. Others wait to connect.
+pub const max_clients = 32;
+/// How long to wait before accepting again when the system cannot take a client, in ms: the
+/// listening socket stays readable, and polling it again at once would spin.
+const accept_pause = 1000;
 
 pub const Client = struct {
   id: u32,
   fd: linux.fd_t,
+  /// What it sent: `handled` bytes of lines handled, then what is left.
   input: std.ArrayList(u8) = .empty,
+  handled: usize = 0,
   output: std.ArrayList(u8) = .empty,
-  /// Events go to it.
-  watching: bool = false,
-  /// Requests of it still pending, which the protocol counts.
-  pending: u32 = 0,
   /// It shut down its sending side: it makes no more requests, but still gets its answers, and
   /// events if it watches.
   input_closed: bool = false,
@@ -40,18 +49,30 @@ pub const Client = struct {
   /// It went away, or cannot take its output: dropped at once.
   closing: bool = false,
 
-  /// The next whole line it sent, without its newline, if there is one; `consumeLine` removes
-  /// it once handled.
+  /// The next whole line it sent, without its newline, if there is one; `consumeLine` passes it
+  /// once handled.
   pub fn nextLine(c: *const Client) ?[]const u8 {
-    const end = std.mem.indexOfScalar(u8, c.input.items, '\n') orelse return null;
-    return c.input.items[0..end];
+    const rest = c.input.items[c.handled..];
+    const end = std.mem.indexOfScalar(u8, rest, '\n') orelse return null;
+    return rest[0..end];
   }
 
   pub fn consumeLine(c: *Client) void {
-    const end = std.mem.indexOfScalar(u8, c.input.items, '\n').?;
-    const rest = c.input.items.len - (end + 1);
-    std.mem.copyForwards(u8, c.input.items[0..rest], c.input.items[end + 1..]);
+    c.handled += c.nextLine().?.len + 1;
+  }
+
+  /// Drops the lines handled from its input. Once per turn: dropping each line as it is handled
+  /// would copy the rest of the input as many times.
+  pub fn compact(c: *Client) void {
+    const rest = c.input.items.len - c.handled;
+    std.mem.copyForwards(u8, c.input.items[0..rest], c.input.items[c.handled..]);
     c.input.items.len = rest;
+    c.handled = 0;
+  }
+
+  /// Whether to read what it sends: not before the lines it sent are handled.
+  fn reading(c: *const Client) bool {
+    return !c.closing and !c.input_closed and !c.overflowed and c.nextLine() == null;
   }
 };
 
@@ -125,11 +146,26 @@ pub fn deinit(s: *Server) void {
   s.gpa.free(s.path);
 }
 
-/// Accepts the clients waiting to connect.
-pub fn accept(s: *Server) error{ OutOfMemory }!void {
-  while (true) {
+pub const AcceptError = error{
+  OutOfMemory,
+  /// The system or skepd ran out of file descriptors, or memory: accepting resumes a moment
+  /// later.
+  SystemResources,
+};
+
+/// Accepts the clients waiting to connect, `max_clients` at most.
+fn accept(s: *Server, now: u64) AcceptError!void {
+  while (s.clients.items.len < max_clients) {
     const rc = linux.accept4(s.fd, null, null, linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC);
-    if (linux.errno(rc) != .SUCCESS) return;
+    switch (linux.errno(rc)) {
+      .SUCCESS => {},
+      .MFILE, .NFILE, .NOBUFS, .NOMEM => {
+        s.accept_after = now + accept_pause;
+        return error.SystemResources;
+      },
+      // None waiting, or one that gave up waiting.
+      else => return,
+    }
     const fd: linux.fd_t = @intCast(rc);
     const client = s.gpa.create(Client) catch |e| {
       _ = linux.close(fd);
@@ -145,11 +181,62 @@ pub fn accept(s: *Server) error{ OutOfMemory }!void {
   }
 }
 
-/// Reads what a client sent. A client that shut down its sending side has `input_closed` set; one
-/// that sends a line too long, `overflowed`.
+/// Appends what to poll: the listening socket, then the clients, in order.
+pub fn pollFds(
+  s: *const Server,
+  gpa: std.mem.Allocator,
+  fds: *std.ArrayList(linux.pollfd),
+  now: u64,
+) error{ OutOfMemory }!void {
+  const accepting = s.clients.items.len < max_clients and now >= s.accept_after;
+  try fds.append(gpa, .{
+    .fd = if (accepting) s.fd else -1,
+    .events = linux.POLL.IN,
+    .revents = 0,
+  });
+  for (s.clients.items) |c| {
+    var events: i16 = 0;
+    if (c.reading()) {
+      events |= linux.POLL.IN;
+    }
+    if (c.output.items.len > 0) {
+      events |= linux.POLL.OUT;
+    }
+    try fds.append(gpa, .{ .fd = c.fd, .events = events, .revents = 0 });
+  }
+}
+
+/// Does what poll found, given the descriptors `pollFds` appended: reads the clients, and
+/// accepts new ones.
+pub fn polled(s: *Server, fds: []const linux.pollfd, now: u64) AcceptError!void {
+  // The clients polled are the first ones of the list, which accepting only adds to.
+  for (fds[1..], 0..) |fd, i| {
+    const c = s.clients.items[i];
+    // Gone altogether, not only done sending: what it asked is canceled.
+    if (fd.revents & (linux.POLL.ERR | linux.POLL.HUP | linux.POLL.NVAL) != 0) {
+      c.closing = true;
+    } else if (fd.revents & linux.POLL.IN != 0) {
+      s.read(c);
+    }
+  }
+  if (fds[0].revents & linux.POLL.IN != 0) {
+    try s.accept(now);
+  }
+}
+
+/// Whether a client sent lines not handled yet: the loop is not to wait for more.
+pub fn hasLines(s: *const Server) bool {
+  for (s.clients.items) |c| {
+    if (!c.closing and c.nextLine() != null) return true;
+  }
+  return false;
+}
+
+/// Reads what a client sent, up to a whole line, or `max_line`. A client that shut down its
+/// sending side has `input_closed` set; one that sends a line too long, `overflowed`.
 pub fn read(s: *Server, c: *Client) void {
   var buffer: [4096]u8 = undefined;
-  while (!c.closing and !c.input_closed and !c.overflowed) {
+  while (c.reading()) {
     const n = linux.read(c.fd, &buffer, buffer.len);
     switch (linux.errno(n)) {
       .SUCCESS => {},
@@ -169,7 +256,7 @@ pub fn read(s: *Server, c: *Client) void {
       return;
     };
     // A line too long: there is no telling where the next one starts.
-    if (c.nextLine() == null and c.input.items.len >= max_line) {
+    if (c.nextLine() == null and c.input.items.len - c.handled >= max_line) {
       c.overflowed = true;
     }
   }
@@ -179,7 +266,7 @@ pub fn read(s: *Server, c: *Client) void {
 /// to close.
 pub fn send(s: *Server, c: *Client, line: []const u8) void {
   if (c.closing) return;
-  if (c.output.items.len + line.len + 1 > max_unread) {
+  if (c.output.items.len > max_unread) {
     c.closing = true;
     c.output.clearRetainingCapacity();
     return;
@@ -234,13 +321,12 @@ pub fn drop(s: *Server, c: *Client) void {
   s.gpa.destroy(c);
 }
 
-/// Whether a client is done with: it must go, or it made its last request, has its answers and
-/// does not watch; and its output is written.
-pub fn finished(c: *const Client) bool {
+/// Whether a client is done with: it must go; or its output is written, and it is to close, or it
+/// made its last request and is `owed` nothing more, neither answers nor events.
+pub fn finished(c: *const Client, owed: bool) bool {
   if (c.closing) return true;
   if (c.output.items.len > 0) return false;
-  return c.close_when_written or
-    (c.input_closed and c.pending == 0 and !c.watching and c.nextLine() == null);
+  return c.close_when_written or (c.input_closed and !owed and c.nextLine() == null);
 }
 
 const testing = std.testing;
@@ -284,16 +370,20 @@ test "clients connect, send lines and get answers" {
 
   const fd = try connect(path);
   defer _ = linux.close(fd);
-  try server.accept();
+  try server.accept(0);
   try testing.expectEqual(1, server.clients.items.len);
   const client = server.clients.items[0];
   const request = "{\"id\": 1, \"method\": \"version\"}\n{\"id\": 2";
   _ = linux.write(fd, request.ptr, request.len);
   server.read(client);
   try testing.expectEqualStrings("{\"id\": 1, \"method\": \"version\"}", client.nextLine().?);
+  // Not read further before the line is handled.
+  try testing.expect(!client.reading());
   client.consumeLine();
   // The second line is not whole yet.
   try testing.expectEqual(null, client.nextLine());
+  client.compact();
+  try testing.expectEqualStrings("{\"id\": 2", client.input.items);
 
   server.send(client, "{\"id\": 1, \"result\": {}}");
   flush(client);
@@ -306,10 +396,8 @@ test "clients connect, send lines and get answers" {
   server.read(client);
   try testing.expect(client.input_closed);
   try testing.expect(!client.closing);
-  client.pending = 1;
-  try testing.expect(!finished(client));
-  client.pending = 0;
-  try testing.expect(finished(client));
+  try testing.expect(!finished(client, true));
+  try testing.expect(finished(client, false));
   server.drop(client);
   try testing.expectEqual(0, server.clients.items.len);
 
@@ -333,7 +421,7 @@ test "a line too long closes the client" {
   defer server.deinit();
   const fd = try connect(path);
   defer _ = linux.close(fd);
-  try server.accept();
+  try server.accept(0);
   const long: [4096]u8 = @splat('x');
   var written: usize = 0;
   while (written < max_line) {

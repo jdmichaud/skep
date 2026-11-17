@@ -25,7 +25,7 @@ socket's directory: skepd creates _$XDG_RUNTIME_DIR/skep_ for its owner only,
 and the system service's unit creates _/run/skep_ for its owner and group. The
 socket itself is readable and writable by its owner and group.
 
-skepd serves any number of clients at once.
+skepd serves 32 clients at once; others wait to connect until one leaves.
 
 # REQUESTS AND RESPONSES
 
@@ -88,6 +88,10 @@ have no such limit: a list of many devices can be longer.
 A client that leaves more than a mebibyte unread, such as one that watches
 events and stops reading them, is disconnected. Once connected again, it
 asks for *devices* to learn what it missed.
+
+A client may have 8 requests pending at once: more are answered with
+*ENOBUFS*. skepd reads what a client sends as it handles it: a client that
+sends many lines at once is answered as fast as the others, not before them.
 
 # EVENTS
 

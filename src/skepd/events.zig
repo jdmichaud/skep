@@ -250,7 +250,6 @@ pub fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   const pending = entry.value;
   // A client that went away.
   const client = p.clientOf(pending.client) orelse return true;
-  client.pending -|= 1;
   p.request_id = pending.id;
   const error_code = c.skep_event_get_error(e);
   const status = c.skep_event_get_status(e);

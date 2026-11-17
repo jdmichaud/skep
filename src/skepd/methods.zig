@@ -51,7 +51,7 @@ pub fn watch(
   ps: Params,
 ) Error!void {
   try p.params(ps, &.{});
-  client.watching = true;
+  try p.watch(client);
   p.empty(client, id);
 }
 
@@ -86,7 +86,7 @@ pub fn permit_join(
   var req: u32 = 0;
   const r = c.skep_permit_join(p.ctx, seconds, &req);
   if (r != 0) return p.failErrno(r);
-  try p.wait(client, req, .{ .client = client.id, .id = id, .method = .permit_join });
+  try p.wait(req, .{ .client = client.id, .id = id, .method = .permit_join });
 }
 
 pub fn devices(
@@ -203,7 +203,7 @@ pub fn remove(
   var req: u32 = 0;
   const r = c.skep_remove_device(p.ctx, ieee, deadline, &req);
   if (r != 0) return p.failErrno(r);
-  try p.wait(client, req, .{
+  try p.wait(req, .{
     .client = client.id,
     .id = id,
     .method = .remove,
@@ -237,7 +237,7 @@ pub fn read(
     &req,
   );
   if (r != 0) return p.failErrno(r);
-  try p.wait(client, req, .{
+  try p.wait(req, .{
     .client = client.id,
     .id = id,
     .method = .read,
@@ -276,7 +276,7 @@ pub fn write(
     &req,
   );
   if (r != 0) return p.failErrno(r);
-  try p.wait(client, req, .{ .client = client.id, .id = id, .method = .write });
+  try p.wait(req, .{ .client = client.id, .id = id, .method = .write });
 }
 
 pub fn configure_reporting(
@@ -325,7 +325,7 @@ pub fn configure_reporting(
     &req,
   );
   if (r != 0) return p.failErrno(r);
-  try p.wait(client, req, .{ .client = client.id, .id = id, .method = .configure_reporting });
+  try p.wait(req, .{ .client = client.id, .id = id, .method = .configure_reporting });
 }
 
 fn bind_unbind(
@@ -345,7 +345,7 @@ fn bind_unbind(
   else
     c.skep_unbind(p.ctx, &target.target, target.deadline, &req);
   if (r != 0) return p.failErrno(r);
-  try p.wait(client, req, .{ .client = client.id, .id = id, .method = method });
+  try p.wait(req, .{ .client = client.id, .id = id, .method = method });
 }
 
 pub fn bind(
@@ -400,7 +400,7 @@ pub fn command(
     &req,
   );
   if (r != 0) return p.failErrno(r);
-  try p.wait(client, req, .{ .client = client.id, .id = id, .method = .command });
+  try p.wait(req, .{ .client = client.id, .id = id, .method = .command });
 }
 
 pub fn set(
@@ -472,7 +472,7 @@ pub fn set(
     return p.fail("EINVAL", "black is no colour", .{});
   }
   if (r != 0) return p.failErrno(r);
-  try p.wait(client, req, .{ .client = client.id, .id = id, .method = .set });
+  try p.wait(req, .{ .client = client.id, .id = id, .method = .set });
 }
 
 pub fn cancel(

@@ -466,6 +466,12 @@ const Daemon = struct {
       if (c.skep_next_deadline(d.ctx, &libskep_deadline) != 0) {
         deadline = if (deadline) |t| @min(t, libskep_deadline) else libskep_deadline;
       }
+      if (server.hasLines()) {
+        deadline = current;
+      }
+      if (server.accept_after > current) {
+        deadline = if (deadline) |t| @min(t, server.accept_after) else server.accept_after;
+      }
       const timeout: i32 = if (deadline) |t|
         (if (t <= current) 0 else @intCast(@min(t - current, std.math.maxInt(i32))))
       else
@@ -483,19 +489,9 @@ const Daemon = struct {
             .events = if (writing) posix.POLL.IN | posix.POLL.OUT else posix.POLL.IN,
             .revents = 0,
           },
-          .{ .fd = server.fd, .events = posix.POLL.IN, .revents = 0 },
         },
       );
-      for (server.clients.items) |client| {
-        var events: i16 = 0;
-        if (!client.input_closed and !client.overflowed) {
-          events |= posix.POLL.IN;
-        }
-        if (client.output.items.len > 0) {
-          events |= posix.POLL.OUT;
-        }
-        try fds.append(d.gpa, .{ .fd = client.fd, .events = events, .revents = 0 });
-      }
+      try server.pollFds(d.gpa, &fds, current);
       _ = try posix.poll(fds.items, timeout);
 
       if (fds.items[0].revents & posix.POLL.IN != 0) {
@@ -511,19 +507,13 @@ const Daemon = struct {
         d.print("{s}: went away", .{ d.dongle() });
         d.lose();
       }
-      // The clients polled are the first ones of the list, which accepting only adds to.
-      for (fds.items[3..], 0..) |fd, i| {
-        const client = server.clients.items[i];
-        // Gone altogether, not only done sending: what it asked is canceled.
-        if (fd.revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0) {
-          client.closing = true;
-        } else if (fd.revents & posix.POLL.IN != 0) {
-          server.read(client);
-        }
-      }
-      if (fds.items[2].revents & posix.POLL.IN != 0) {
-        server.accept() catch d.print("error: accepting a client: out of memory", .{});
-      }
+      server.polled(fds.items[2..], d.now()) catch |e| switch (e) {
+        error.OutOfMemory => d.print("error: accepting a client: out of memory", .{}),
+        error.SystemResources => d.print(
+          "error: accepting a client: out of file descriptors or memory; again in a second",
+          .{},
+        ),
+      };
       d.protocol.now = d.now();
       d.protocol.serve();
       d.check(c.skep_advance(d.ctx, d.now()));

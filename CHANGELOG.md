@@ -152,3 +152,10 @@ publishes the section of each released version as its release notes.
   sends, and skepd those it logs, which also logged long strings as a
   pointer. Device names can no longer hold C1 controls or characters
   that reorder text.
+- A client of skepd could stall it for minutes with megabytes of empty
+  lines, during which skepd served neither the dongle nor other clients,
+  nor stopped on SIGTERM. skepd now reads a client's lines as it handles
+  them, 64 per turn of its loop at most. It serves 32 clients at once,
+  and stops accepting for a second when out of file descriptors rather
+  than spinning; a client may have 8 requests pending, not 16, so that
+  two cannot take all of libskep's.
