@@ -100,9 +100,28 @@ fn fail(p: *Protocol, code: []const u8, comptime format: []const u8, args: anyty
 }
 
 /// Fails with the error a function of skep.h returned.
-fn failErrno(p: *Protocol, r: c_int, comptime what: []const u8) Error {
+fn failErrno(p: *Protocol, r: c_int) Error {
   var buffer: [24]u8 = undefined;
-  return p.fail(errnoCode(&buffer, r), what ++ ": {t}", .{ errnoOf(r) });
+  return p.fail(errnoCode(&buffer, r), "{s}", .{ errnoText(r) });
+}
+
+/// What a negative errno value from libskep means, in words, for error messages.
+fn errnoText(r: c_int) []const u8 {
+  return switch (errnoOf(r)) {
+    .NODEV => "no such device",
+    .NETDOWN => "the network is down",
+    .AGAIN => "the device is not interviewed yet",
+    .NOBUFS => "too many requests are pending",
+    .INVAL => "a value it cannot take",
+    .NOENT => "no such thing on the device",
+    .OPNOTSUPP => "not supported",
+    .NOMEM => "out of memory",
+    .TIMEDOUT => "the device did not answer in time",
+    .HOSTUNREACH => "the device could not be reached",
+    .CANCELED => "canceled",
+    .MSGSIZE => "too long for a frame",
+    else => "failed",
+  };
 }
 
 fn errnoOf(r: c_int) E {
@@ -234,7 +253,7 @@ fn request(
       try p.room(client);
       var req: u32 = 0;
       const r = c.skep_permit_join(p.ctx, seconds, &req);
-      if (r != 0) return p.failErrno(r, "permit_join");
+      if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .permit_join });
     },
     .devices => {
@@ -306,7 +325,7 @@ fn request(
       try p.params(ps, &.{ "device" });
       const device = try p.deviceOf(ps.get("device"));
       const r = c.skep_setup_device(p.ctx, device);
-      if (r != 0) return p.failErrno(r, "setup");
+      if (r != 0) return p.failErrno(r);
       p.empty(client, id);
     },
     .remove => {
@@ -316,7 +335,7 @@ fn request(
       try p.room(client);
       var req: u32 = 0;
       const r = c.skep_remove_device(p.ctx, device, deadline, &req);
-      if (r != 0) return p.failErrno(r, "remove");
+      if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{
         .client = client.id,
         .id = id,
@@ -343,7 +362,7 @@ fn request(
         target.deadline,
         &req,
       );
-      if (r != 0) return p.failErrno(r, "read");
+      if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{
         .client = client.id,
         .id = id,
@@ -375,7 +394,7 @@ fn request(
         target.deadline,
         &req,
       );
-      if (r != 0) return p.failErrno(r, "write");
+      if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .write });
     },
     .configure_reporting => {
@@ -417,7 +436,7 @@ fn request(
         target.deadline,
         &req,
       );
-      if (r != 0) return p.failErrno(r, "configure_reporting");
+      if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .configure_reporting });
     },
     .bind, .unbind => {
@@ -429,7 +448,7 @@ fn request(
         c.skep_bind(p.ctx, &target.target, target.deadline, &req)
       else
         c.skep_unbind(p.ctx, &target.target, target.deadline, &req);
-      if (r != 0) return p.failErrno(r, "bind");
+      if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = method });
     },
     .command => {
@@ -457,7 +476,7 @@ fn request(
         target.deadline,
         &req,
       );
-      if (r != 0) return p.failErrno(r, "command");
+      if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .command });
     },
     .set => {
@@ -514,7 +533,7 @@ fn request(
       if (r == -@as(c_int, @backingInt(E.INVAL))) {
         return p.fail("EINVAL", "{s}: value or transition out of range", .{ reading });
       }
-      if (r != 0) return p.failErrno(r, "set");
+      if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .set });
     },
     .cancel => {
@@ -528,7 +547,7 @@ fn request(
         if (entry.value_ptr.client != client.id or entry.value_ptr.id != canceled) continue;
         // Its response, ECANCELED, comes with libskep's REQUEST_DONE.
         const r = c.skep_cancel(p.ctx, entry.key_ptr.*);
-        if (r != 0) return p.failErrno(r, "cancel");
+        if (r != 0) return p.failErrno(r);
         return p.empty(client, id);
       }
       return p.fail("ENOENT", "no request {d} pending", .{ canceled });
@@ -634,7 +653,7 @@ fn endpointWith(
   var count: usize = 0;
   const r = c.skep_device_get_readings(p.ctx, device, null, 0, &count);
   if (r == -@as(c_int, @backingInt(E.AGAIN))) return p.fail("EAGAIN", "not interviewed yet", .{});
-  if (r != 0) return p.failErrno(r, "set");
+  if (r != 0) return p.failErrno(r);
   const sources = try a.alloc(c.struct_skep_reading_source, count);
   _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
   for (sources[0..@min(count, sources.len)]) |source| {
@@ -1245,9 +1264,7 @@ fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   }
   if (error_code != 0) {
     var buffer: [24]u8 = undefined;
-    var message: [64]u8 = undefined;
-    const text = std.fmt.bufPrint(&message, "{t}", .{ errnoOf(error_code) }) catch "";
-    p.sendError(client, errnoCode(&buffer, error_code), text);
+    p.sendError(client, errnoCode(&buffer, error_code), errnoText(error_code));
     return true;
   }
   var m: Message = undefined;
