@@ -64,6 +64,10 @@ publishes the section of each released version as its release notes.
   sleepy one, `skep read <device> <reading>...` asks the device, as in
   `skep read plug power`, and `skep watch` prints events on short lines
   such as `plug: power 11.2 W`.
+- `skep set <device> <reading> <value>` sets a reading, with
+  `--transition`: `skep set bulb level 50%`, `skep set bulb
+  color_temperature 2700K`, `skep set bulb color "#ff8000"`, `skep set
+  plug on no`.
 - Opening or closing the join window tells the routers too.
 - libskep answers devices on the coordinator's behalf: a Default
   Response where a frame asks for one, and "no image available" to

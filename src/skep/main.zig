@@ -20,6 +20,8 @@ const usage =
   \\  device <device>                 one device, in detail
   \\  get <device> [<reading>...]     what a device last reported, or was read for
   \\  read <device> <reading>...      ask a device for readings, such as temperature
+  \\  set <device> <reading> <value> [--transition <seconds>]
+  \\                                  set a reading, such as level 50, or a colour: color #ff8000
   \\  rename <device> [<name>]        name a device, or forget its name
   \\  setup <device>                  interview and set a device up again
   \\  remove <device>                 make a device leave the network, and forget it
@@ -179,6 +181,7 @@ fn build(
       "bind",
       "unbind",
       "command",
+      "set",
     }) |m| {
       if (eq(command, m)) break :method m;
     }
@@ -203,6 +206,38 @@ fn build(
       // A device that is gone never answers: give up after a minute, unless told otherwise.
       try j.objectField("timeout");
       try number(&j, options.timeout orelse "60");
+    }
+  } else if (eq(command, "set")) {
+    // <device> <reading> <value>, and --transition <seconds> anywhere after.
+    var positional: [3][]const u8 = undefined;
+    var count: usize = 0;
+    var transition: ?[]const u8 = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+      if (eq(args[i], "--transition")) {
+        if (i + 1 == args.len) return error.Usage;
+        i += 1;
+        transition = args[i];
+      } else {
+        if (count == positional.len) return error.Usage;
+        positional[count] = args[i];
+        count += 1;
+      }
+    }
+    if (count != positional.len) return error.Usage;
+    try j.objectField("device");
+    try j.write(positional[0]);
+    try j.objectField("reading");
+    try j.write(positional[1]);
+    try j.objectField("value");
+    try settingValue(&j, positional[1], positional[2]);
+    if (transition) |t| {
+      try j.objectField("transition");
+      try number(&j, t);
+    }
+    if (options.timeout) |t| {
+      try j.objectField("timeout");
+      try number(&j, t);
     }
   } else if (eq(command, "rename")) {
     if (args.len < 1 or args.len > 2) return error.Usage;
@@ -316,6 +351,29 @@ fn number(j: *std.json.Stringify, arg: []const u8) !void {
   const n = std.fmt.parseFloat(f64, arg) catch return error.Usage;
   if (@floor(n) == n and @abs(n) < 1e15) return j.write(@as(i64, @intFromFloat(n)));
   try j.write(n);
+}
+
+/// A setting's value as typed: a colour as #rrggbb, with or without its #; yes or no, on or off;
+/// or a number, with its unit if typed, as in 50%, 2700K or 180°.
+fn settingValue(j: *std.json.Stringify, reading: []const u8, arg: []const u8) !void {
+  if (eq(reading, "color")) {
+    if (std.mem.startsWith(u8, arg, "#")) return j.write(arg);
+    var buffer: [64]u8 = undefined;
+    return j.write(std.fmt.bufPrint(&buffer, "#{s}", .{ arg }) catch return error.Usage);
+  }
+  for ([_][]const u8{ "yes", "on", "true" }) |word| {
+    if (std.ascii.eqlIgnoreCase(arg, word)) return j.write(true);
+  }
+  for ([_][]const u8{ "no", "off", "false" }) |word| {
+    if (std.ascii.eqlIgnoreCase(arg, word)) return j.write(false);
+  }
+  var digits = arg;
+  for ([_][]const u8{ "%", "K", "k", "°" }) |unit| {
+    if (std.mem.endsWith(u8, digits, unit)) {
+      digits = digits[0..digits.len - unit.len];
+    }
+  }
+  try number(j, digits);
 }
 
 /// A value as typed: a number, true or false, or text.

@@ -541,7 +541,9 @@ The API is in [include/skep.h](../include/skep.h).
 - Readings, which skepd gives named and scaled, are how skep shows what
   devices measure: `skep devices` sums them up, `skep get` gives the last
   ones at once, `skep read plug power` asks the device. Numbers stay
-  available for what has no reading.
+  available for what has no reading. `skep set bulb level 50` sets one,
+  in the same terms, with units as typed (`2700K`, `50%`), and `skep set
+  bulb color "#ff8000"` a colour.
 - `--help` and `--version`; data on stdout, diagnostics on stderr. Human
   readable output by default, `--json` for scripts. Exit status 0 on
   success, 1 on failure, 2 on usage errors.

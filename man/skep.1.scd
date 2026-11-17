@@ -70,6 +70,13 @@ temperature in °C rather than the hundredths of a degree the device sends.
 	Read attributes: their values and types, and their readings, or the
 	status the device gave.
 
+*set* _device_ _reading_ _value_ [*--transition* _seconds_]
+	Set a reading: a light's or a plug's *on*, to *yes* or *no*; a light's
+	*level*, such as 50%; its *color_temperature*, such as 2700K; its *hue*
+	or *saturation*. Or set a light's colour: *color* and an sRGB colour,
+	such as #ff8000, whose brightness is the level's. A light takes
+	_seconds_ to get there, 0 by default.
+
 *write* _device_ _endpoint_ _cluster_ _attribute_ _type_ _value_
 	Write an attribute, with its ZCL type named as *skep-protocol*(7) names
 	them, such as uint8 or char_string.
@@ -128,6 +135,8 @@ skep rename f44250000d350000 "living room"
 skep get "living room" temperature
 skep --timeout 600 read "living room" temperature
 skep read plug power
+skep set bulb level 30 --transition 2
+skep set bulb color "#ff8000"
 skep off plug
 skep --json watch | jq -c 'select(.event == "attributes")'
 ```
