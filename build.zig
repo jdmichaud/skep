@@ -49,7 +49,7 @@ pub fn build(b: *std.Build) !void {
   });
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = serial })).step);
   addProbe(b, test_step, target, optimize, serial);
-  addSkepd(b, test_step, target, optimize, skep_h, serial, library);
+  addSkepd(b, test_step, target, optimize, skep_h, serial, library, build_options);
   addSkep(b, test_step, target, optimize, build_options);
   if (b.isRoot()) {
     try addFormatSteps(b);
@@ -129,6 +129,7 @@ fn addSkepd(
   skep_h: *std.Build.Module,
   serial: *std.Build.Module,
   library: *std.Build.Step.Compile,
+  build_options: *std.Build.Step.Options,
 ) void {
   const module = b.createModule(.{
     .root_source_file = b.path("src/skepd/main.zig"),
@@ -137,6 +138,7 @@ fn addSkepd(
     .imports = &.{.{ .name = "skep_h", .module = skep_h }, .{ .name = "serial", .module = serial }},
   });
   module.linkLibrary(library);
+  module.addOptions("build_options", build_options);
   const skepd = b.addExecutable(.{ .name = "skepd", .root_module = module });
   b.installArtifact(skepd);
   const run = b.addRunArtifact(skepd);

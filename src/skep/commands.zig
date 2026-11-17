@@ -231,8 +231,8 @@ pub const commands = [_]Command{
     .names = &.{ "version" },
     .method = "version",
     .forms = &.{.{ .arguments = &.{} }},
-    .summary = "the versions of skepd and of its protocol",
-    .help = "Prints the versions of skepd and of skep-protocol(7), which it speaks.",
+    .summary = "the versions of skepd, libskep and their protocol",
+    .help = "Prints the versions of skepd, of the libskep it runs on, and of skep-protocol(7).",
     .params = noParams,
   },
   .{

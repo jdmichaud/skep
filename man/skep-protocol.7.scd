@@ -166,8 +166,8 @@ value the hexadecimal digits of its encoding.
 # METHODS
 
 *version*
-	The protocol's version, and skepd's.
-	Result: {"protocol": 1, "skepd": "0.1.0"}
+	The protocol's version, skepd's, and that of the libskep it runs on.
+	Result: {"protocol": 1, "skepd": "0.1.0", "libskep": "0.1.0"}
 
 *watch*
 	Send events to this client, from now on.

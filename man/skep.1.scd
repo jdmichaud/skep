@@ -26,7 +26,7 @@ temperature in °C rather than the hundredths of a degree the device sends.
 # COMMANDS
 
 *version*
-	The versions of skepd and of its protocol.
+	The versions of skepd, of the libskep it runs on, and of its protocol.
 
 *network*
 	Whether the network is up, its channel, PAN ID and extended PAN ID, and

@@ -2,6 +2,7 @@
 //! skep.h, their responses, and events for the clients that watch.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const c = @import("skep_h");
 const Names = @import("Names.zig");
 const libskep = @import("libskep.zig");
@@ -254,6 +255,8 @@ fn request(
       try out.j.objectField("protocol");
       try out.j.write(version);
       try out.j.objectField("skepd");
+      try out.j.write(build_options.version);
+      try out.j.objectField("libskep");
       try out.j.print("\"{d}.{d}.{d}\"", .{ v >> 16, v >> 8 & 0xff, v & 0xff });
       p.send(client, &out);
     },

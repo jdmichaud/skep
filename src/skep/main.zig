@@ -637,10 +637,11 @@ fn show(
 ) !u8 {
   const command = call.name;
   if (eq(command, "version")) {
-    try out.print("skepd {s}, protocol {d}\n", .{
-      text(field(result, "skepd")),
-      integer(field(result, "protocol")) orelse 0,
-    });
+    try out.print("skepd {s}", .{ text(field(result, "skepd")) });
+    if (field(result, "libskep")) |v| {
+      try out.print(", libskep {s}", .{ text(v) });
+    }
+    try out.print(", protocol {d}\n", .{ integer(field(result, "protocol")) orelse 0 });
   } else if (eq(command, "network")) {
     if (boolean(field(result, "up")) orelse false) {
       try out.print("up: channel {d}, PAN ID 0x{x:0>4}, extended PAN ID {s}", .{
