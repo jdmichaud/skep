@@ -334,6 +334,12 @@ fn fromLinkFailure(failure: ezsp.link.Failure) Failure {
       .kind = .timeout,
       .message = .init("ezsp: the dongle stopped acknowledging frames", .{}),
     },
+    .paused => .{
+      .kind = .timeout,
+      .message = .init("ezsp: the dongle held the line with XOFF for more than {d} s", .{
+        ezsp.link.max_pause / 1000,
+      }),
+    },
     .version => |version| .{
       .kind = .unsupported,
       .message = .init("ezsp: the dongle speaks ASH version {d}, not 2", .{ version }),

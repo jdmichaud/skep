@@ -161,13 +161,14 @@ pub const Startup = struct {
         if (!supported) {
           return s.finish(.{ .failed = .{ .unsupported_version = version } });
         }
+        // The second answer must agree to the version the first offered.
+        if (s.step == .version_again and version.protocol_version != s.version.protocol_version) {
+          return s.finish(.{ .failed = .bad_response });
+        }
         s.version = version;
         if (s.step == .version and version.protocol_version != frame.max_version) {
           s.step = .version_again;
           return s.sendCommand(.version, &.{ version.protocol_version }, now);
-        }
-        if (s.step == .version_again and version.protocol_version != s.version.protocol_version) {
-          return s.finish(.{ .failed = .bad_response });
         }
         s.step = .version_info;
         s.sendCommand(.get_value, &.{ @backingInt(command.ValueId.version_info) }, now);
@@ -257,6 +258,18 @@ test "start an NCP that speaks EZSP 8" {
     },
     startup.result.?,
   );
+}
+
+test "an NCP that answers the second version command with another version fails" {
+  var startup: Startup = .init(.{ .software_flow_control = true });
+  var ncp: Ncp = .{ .host = &startup };
+  try ncp.connect();
+  try ncp.expectCommand(&hex("00000013"));
+  ncp.respond(&hex("0080000802306a"));
+  try ncp.expectCommand(&hex("010001000008"));
+  // EZSP 9, though asked for 8, which it offered.
+  ncp.respond(&hex("01800100000902306a"));
+  try testing.expectEqual(Result{ .failed = .bad_response }, startup.result.?);
 }
 
 test "an NCP that speaks the newest version is not asked twice" {

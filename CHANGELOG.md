@@ -170,3 +170,7 @@ publishes the section of each released version as its release notes.
 - A refresh took whatever the dongle reported, even another network key,
   with which a lower frame counter: one that reports another network or
   other keys is now ignored, and logged.
+- A dongle that sent XOFF and never XON held libskep's output for ever,
+  with no deadline: the link now fails after 5 seconds of it while frames
+  wait. The dongle's second answer about its EZSP version is now checked
+  against the first.

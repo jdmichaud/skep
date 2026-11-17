@@ -23,6 +23,9 @@ pub const ack_timeout_min = 400;
 pub const ack_timeout_max = 2400;
 /// Consecutive acknowledgement timeouts after which the link fails.
 pub const max_timeouts = 6;
+/// How long the NCP may hold the output with XOFF while frames wait, in milliseconds: it sends
+/// XON once its buffer drains, which takes milliseconds.
+pub const max_pause = 5000;
 /// Received EZSP frames the link holds until the caller takes them.
 pub const receive_slots = 8;
 
@@ -41,6 +44,8 @@ pub const Failure = union(enum) {
   ncp_reset: u8,
   /// `max_timeouts` acknowledgement timeouts in a row.
   ack_timeouts,
+  /// XOFF, then no XON within `max_pause`, while frames waited.
+  paused,
 };
 
 pub const Event = union(enum) {
@@ -100,6 +105,8 @@ pub const Link = struct {
   out_end: usize = 0,
   /// XOFF received: output waits for XON.
   paused: bool = false,
+  /// When the last XOFF came.
+  paused_at: u64 = 0,
 
   // Frames to send, in order of priority.
   send_cancel: bool = false,
@@ -174,6 +181,9 @@ pub const Link = struct {
     for (bytes) |byte| {
       if (byte == ash.xon or byte == ash.xoff) {
         link.paused = byte == ash.xoff;
+        if (link.paused) {
+          link.paused_at = now;
+        }
         link.flow_control_bytes +|= 1;
         if (!link.options.software_flow_control and !link.flow_control_reported) {
           link.flow_control_reported = true;
@@ -214,6 +224,12 @@ pub const Link = struct {
 
   /// When `advance` must next be called, if a timer is running.
   pub fn nextDeadline(link: *const Link) ?u64 {
+    const timer = link.timerDeadline() orelse return link.pauseDeadline();
+    const pause = link.pauseDeadline() orelse return timer;
+    return @min(timer, pause);
+  }
+
+  fn timerDeadline(link: *const Link) ?u64 {
     const started = link.timer_started orelse return null;
     return switch (link.state) {
       .resetting => started + reset_timeout,
@@ -222,9 +238,22 @@ pub const Link = struct {
     };
   }
 
+  /// While XOFF holds output back, until when it may: no frame is sent, so no acknowledgement
+  /// is due, and only this ends a pause that does not.
+  fn pauseDeadline(link: *const Link) ?u64 {
+    if (!link.paused or link.out_start == link.out_end) return null;
+    return switch (link.state) {
+      .resetting, .connected => link.paused_at + max_pause,
+      .idle, .failed => null,
+    };
+  }
+
   /// Runs the timers due at time `now`.
   pub fn advance(link: *Link, now: u64) void {
-    const deadline = link.nextDeadline() orelse return;
+    if (link.pauseDeadline()) |deadline| {
+      if (now >= deadline) return link.fail(.paused);
+    }
+    const deadline = link.timerDeadline() orelse return;
     if (now < deadline) return;
     switch (link.state) {
       .resetting => link.fail(.reset_timeout),
@@ -789,6 +818,20 @@ test "XOFF holds the output until XON" {
   try ncp.expectFrames(&.{ dataFrame(0, 0, false, "command") });
   try ncp.expectNoEvent();
   try testing.expectEqual(2, link.flow_control_bytes);
+}
+
+test "XOFF without XON fails the link once frames wait" {
+  var link: Link = undefined;
+  var ncp = try connected(&link);
+  link.input(&.{ ash.xoff }, 1000);
+  // Nothing waits: nothing is due.
+  try testing.expectEqual(null, link.nextDeadline());
+  try link.send("command");
+  try testing.expectEqual(1000 + max_pause, link.nextDeadline());
+  ncp.advanceTo(1000 + max_pause - 1);
+  try ncp.expectNoEvent();
+  ncp.advanceTo(1000 + max_pause);
+  try ncp.expectEvent(.{ .failed = .paused });
 }
 
 test "XON or XOFF without software flow control is reported once" {
