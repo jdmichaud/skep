@@ -1927,5 +1927,6 @@ test {
   _ = @import("readings.zig");
   _ = @import("driver/driver.zig");
   _ = @import("driver/ezsp/ezsp.zig");
+  _ = @import("ezsp_fuzz.zig");
   std.testing.refAllDecls(@This());
 }
