@@ -159,3 +159,7 @@ publishes the section of each released version as its release notes.
   and stops accepting for a second when out of file descriptors rather
   than spinning; a client may have 8 requests pending, not 16, so that
   two cannot take all of libskep's.
+- skepd saves its state every 5 seconds at most, and before it exits,
+  rather than on every change: each save rewrites and syncs the whole
+  file, which a device causing many changes turned into a stream of
+  writes. SIGHUP stops it cleanly, rather than killing it unsaved.

@@ -51,6 +51,33 @@ const usage =
 /// How long to wait before opening the dongle again, in milliseconds.
 const reopen_delay = 5000;
 
+/// Least time between two saves of the state, in milliseconds.
+const save_interval = 5000;
+
+/// When to save the state: at once after a quiet spell, then at most every `save_interval`. A
+/// burst of changes, such as a device's interview, is one write rather than many: each is the
+/// whole state, synced to the disk, and a device on the network can cause many.
+const Saving = struct {
+  /// A change not saved yet: when to save it.
+  at: ?u64 = null,
+  /// When the state was last saved.
+  last: ?u64 = null,
+
+  fn changed(s: *Saving, now: u64) void {
+    if (s.at != null) return;
+    s.at = if (s.last) |last| @max(now, last + save_interval) else now;
+  }
+
+  /// Whether to save now; if so, it is taken as saved.
+  fn due(s: *Saving, now: u64) bool {
+    const at = s.at orelse return false;
+    if (now < at) return false;
+    s.at = null;
+    s.last = now;
+    return true;
+  }
+};
+
 /// How often to read the frame counters from the dongle into the state, in milliseconds: a dongle
 /// that dies takes at most this long of them with it.
 const refresh_interval = 3600 * 1000;
@@ -116,6 +143,7 @@ const Daemon = struct {
   protocol: Protocol,
   /// When to refresh the state from the dongle next, while the network is up.
   refresh_at: ?u64 = null,
+  saving: Saving = .{},
   baudrate: u32,
   rtscts: bool,
   /// The dongle, while it is open.
@@ -326,7 +354,12 @@ const Daemon = struct {
           d.refresh_at = d.now() + refresh_interval;
         },
         c.SKEP_EVENT_STOPPED => d.stopped(c.skep_event_get_error(event)),
-        c.SKEP_EVENT_STATE_CHANGED => d.saveState(),
+        c.SKEP_EVENT_STATE_CHANGED => {
+          d.saving.changed(d.now());
+          if (d.saving.due(d.now())) {
+            d.saveState();
+          }
+        },
         c.SKEP_EVENT_PERMIT_JOIN => {
           const duration = c.skep_event_get_duration(event);
           if (duration > 0) {
@@ -449,7 +482,16 @@ const Daemon = struct {
     d.open();
     while (true) {
       d.handleEvents();
-      if (d.exit_code) |code| return code;
+      if (d.saving.due(d.now())) {
+        d.saveState();
+      }
+      if (d.exit_code) |code| {
+        // A change not saved yet.
+        if (d.saving.at != null) {
+          d.saveState();
+        }
+        return code;
+      }
       d.writeOutput();
       const server = &d.protocol.server;
       for (server.clients.items) |client| {
@@ -459,6 +501,9 @@ const Daemon = struct {
 
       const current = d.now();
       var deadline: ?u64 = d.reopen_at;
+      if (d.saving.at) |t| {
+        deadline = if (deadline) |other| @min(other, t) else t;
+      }
       if (d.refresh_at) |t| {
         deadline = if (deadline) |other| @min(other, t) else t;
       }
@@ -674,6 +719,8 @@ pub fn main(init: std.process.Init) !u8 {
   var mask = posix.sigemptyset();
   posix.sigaddset(&mask, .INT);
   posix.sigaddset(&mask, .TERM);
+  // The terminal closing: stopped cleanly too, rather than killed before saving the state.
+  posix.sigaddset(&mask, .HUP);
   posix.sigprocmask(linux.SIG.BLOCK, &mask, null);
   const signals = try posix.signalfd(-1, &mask, linux.SFD.CLOEXEC);
 
@@ -721,6 +768,23 @@ fn defaultSocket(arena: std.mem.Allocator, environ: *const std.process.Environ.M
   const runtime = environ.get("XDG_RUNTIME_DIR") orelse return null;
   if (!std.fs.path.isAbsolute(runtime)) return null;
   return std.fmt.allocPrintSentinel(arena, "{s}/skep/skepd.sock", .{ runtime }, 0) catch null;
+}
+
+test "the state is saved at once after a quiet spell, then every few seconds at most" {
+  var saving: Saving = .{};
+  try std.testing.expect(!saving.due(0));
+  saving.changed(1000);
+  try std.testing.expect(saving.due(1000));
+  // A burst of changes: saved once, `save_interval` after the last save.
+  saving.changed(1200);
+  saving.changed(1500);
+  try std.testing.expect(!saving.due(5999));
+  try std.testing.expectEqual(1000 + save_interval, saving.at);
+  try std.testing.expect(saving.due(6000));
+  try std.testing.expect(!saving.due(6001));
+  // Long after: at once again.
+  saving.changed(60_000);
+  try std.testing.expect(saving.due(60_000));
 }
 
 test "values are logged on one line, with what devices say escaped" {

@@ -37,9 +37,9 @@ back. It runs in the foreground, and logs to standard error.
 	not change when other devices are plugged in.
 
 *--state* _path_
-	The state file, which skepd reads at start and replaces on each change. By
-	default _state.json_ in _$STATE_DIRECTORY_ under systemd, in
-	_$XDG_DATA_HOME/skep_ otherwise.
+	The state file, which skepd reads at start and replaces when it changes,
+	every 5 seconds at most, and before it exits. By default _state.json_ in
+	_$STATE_DIRECTORY_ under systemd, in _$XDG_DATA_HOME/skep_ otherwise.
 
 *--socket* _path_
 	The socket clients connect to. By default _skepd.sock_ in
@@ -117,7 +117,7 @@ ExecStart=/opt/skep/bin/skepd --device /dev/%I
 
 # SIGNALS
 
-*SIGTERM*, *SIGINT*
+*SIGTERM*, *SIGINT*, *SIGHUP*
 	Stop cleanly: refresh the state from the dongle, save it, and exit.
 
 # ENVIRONMENT
