@@ -242,8 +242,12 @@ const Daemon = struct {
     d.reopen_at = null;
     const device = d.device orelse return d.start();
     const fd = serial.open(device, d.baudrate, d.rtscts) catch |e| {
-      d.print("{s}: {t}, trying again in {d} s", .{ d.dongle(), e, reopen_delay / 1000 });
-      d.status("{s}: {t}, trying again", .{ d.dongle(), e });
+      const why = switch (e) {
+        error.InUse, error.DeviceBusy => "in use by another program",
+        else => @errorName(e),
+      };
+      d.print("{s}: {s}, trying again in {d} s", .{ d.dongle(), why, reopen_delay / 1000 });
+      d.status("{s}: {s}, trying again", .{ d.dongle(), why });
       d.reopen_at = d.now() + reopen_delay;
       return;
     };
@@ -698,6 +702,9 @@ pub fn main(init: std.process.Init) !u8 {
   var server = Server.open(init.gpa, socket_path, &errno) catch |e| {
     switch (e) {
       error.InUse => try log.print("skepd: {s}: another skepd answers on it\n", .{ socket_path }),
+      error.NotSocket => try log.print("skepd: {s}: exists, and is not a socket\n", .{
+        socket_path,
+      }),
       error.System => try log.print("skepd: {s}: {t}\n", .{ socket_path, errno }),
       else => try log.print("skepd: {s}: {t}\n", .{ socket_path, e }),
     }

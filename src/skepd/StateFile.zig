@@ -110,6 +110,12 @@ pub fn write(path: [:0]const u8, data: []const u8) ?Failure {
   );
   if (linux.errno(rc) != .SUCCESS) return .{ .step = "open", .errno = linux.errno(rc) };
   const fd: linux.fd_t = @intCast(rc);
+  // A temporary file left from before keeps its mode, which the state would take.
+  const mode = linux.errno(linux.fchmod(fd, 0o600));
+  if (mode != .SUCCESS) {
+    _ = linux.close(fd);
+    return .{ .step = "chmod", .errno = mode };
+  }
   var written: usize = 0;
   while (written < data.len) {
     const n = linux.write(fd, data[written..].ptr, data.len - written);
@@ -167,6 +173,12 @@ test "a state written is read back, and replaced as a whole" {
   const path = try std.fmt.bufPrintSentinel(&path_buffer, "{s}/skep/state.json", .{ base }, 0);
   try std.testing.expect(read(std.testing.allocator, path) == .none);
   try std.testing.expectEqual(null, write(path, "{\"first\": 1}"));
+  // A temporary file left from before, readable by all, does not pass its mode on.
+  var temporary_buffer: [4096]u8 = undefined;
+  const temporary = try std.fmt.bufPrintSentinel(&temporary_buffer, "{s}.tmp", .{ path }, 0);
+  const rc = linux.open(temporary, .{ .ACCMODE = .WRONLY, .CREAT = true, .CLOEXEC = true }, 0o644);
+  _ = linux.fchmod(@intCast(rc), 0o644);
+  _ = linux.close(@intCast(rc));
   try std.testing.expectEqual(null, write(path, "{}"));
   const result = read(std.testing.allocator, path);
   defer std.testing.allocator.free(result.data);

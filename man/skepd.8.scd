@@ -34,7 +34,9 @@ back. It runs in the foreground, and logs to standard error.
 
 *--device* _path_
 	The dongle's serial device, best under _/dev/serial/by-id/_, whose names do
-	not change when other devices are plugged in.
+	not change when other devices are plugged in. skepd has it to itself:
+	another skepd waits until it is gone, and other programs cannot open it,
+	unless they run as root.
 
 *--state* _path_
 	The state file, which skepd reads at start and replaces when it changes,
@@ -44,6 +46,8 @@ back. It runs in the foreground, and logs to standard error.
 *--socket* _path_
 	The socket clients connect to. By default _skepd.sock_ in
 	_$RUNTIME_DIRECTORY_ under systemd, in _$XDG_RUNTIME_DIR/skep_ otherwise.
+	skepd replaces a socket left there by a skepd that is gone, and refuses to
+	start if anything else is there.
 
 *--driver* _name_
 	The dongle's driver: *ezsp* (the default), for Silicon Labs EmberZNet

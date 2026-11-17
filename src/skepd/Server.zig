@@ -79,6 +79,8 @@ pub const Client = struct {
 pub const OpenError = error{
   /// Another skepd answers on the socket.
   InUse,
+  /// Something other than a socket is at the path: not skepd's to replace.
+  NotSocket,
   /// A path longer than a Unix socket address holds.
   NameTooLong,
   OutOfMemory,
@@ -103,7 +105,18 @@ pub fn open(gpa: std.mem.Allocator, path: []const u8, errno: *linux.E) OpenError
     if (made != .SUCCESS and made != .EXIST) return fail(errno, made);
   }
   if (answers(&address)) return error.InUse;
-  _ = linux.unlink(owned);
+  // A socket left by a skepd that is gone is replaced; anything else is left alone.
+  var st: linux.Statx = undefined;
+  switch (linux.errno(
+    linux.statx(linux.AT.FDCWD, owned, linux.AT.SYMLINK_NOFOLLOW, .{ .TYPE = true }, &st),
+  )) {
+    .SUCCESS => {
+      if (st.mode & linux.S.IFMT != linux.S.IFSOCK) return error.NotSocket;
+      _ = linux.unlink(owned);
+    },
+    .NOENT => {},
+    else => |e| return fail(errno, e),
+  }
 
   const rc = linux.socket(
     linux.AF.UNIX,
@@ -113,10 +126,13 @@ pub fn open(gpa: std.mem.Allocator, path: []const u8, errno: *linux.E) OpenError
   if (linux.errno(rc) != .SUCCESS) return fail(errno, linux.errno(rc));
   const fd: linux.fd_t = @intCast(rc);
   errdefer _ = linux.close(fd);
-  const bound = linux.errno(linux.bind(fd, @ptrCast(&address), @sizeOf(linux.sockaddr.un)));
-  if (bound != .SUCCESS) return fail(errno, bound);
   // Who may connect is the directory's business: its owner, and its group for a system service.
-  _ = linux.chmod(owned, 0o660);
+  // The socket is made readable and writable by both as it is created: setting its mode after,
+  // by its path, would follow whatever replaced it there meanwhile.
+  const umask = linux.syscall1(.umask, 0o117);
+  const bound = linux.errno(linux.bind(fd, @ptrCast(&address), @sizeOf(linux.sockaddr.un)));
+  _ = linux.syscall1(.umask, umask);
+  if (bound != .SUCCESS) return fail(errno, bound);
   const listening = linux.errno(linux.listen(fd, 16));
   if (listening != .SUCCESS) return fail(errno, listening);
   return .{ .gpa = gpa, .fd = fd, .path = owned };
@@ -403,6 +419,35 @@ test "clients connect, send lines and get answers" {
 
   // Another skepd on the same socket is refused.
   try testing.expectError(error.InUse, open(testing.allocator, path, &errno));
+  // Readable and writable by its owner and group.
+  var st: linux.Statx = undefined;
+  try testing.expectEqual(
+    .SUCCESS,
+    linux.errno(linux.statx(linux.AT.FDCWD, path, 0, .{ .MODE = true }, &st)),
+  );
+  try testing.expectEqual(0o660, st.mode & 0o777);
+}
+
+test "a file that is not a socket is not replaced" {
+  var tmp = testing.tmpDir(.{});
+  defer tmp.cleanup();
+  var buffer: [128]u8 = undefined;
+  const path = try std.fmt.bufPrintSentinel(
+    &buffer,
+    "/tmp/skep-test-{s}/skepd.sock",
+    .{ &tmp.sub_path },
+    0,
+  );
+  defer removeDirectory(path);
+  var dir_buffer: [128]u8 = undefined;
+  const dir = try std.fmt.bufPrintSentinel(&dir_buffer, "{s}", .{ std.fs.path.dirname(path).? }, 0);
+  _ = linux.mkdir(dir, 0o700);
+  const rc = linux.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .CLOEXEC = true }, 0o600);
+  try testing.expectEqual(.SUCCESS, linux.errno(rc));
+  _ = linux.close(@intCast(rc));
+  defer _ = linux.unlink(path);
+  var errno: linux.E = .SUCCESS;
+  try testing.expectError(error.NotSocket, open(testing.allocator, path, &errno));
 }
 
 test "a line too long closes the client" {

@@ -174,3 +174,10 @@ publishes the section of each released version as its release notes.
   with no deadline: the link now fails after 5 seconds of it while frames
   wait. The dongle's second answer about its EZSP version is now checked
   against the first.
+- skepd removed whatever was at its socket's path, a regular file among
+  them, and set the socket's mode by its path, following a symbolic link
+  put there meanwhile: it now refuses a path that holds anything but a
+  socket, and creates the socket with its mode. A temporary state file
+  left from before passed its mode to the state; it is now made 0600.
+- Two skepd could drive one dongle: skepd now has its serial port to
+  itself, with a lock and the port's exclusive mode.
