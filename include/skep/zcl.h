@@ -2,7 +2,7 @@
 /*
  * skep/zcl.h - names for the Zigbee Cluster Library
  *
- * DRAFT for review, like skep.h, which includes this header.
+ * Not released yet, like skep.h, which includes this header.
  *
  * Clusters, attributes and commands, named for use with the requests and
  * events of skep.h, with each attribute's type and unit and each

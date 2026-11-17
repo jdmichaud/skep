@@ -2,8 +2,9 @@
 /*
  * skep.h - the libskep C API
  *
- * DRAFT for review: nothing here is implemented yet, and everything may
- * still change. See doc/design.md for the principles behind it.
+ * Not released yet: everything may still change until version 1.0. What
+ * is planned and not done yet says so. See doc/design.md for the
+ * principles behind it.
  *
  * Conventions
  *
@@ -574,13 +575,16 @@ struct skep_reading {
 int skep_event_get_reading(const skep_event *event, size_t index, struct skep_reading *reading);
 
 /*
- * SKEP_EVENT_COMMAND: the command id, and its arguments, decoded for the
- * commands libskep knows. Devices may leave out optional fields at the
- * end, so there may be fewer arguments than the command has fields.
- * The payload holds the arguments in their ZCL encoding, for any command:
- * it is all there is for a command libskep does not know, since command
- * payloads do not say the types of their fields. It is valid until the
- * event is freed.
+ * SKEP_EVENT_COMMAND: the command id, and its payload: the arguments in
+ * their ZCL encoding, valid until the event is freed. Command payloads do
+ * not say the types of their fields, so only the command's definition can
+ * decode them.
+ *
+ * Not done yet: decoding the arguments of the commands libskep knows,
+ * which skep_event_get_argument_count and skep_event_get_argument will
+ * give; devices may leave out optional fields at the end, so there may be
+ * fewer arguments than the command has fields. Until then both return
+ * -ENOTSUP for every command.
  *
  * Errors of skep_event_get_argument_count and skep_event_get_argument:
  * -ENOTSUP (a command libskep does not know), -EINVAL (index out of
@@ -597,11 +601,12 @@ const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
  * What libskep needs to survive a restart or a move to a new dongle:
  * - the network: channel, PAN ID, extended PAN ID, network key and its
  *   sequence number, and the coordinator's IEEE address;
- * - the security counters: the outgoing network frame counter, the trust
- *   center link key and its frame counter, and the link keys of devices
- *   that have their own, with their counters;
+ * - the security counters: the outgoing network frame counter, and the
+ *   trust center link key and its frame counter. Devices' own link keys,
+ *   which none of the devices supported so far has, are not kept yet;
  * - the devices: addresses, node descriptors, endpoints, clusters,
- *   manufacturer and model, and how far their setup has got.
+ *   manufacturer and model, a light's range of colour temperatures, and
+ *   how far their setup has got.
  * libskep never stores it itself; the caller does, and must keep it
  * private (it holds keys, so mode 0600 for a file).
  *
@@ -668,18 +673,21 @@ int skep_permit_join(skep_ctx *ctx, unsigned seconds, uint32_t *request);
 
 /*
  * libskep presents every device as the ZCL describes it, whatever the
- * device does over the air:
- * - values in events and read results are corrected where the device is
- *   known to report them wrongly, for instance with a wrong scale factor;
- * - vendor protocols that bypass the ZCL, such as Tuya's datapoints, are
+ * device does over the air, so that a new libskep can support new devices
+ * without changes to this API:
+ * - readings, in events and through skep_device_get_readings(), are
+ *   scaled as the device needs, and corrected where it is known to give
+ *   wrong scale factors. Attribute values themselves are as the device
+ *   sent them.
+ * Planned, and not done yet:
+ * - vendor protocols that bypass the ZCL, such as Tuya's datapoints,
  *   translated into standard clusters and attributes, or into virtual
- *   attributes of the vendor's cluster, named in skep/zcl.h.
- *   Reads, writes, reports and commands about them are translated to and
- *   from the device's own protocol;
- * - the endpoints and clusters of a device are libskep's view of it: they
- *   may include clusters the device does not advertise, and leave out
- *   those of a vendor protocol.
- * So a new libskep can support new devices without changes to this API.
+ *   attributes of the vendor's cluster, named in skep/zcl.h, with reads,
+ *   writes, reports and commands about them translated to and from the
+ *   device's own protocol;
+ * - the endpoints and clusters of a device as libskep's view of it,
+ *   which may include clusters the device does not advertise, and leave
+ *   out those of a vendor protocol.
  */
 
 /*
@@ -908,12 +916,17 @@ int skep_unbind(skep_ctx *ctx, const struct skep_target *target, uint64_t deadli
  * uint8 level and a uint16 transition time), with the target's cluster
  * set to SKEP_CLUSTER_ON_OFF or SKEP_CLUSTER_LEVEL. skep/zcl.h lists the
  * commands and their arguments. libskep encodes the arguments in order,
- * as their types say. For the commands it knows, it checks the arguments
- * against the command's fields and encodes them the way the device
- * expects: optional fields at the end may be left out, and libskep leaves
- * out those a device is known to reject.
+ * as their types say, and checks only that each value fits its type: the
+ * caller gives the fields the command has. skep_set_reading() and
+ * skep_set_color() send the commands of lights and plugs with their
+ * fields checked.
  *
- * Errors: -EINVAL (arguments that do not match a command libskep knows).
+ * Not done yet: checking the arguments of the commands libskep knows
+ * against their fields, and leaving out those a device is known to
+ * reject.
+ *
+ * Errors: -EINVAL (a value that does not fit its type), -ENOBUFS
+ * (arguments too long for a frame).
  */
 int skep_send_command(skep_ctx *ctx, const struct skep_target *target, uint8_t command,
                       const struct skep_value *arguments, size_t count, uint64_t deadline,
