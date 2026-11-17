@@ -23,6 +23,10 @@ A _reading_ is what an attribute holds, named and in its unit: a
 temperature in °C rather than the hundredths of a degree the device sends.
 *get* lists those of a device; skep-protocol(7) lists them all.
 
+Text that devices send is printed with control characters, and characters
+that reorder text, escaped: \\n, \\x1b, \\u{202e}. A device cannot use it
+to drive the terminal, nor to forge lines.
+
 # COMMANDS
 
 *version*

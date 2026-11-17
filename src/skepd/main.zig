@@ -9,6 +9,8 @@ const std = @import("std");
 const c = @import("skep_h");
 const serial = @import("serial");
 const Names = @import("Names.zig");
+const printable = @import("printable");
+const values = @import("values.zig");
 const Protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 const StateFile = @import("StateFile.zig");
@@ -541,25 +543,18 @@ const Daemon = struct {
 
 /// A ZCL value, as its type says, followed by its type.
 fn writeValue(w: *Io.Writer, v: c.struct_skep_value) !void {
-  switch (v.type) {
-    c.SKEP_TYPE_INT8,
-    c.SKEP_TYPE_INT16,
-    c.SKEP_TYPE_INT24,
-    c.SKEP_TYPE_INT32,
-    c.SKEP_TYPE_INT64,
-    => try w.print("{d}", .{ v.v.i }),
-    c.SKEP_TYPE_SEMI, c.SKEP_TYPE_SINGLE, c.SKEP_TYPE_DOUBLE => try w.print("{d}", .{ v.v.f }),
-    c.SKEP_TYPE_CHAR_STRING => {
-      const bytes = if (v.v.bytes.data) |data| data[0..v.v.bytes.len] else "";
-      try w.print("\"{s}\"", .{ bytes });
-    },
-    c.SKEP_TYPE_OCTET_STRING, c.SKEP_TYPE_ARRAY, c.SKEP_TYPE_STRUCT, c.SKEP_TYPE_KEY128 => {
-      const bytes = if (v.v.bytes.data) |data| data[0..v.v.bytes.len] else "";
-      try w.print("{x}", .{ bytes });
-    },
-    else => try w.print("{d}", .{ v.v.u }),
+  const t = values.byId(v.type) orelse return w.print("? (type 0x{x:0>2})", .{ v.type });
+  switch (t.kind) {
+    .none => try w.writeAll("null"),
+    .boolean, .unsigned => try w.print("{d}", .{ v.v.u }),
+    .signed => try w.print("{d}", .{ v.v.i }),
+    .float => try w.print("{d}", .{ v.v.f }),
+    // What a device says, escaped: a newline would forge a line of the log.
+    .text => try w.print("\"{f}\"", .{ printable.fmt(values.bytesOf(v)) }),
+    .bytes => try w.print("{x}", .{ values.bytesOf(v) }),
+    .ieee => try w.print("{x:0>16}", .{ v.v.u }),
   }
-  try w.print(" (type 0x{x:0>2})", .{ v.type });
+  try w.print(" ({s})", .{ t.name });
 }
 
 /// The current time in UTC, as ISO 8601 with milliseconds, and a space.
@@ -736,6 +731,26 @@ fn defaultSocket(arena: std.mem.Allocator, environ: *const std.process.Environ.M
   const runtime = environ.get("XDG_RUNTIME_DIR") orelse return null;
   if (!std.fs.path.isAbsolute(runtime)) return null;
   return std.fmt.allocPrintSentinel(arena, "{s}/skep/skepd.sock", .{ runtime }, 0) catch null;
+}
+
+test "values are logged on one line, with what devices say escaped" {
+  var buffer: [96]u8 = undefined;
+  for ([_]struct { type: u8, value: []const u8, logged: []const u8 }{
+    .{
+      .type = c.SKEP_TYPE_CHAR_STRING,
+      .value = "on\nforged",
+      .logged = "\"on\\nforged\" (char_string)",
+    },
+    .{ .type = 0x44, .value = "\x1b[2J", .logged = "\"\\x1b[2J\" (long_char_string)" },
+    .{ .type = 0x43, .value = "\x01\xab", .logged = "01ab (long_octet_string)" },
+  }) |case| {
+    var w: Io.Writer = .fixed(&buffer);
+    try writeValue(&w, .{
+      .type = case.type,
+      .v = .{ .bytes = .{ .data = case.value.ptr, .len = case.value.len } },
+    });
+    try std.testing.expectEqualStrings(case.logged, w.buffered());
+  }
 }
 
 test {

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const StateFile = @import("StateFile.zig");
+const printable = @import("printable");
 const values = @import("values.zig");
 
 const Names = @This();
@@ -33,14 +34,13 @@ pub fn find(n: *const Names, name: []const u8) ?u64 {
   return null;
 }
 
-/// Whether a name can be given: 1 to 64 bytes of UTF-8, without control characters, and not
-/// 16 hexadecimal digits, with or without "0x", which would be taken for an address.
+/// Whether a name can be given: 1 to 64 bytes of UTF-8, without control characters nor
+/// characters that reorder text, and not 16 hexadecimal digits, with or without "0x", which
+/// would be taken for an address.
 pub fn valid(name: []const u8) bool {
   if (name.len == 0 or name.len > max_len) return false;
-  if (!std.unicode.utf8ValidateSlice(name)) return false;
-  for (name) |b| {
-    if (b < 0x20 or b == 0x7f) return false;
-  }
+  // Printed as it is: no controls, nor characters that reorder text.
+  if (!printable.is(name)) return false;
   return values.parseIeee(name) == null;
 }
 
@@ -123,6 +123,9 @@ test "names are checked, kept and read back" {
   try testing.expect(!valid(""));
   try testing.expect(!valid("a\tb"));
   try testing.expect(!valid("\xff"));
+  // Neither C1 controls nor characters that reorder text.
+  try testing.expect(!valid("a\u{9b}b"));
+  try testing.expect(!valid("lamp\u{202e}"));
   try testing.expect(!valid("f44250000d350000"));
   try testing.expect(!valid("0xF44250000D350000"));
   try testing.expect(valid("f44250000d35000"));

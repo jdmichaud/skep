@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const commands = @import("commands.zig");
+const printable = @import("printable");
 
 const Io = std.Io;
 
@@ -11,6 +12,23 @@ const failed = 1;
 
 fn eq(a: []const u8, b: []const u8) bool {
   return std.mem.eql(u8, a, b);
+}
+
+/// A line from skepd, with its strings made printable: what devices say reaches them, and a
+/// terminal would take their controls for its own.
+pub fn parse(a: std.mem.Allocator, line: []const u8) !std.json.Value {
+  var value = try std.json.parseFromSliceLeaky(std.json.Value, a, line, .{});
+  try escape(a, &value);
+  return value;
+}
+
+fn escape(a: std.mem.Allocator, v: *std.json.Value) error{ OutOfMemory }!void {
+  switch (v.*) {
+    .string => |s| v.* = .{ .string = try printable.dupe(a, s) },
+    .array => |list| for (list.items) |*item| try escape(a, item),
+    .object => |map| for (map.values()) |*item| try escape(a, item),
+    else => {},
+  }
 }
 
 /// An answer of skepd's to print: its command, its result, and what printing it needs.
@@ -699,6 +717,20 @@ test "readings are written short, in their units" {
     defer a.free(s);
     try testing.expectEqualStrings(case[1], s);
   }
+}
+
+test "what devices say is escaped before it reaches the terminal" {
+  var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+  defer arena.deinit();
+  const event = try parse(
+    arena.allocator(),
+    "{\"event\": \"attribute\", \"attributes\": [{\"type\": \"char_string\", " ++
+      "\"value\": \"\\u001b]0;pwned\\u0007\\u202e\\nforged\"}]}",
+  );
+  try testing.expectEqualStrings(
+    "\\x1b]0;pwned\\x07\\u{202e}\\nforged",
+    text(field(items(field(event, "attributes"))[0], "value")),
+  );
 }
 
 test "skepd's errors are worded from their data" {

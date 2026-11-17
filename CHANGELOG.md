@@ -146,3 +146,9 @@ publishes the section of each released version as its release notes.
   answers can send; a frame in the legacy EZSP format with more
   parameters than a command has; and answers to commands not sent yet.
   The driver now fails instead.
+- Text from devices reached terminals and skepd's log as it was: their
+  control characters could drive the terminal (clear it, set its title,
+  write the clipboard) or forge lines. skep now escapes the strings skepd
+  sends, and skepd those it logs, which also logged long strings as a
+  pointer. Device names can no longer hold C1 controls or characters
+  that reorder text.

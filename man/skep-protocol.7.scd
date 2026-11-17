@@ -130,8 +130,9 @@ skepd takes them as strings of hexadecimal digits after "0x" too, such as
 
 A device can be named, with *rename*. Wherever a request takes a "device",
 it takes its IEEE address or its name. A name is 1 to 64 bytes of UTF-8,
-without control characters, unique, and never 16 hexadecimal digits, with
-or without "0x", so that it cannot be taken for an address.
+without control characters nor characters that reorder text, unique, and
+never 16 hexadecimal digits, with or without "0x", so that it cannot be
+taken for an address.
 
 ZCL values carry their type:
 

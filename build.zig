@@ -49,8 +49,15 @@ pub fn build(b: *std.Build) !void {
   });
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = serial })).step);
   addProbe(b, test_step, target, optimize, serial);
-  addSkepd(b, test_step, target, optimize, skep_h, serial, library, skep, build_options);
-  addSkep(b, test_step, target, optimize, build_options);
+  // Escaping text from devices, for the programs that print it.
+  const printable = b.createModule(.{
+    .root_source_file = b.path("src/printable.zig"),
+    .target = target,
+    .optimize = optimize,
+  });
+  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = printable })).step);
+  addSkepd(b, test_step, target, optimize, skep_h, serial, printable, library, skep, build_options);
+  addSkep(b, test_step, target, optimize, printable, build_options);
   if (b.isRoot()) {
     try addFormatSteps(b);
     try addManpages(b);
@@ -128,6 +135,7 @@ fn addSkepd(
   optimize: std.lang.Optimize,
   skep_h: *std.Build.Module,
   serial: *std.Build.Module,
+  printable: *std.Build.Module,
   library: *std.Build.Step.Compile,
   skep: *std.Build.Module,
   build_options: *std.Build.Step.Options,
@@ -136,7 +144,11 @@ fn addSkepd(
     .root_source_file = b.path("src/skepd/main.zig"),
     .target = target,
     .optimize = optimize,
-    .imports = &.{.{ .name = "skep_h", .module = skep_h }, .{ .name = "serial", .module = serial }},
+    .imports = &.{
+      .{ .name = "skep_h", .module = skep_h },
+      .{ .name = "serial", .module = serial },
+      .{ .name = "printable", .module = printable },
+    },
   });
   module.linkLibrary(library);
   module.addOptions("build_options", build_options);
@@ -155,6 +167,7 @@ fn addSkepd(
     .imports = &.{
       .{ .name = "skep_h", .module = skep_h },
       .{ .name = "serial", .module = serial },
+      .{ .name = "printable", .module = printable },
       .{ .name = "libskep", .module = skep },
       // libskep's own: a file belongs to one module of a binary.
       .{ .name = "build_options", .module = skep.import_table.get("build_options").? },
@@ -295,12 +308,14 @@ fn addSkep(
   test_step: *std.Build.Step,
   target: std.Build.ResolvedTarget,
   optimize: std.lang.Optimize,
+  printable: *std.Build.Module,
   build_options: *std.Build.Step.Options,
 ) void {
   const module = b.createModule(.{
     .root_source_file = b.path("src/skep/main.zig"),
     .target = target,
     .optimize = optimize,
+    .imports = &.{.{ .name = "printable", .module = printable }},
   });
   module.addOptions("build_options", build_options);
   const skep = b.addExecutable(.{ .name = "skep", .root_module = module });

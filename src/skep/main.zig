@@ -86,7 +86,7 @@ pub fn main(init: std.process.Init) !u8 {
   if (call.global.json and !by_reading) {
     try out.print("{s}\n", .{ line });
   }
-  const response = std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{}) catch {
+  const response = output.parse(arena, line) catch {
     try err.print("skep {s}: skepd answered something that is not JSON\n", .{ call.name });
     return failed;
   };
@@ -217,8 +217,7 @@ fn watch(client: *Client, out: *Io.Writer, err: *Io.Writer, json: bool) !u8 {
     if (json) {
       try out.print("{s}\n", .{ line });
     } else {
-      const message = std.json.parseFromSliceLeaky(std.json.Value, client.arena, line, .{}) catch
-        continue;
+      const message = output.parse(client.arena, line) catch continue;
       if (field(message, "error")) |e| {
         try writeError(err, "watch", e);
         return failed;
@@ -305,7 +304,7 @@ fn readReadings(
     if (call.global.json) {
       try out.print("{s}\n", .{ line });
     }
-    const response = std.json.parseFromSliceLeaky(std.json.Value, a, line, .{}) catch continue;
+    const response = output.parse(a, line) catch continue;
     const id = integer(field(response, "id")) orelse continue;
     if (id < 2 or id - 2 >= answers.len) continue;
     const k: usize = @intCast(id - 2);

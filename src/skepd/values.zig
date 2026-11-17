@@ -143,7 +143,7 @@ pub fn writeValue(
   }
 }
 
-fn bytesOf(v: c.struct_skep_value) []const u8 {
+pub fn bytesOf(v: c.struct_skep_value) []const u8 {
   const data = v.v.bytes.data orelse return &.{};
   return data[0..v.v.bytes.len];
 }
