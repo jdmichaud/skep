@@ -33,7 +33,8 @@ const usage =
   \\  --socket <path>     the socket clients connect to, as skep-protocol(7) says; by default
   \\                      skepd.sock in $RUNTIME_DIRECTORY under systemd, in
   \\                      $XDG_RUNTIME_DIR/skep otherwise
-  \\  --driver <name>     ezsp (default) for Silicon Labs EmberZNet dongles
+  \\  --driver <name>     ezsp (default) for Silicon Labs EmberZNet dongles, or sim, a
+  \\                      simulated network for tests, with no --device
   \\  --log-level <level> error, warning, info (default) or debug
   \\  --replace-network   replace the network the dongle holds with the saved one, or with a
   \\                      new one if no state is saved; its devices must then be paired again
@@ -53,7 +54,8 @@ const reopen_delay = 5000;
 const refresh_interval = 3600 * 1000;
 
 const Options = struct {
-  device: [:0]const u8,
+  /// Required by the drivers that talk to a serial device.
+  device: ?[:0]const u8 = null,
   state: ?[:0]const u8 = null,
   socket: ?[:0]const u8 = null,
   driver: [:0]const u8 = "ezsp",
@@ -64,8 +66,7 @@ const Options = struct {
 };
 
 fn parseOptions(args: []const [:0]const u8) ?Options {
-  var device: ?[:0]const u8 = null;
-  var options: Options = .{ .device = undefined };
+  var options: Options = .{};
   var i: usize = 1;
   while (i < args.len) : (i += 1) {
     const arg = args[i];
@@ -81,7 +82,7 @@ fn parseOptions(args: []const [:0]const u8) ?Options {
     if (i == args.len) return null;
     const value = args[i];
     if (std.mem.eql(u8, arg, "--device")) {
-      device = value;
+      options.device = value;
     } else if (std.mem.eql(u8, arg, "--socket")) {
       options.socket = value;
     } else if (std.mem.eql(u8, arg, "--state")) {
@@ -96,7 +97,6 @@ fn parseOptions(args: []const [:0]const u8) ?Options {
       return null;
     }
   }
-  options.device = device orelse return null;
   return options;
 }
 
@@ -107,7 +107,8 @@ const Daemon = struct {
   timestamps: bool,
   gpa: std.mem.Allocator,
   ctx: *c.skep_ctx,
-  device: [:0]const u8,
+  /// The dongle's serial device, or null for a driver that talks to none: sim, for tests.
+  device: ?[:0]const u8,
   state_path: [:0]const u8,
   /// Clients, and what they asked.
   protocol: Protocol,
@@ -209,13 +210,23 @@ const Daemon = struct {
   /// Opens the dongle and starts libskep, or tries again later.
   fn open(d: *Daemon) void {
     d.reopen_at = null;
-    const fd = serial.open(d.device, d.baudrate, d.rtscts) catch |e| {
-      d.print("{s}: {t}, trying again in {d} s", .{ d.device, e, reopen_delay / 1000 });
-      d.status("{s}: {t}, trying again", .{ d.device, e });
+    const device = d.device orelse return d.start();
+    const fd = serial.open(device, d.baudrate, d.rtscts) catch |e| {
+      d.print("{s}: {t}, trying again in {d} s", .{ d.dongle(), e, reopen_delay / 1000 });
+      d.status("{s}: {t}, trying again", .{ d.dongle(), e });
       d.reopen_at = d.now() + reopen_delay;
       return;
     };
     d.fd = fd;
+    d.start();
+  }
+
+  /// What the log calls the dongle: its device, or the driver's name if it has none.
+  fn dongle(d: *const Daemon) []const u8 {
+    return d.device orelse "the simulated dongle";
+  }
+
+  fn start(d: *Daemon) void {
     const r = c.skep_start(d.ctx);
     if (r != 0) {
       d.print("cannot start: {t}", .{ libskep.errno(r) });
@@ -244,7 +255,7 @@ const Daemon = struct {
         .AGAIN => return,
         .INTR => {},
         else => |e| {
-          d.print("{s}: write: {t}", .{ d.device, e });
+          d.print("{s}: write: {t}", .{ d.dongle(), e });
           return d.lose();
         },
       }
@@ -258,14 +269,14 @@ const Daemon = struct {
     switch (linux.errno(rc)) {
       .SUCCESS => {
         if (rc == 0) {
-          d.print("{s}: closed", .{ d.device });
+          d.print("{s}: closed", .{ d.dongle() });
           return d.lose();
         }
         d.check(c.skep_input(d.ctx, &buffer, rc, d.now()));
       },
       .AGAIN, .INTR => {},
       else => |e| {
-        d.print("{s}: read: {t}", .{ d.device, e });
+        d.print("{s}: read: {t}", .{ d.dongle(), e });
         d.lose();
       },
     }
@@ -406,8 +417,8 @@ const Daemon = struct {
       d.print("stopped", .{});
       d.exit_code = 0;
     } else if (libskep.is(error_code, .NOTCONN)) {
-      d.print("{s}: lost, opening it again in {d} s", .{ d.device, reopen_delay / 1000 });
-      d.status("{s}: lost, opening it again", .{ d.device });
+      d.print("{s}: lost, opening it again in {d} s", .{ d.dongle(), reopen_delay / 1000 });
+      d.status("{s}: lost, opening it again", .{ d.dongle() });
       d.reopen_at = d.now() + reopen_delay;
     } else {
       d.print("stopped: {t}", .{ libskep.errno(error_code) });
@@ -495,7 +506,7 @@ const Daemon = struct {
       }
       if (fds.items[1].revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0 and
         d.fd != null) {
-        d.print("{s}: went away", .{ d.device });
+        d.print("{s}: went away", .{ d.dongle() });
         d.lose();
       }
       // The clients polled are the first ones of the list, which accepting only adds to.
@@ -618,9 +629,16 @@ pub fn main(init: std.process.Init) !u8 {
   }
   var baudrate: c_uint = 0;
   var flow_control: c.enum_skep_flow_control = c.SKEP_FLOW_CONTROL_NONE;
-  const r = c.skep_get_serial_defaults(ctx, &baudrate, &flow_control);
-  if (r != 0) {
-    try log.print("skepd: the {s} driver talks to no serial device\n", .{ options.driver });
+  const serial_port = c.skep_get_serial_defaults(ctx, &baudrate, &flow_control) == 0;
+  if (serial_port and options.device == null) {
+    try log.print("skepd: the {s} driver needs --device\n", .{ options.driver });
+    try log.writeAll(usage);
+    return 2;
+  }
+  if (!serial_port and options.device != null) {
+    try log.print("skepd: the {s} driver talks to no serial device: no --device\n", .{
+      options.driver,
+    });
     return 2;
   }
 

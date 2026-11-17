@@ -47,7 +47,8 @@ back. It runs in the foreground, and logs to standard error.
 
 *--driver* _name_
 	The dongle's driver: *ezsp* (the default), for Silicon Labs EmberZNet
-	dongles such as the Sonoff ZBDongle-E.
+	dongles such as the Sonoff ZBDongle-E; or *sim*, a simulated network that
+	needs no dongle, for tests, which takes no *--device*.
 
 *--log-level* _level_
 	*error*, *warning*, *info* (the default) or *debug*, which logs every frame

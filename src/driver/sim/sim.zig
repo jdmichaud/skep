@@ -288,8 +288,10 @@ pub const Driver = struct {
 
   pub fn outputDone(_: *Driver, _: usize, _: u64) void {}
 
-  pub fn nextDeadline(_: *const Driver) ?u64 {
-    return null;
+  /// Now while it holds events, as the loop of skep.h has it: the application then calls
+  /// skep_advance(), which takes them.
+  pub fn nextDeadline(d: *const Driver) ?u64 {
+    return if (d.pending_len > 0) 0 else null;
   }
 
   pub fn advance(_: *Driver, _: u64) void {}
