@@ -1630,6 +1630,35 @@ test "a device asked to leave is forgotten even if it does not answer" {
   try testing.expectEqual(0, count);
 }
 
+test "time near the end of the application's clock does not overflow" {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  const late = std.math.maxInt(u64) - 10;
+  try testing.expectEqual(0, skep_advance(ctx, late));
+  try openWindow(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  for (0..20) |_| {
+    try testing.expectEqual(0, skep_advance(ctx, late));
+    while (skep_next_event(ctx)) |event| {
+      skep_event_free(event);
+    }
+  }
+  var deadline: u64 = 0;
+  _ = skep_next_deadline(ctx, &deadline);
+}
+
+test "an application that says it wrote more than it was given is not a crash" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "ezsp"));
+  try testing.expectEqual(0, skep_start(ctx));
+  var data: [*]const u8 = undefined;
+  try testing.expect(skep_output(ctx, &data) > 0);
+  skep_output_done(ctx, 1 << 20, 0);
+  try testing.expectEqual(0, skep_output(ctx, &data));
+}
+
 test "a device that asks for answers faster than it gets them goes without some" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&testing.allocator, &devices);

@@ -232,8 +232,8 @@ pub const Link = struct {
   fn timerDeadline(link: *const Link) ?u64 {
     const started = link.timer_started orelse return null;
     return switch (link.state) {
-      .resetting => started + reset_timeout,
-      .connected => started + link.ack_timeout,
+      .resetting => started +| reset_timeout,
+      .connected => started +| link.ack_timeout,
       .idle, .failed => null,
     };
   }
@@ -243,7 +243,7 @@ pub const Link = struct {
   fn pauseDeadline(link: *const Link) ?u64 {
     if (!link.paused or link.out_start == link.out_end) return null;
     return switch (link.state) {
-      .resetting, .connected => link.paused_at + max_pause,
+      .resetting, .connected => link.paused_at +| max_pause,
       .idle, .failed => null,
     };
   }

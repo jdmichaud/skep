@@ -189,3 +189,6 @@ publishes the section of each released version as its release notes.
   tasks; and filter its system calls. The system unit also drops every
   capability and gives it no network: `systemd-analyze security` rates
   it 1.1, from 5.3.
+- libskep aborted when an application passed `skep_output_done()` more
+  bytes than `skep_output()` gave, or a time near the end of its clock:
+  the first now counts what was given, and deadlines saturate.

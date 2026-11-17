@@ -79,7 +79,7 @@ pub const Startup = struct {
   pub fn nextDeadline(s: *const Startup) ?u64 {
     const link_deadline = s.link.nextDeadline();
     const response_deadline: ?u64 = switch (s.step) {
-      .version, .version_again, .version_info => s.sent_at + response_timeout,
+      .version, .version_again, .version_info => s.sent_at +| response_timeout,
       .idle, .resetting, .finished => null,
     };
     if (link_deadline == null) return response_deadline;
@@ -92,7 +92,7 @@ pub const Startup = struct {
     s.process(now);
     switch (s.step) {
       .version, .version_again, .version_info => {
-        if (now >= s.sent_at + response_timeout) {
+        if (now >= s.sent_at +| response_timeout) {
           s.finish(.{ .failed = .response_timeout });
         }
       },

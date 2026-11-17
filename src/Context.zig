@@ -581,7 +581,9 @@ pub fn outputDone(ctx: *Context, len: usize, now: u64) void {
   ctx.now = now;
   // The driver's events wait for the next call that can report a failed allocation.
   if (ctx.driver) |*d| {
-    d.outputDone(len, now);
+    // No more than was given: an application that says otherwise is wrong, but the bytes past
+    // the output are none of the dongle's.
+    d.outputDone(@min(len, d.output().len), now);
   }
 }
 

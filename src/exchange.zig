@@ -226,7 +226,7 @@ fn canHear(ctx: *const Context, d: *const State.Device) bool {
   if (presence.silent) return false;
   if (!d.sleepy()) return true;
   const heard_at = presence.heard_at orelse return false;
-  return ctx.now < heard_at + awake_time;
+  return ctx.now < heard_at +| awake_time;
 }
 
 /// Hands the driver the next frame a device can hear. Returns its tag, or null if there is none.
@@ -269,7 +269,7 @@ pub fn sendDone(ctx: *Context, tag: u8, refused: bool) void {
   const e = &ctx.exchanges.list.items[i];
   if (refused) return miss(ctx, i, err(.IO));
   e.phase = .sent;
-  e.due = ctx.now + delivery_time;
+  e.due = ctx.now +| delivery_time;
 }
 
 /// The frame was delivered, or given up on.
@@ -284,7 +284,7 @@ pub fn delivered(ctx: *Context, tag: u8, ok: bool) void {
   // An answer may have come first.
   if (e.phase == .sent) {
     e.phase = .delivered;
-    e.due = ctx.now + answer_time;
+    e.due = ctx.now +| answer_time;
   }
 }
 

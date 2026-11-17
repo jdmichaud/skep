@@ -331,7 +331,7 @@ pub const Driver = struct {
   pub fn nextDeadline(d: *const Driver) ?u64 {
     if (d.step == .starting) return d.startup.nextDeadline();
     const link_deadline = d.startup.link.nextDeadline();
-    const response_deadline: ?u64 = if (d.answerDue()) d.sent_at + response_timeout else null;
+    const response_deadline: ?u64 = if (d.answerDue()) d.sent_at +| response_timeout else null;
     if (link_deadline == null) return response_deadline;
     if (response_deadline == null) return link_deadline;
     return @min(link_deadline.?, response_deadline.?);
@@ -345,7 +345,7 @@ pub const Driver = struct {
     }
     d.startup.link.advance(now);
     d.process(now);
-    if (d.answerDue() and now >= d.sent_at + response_timeout) {
+    if (d.answerDue() and now >= d.sent_at +| response_timeout) {
       d.fail(.response_timeout);
     }
   }
