@@ -781,7 +781,9 @@ fn unsolicited(ctx: *Context, d: *const State.Device, frame: *const driver_layer
     answer.command = ota_query_next_image_response;
     return exchange.reply(ctx, d, frame, answer, &.{ ota_no_image_available });
   }
-  if (!h.disable_default_response and
+  // The ZCL answers no broadcast with a Default Response: every node that heard it would.
+  if (!frame.broadcast and
+    !h.disable_default_response and
     !(!h.cluster_specific and h.command == zcl.Command.default_response)) {
     exchange.reply(ctx, d, frame, answer, &.{ h.command, zcl.Status.success });
   }

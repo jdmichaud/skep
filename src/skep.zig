@@ -1456,6 +1456,14 @@ test "libskep answers devices on the coordinator's behalf" {
   try testing.expectEqual(0, skep_advance(ctx, 0));
   answer = sim_driver.sent[sim_driver.sent_len - 1];
   try testing.expectEqualSlices(u8, &.{ 0x10, 0xd9, 0x0b, 0x0a, 0x00 }, answer.bytes());
+
+  // The same, broadcast: reported, but not answered.
+  const sent = sim_driver.sent_len;
+  report.broadcast = true;
+  sim_driver.receive(report);
+  skep_event_free((try nextOfType(ctx, .attributes)) orelse return error.TestExpectedReport);
+  try testing.expectEqual(0, skep_advance(ctx, 0));
+  try testing.expectEqual(sent, sim_driver.sent_len);
 }
 
 /// A device joins and is interviewed, every allocation failing in turn.
