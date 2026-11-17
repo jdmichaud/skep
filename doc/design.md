@@ -75,22 +75,27 @@ the daemon `skepd` and the command-line tool `skep`.
   trust center); a driver exchanges APS frames and network management
   requests with it. Dongles of this kind (Silicon Labs EZSP, TI Z-Stack,
   deCONZ, ...) are interchangeable behind the interface.
-- Initial driver operations:
-  - reset the dongle's stack and the link to it;
-  - read the coordinator's IEEE address and the firmware version;
-  - read the network state, form a network (channel, PAN ID, extended
-    PAN ID, network key), resume an existing network;
+- Driver operations, which `driver/driver.zig` defines and each driver
+  implements alike:
+  - reset the dongle's stack and the link to it, and report the
+    coordinator's IEEE address, the firmware, and the network the dongle
+    holds;
+  - form a network (channel, PAN ID, extended PAN ID, keys, frame
+    counters), new or put back from a saved state;
+  - read the network, its keys and frame counters again;
   - permit joining for a number of seconds;
-  - set the manufacturer code in the coordinator's node descriptor (see
-    below);
-  - send an APS frame by unicast, multicast (group) or broadcast;
-  - send a ZDO request and receive its response (interview, binding,
-    leave). Not built on APS frames by libskep, because dongles differ:
-    EZSP carries ZDO in APS frames to endpoint 0, while TI's Z-Stack has
-    a command for each ZDO request;
-  - report events: incoming APS frame, device joined, left or announced,
-    send confirmation, stack status change;
-  - back up and restore the network parameters and keys.
+  - send an APS frame by unicast or broadcast;
+  - report events: incoming APS frame, device joined, rejoined or left,
+    send confirmation and delivery, join window, failure, log message.
+  - ZDO requests are APS frames to endpoint 0, which libskep builds: the
+    EZSP firmware carries them so. A driver for a dongle with a command
+    per ZDO request, as TI's Z-Stack has, translates them.
+  - Planned, not built yet: multicast (group) frames, and setting the
+    manufacturer code of the coordinator's node descriptor (see below).
+- A driver's translation between its dongle's protocol and these
+  operations is its own: the `ezsp` driver's is `driver/ezsp/adapter.zig`,
+  apart from the EZSP protocol code, which the tools under `tools/` use
+  without libskep.
 - These operations were checked against zigbee-herdsman's `Adapter`
   class (v11.2.0), the interface behind its drivers for Silicon Labs, TI,
   deCONZ, ZBOSS and ZiGate dongles. Its other operations are left out of
@@ -104,8 +109,9 @@ the daemon `skepd` and the command-line tool `skep`.
   read from its node descriptor while joining: Aqara (Lumi) devices miss
   features unless it is Lumi's (0x115F). zigbee-herdsman therefore
   switches the code while a device whose IEEE address starts with a Lumi
-  prefix joins (Zigbee2MQTT issue 9274). libskep does the same, with the
-  prefixes and codes in the device tables, through a driver operation.
+  prefix joins (Zigbee2MQTT issue 9274). libskep is to do the same, with
+  the prefixes and codes in the device tables, through a driver
+  operation, once an Aqara device needs it.
 - Drivers may need the serial control lines: some CC2652 dongles only
   leave their bootloader after a pulse on RTS (zigbee-herdsman's Z-Stack
   driver sends one). As libskep does no I/O, it will ask the caller with
