@@ -87,8 +87,8 @@ export fn skep_output(ctx: *Context, data: *[*]const u8) usize {
   return bytes.len;
 }
 
-export fn skep_rotate_network_key(ctx: *Context, request: *u32) c_int {
-  return ctx.rotateNetworkKey(request);
+export fn skep_rotate_network_key(ctx: *Context, how: c_int, request: *u32) c_int {
+  return ctx.rotateNetworkKey(@fromBackingInt(@intCast(how)), request);
 }
 
 export fn skep_output_done(ctx: *Context, len: usize, now: u64) void {
@@ -1688,13 +1688,37 @@ test "a device asked to leave is forgotten even if it does not answer" {
   try testing.expectEqual(0, count);
 }
 
-test "the network key is sent to each device, then switched to" {
+test "broadcast, the network key goes to every device at once, then is switched to" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  _ = try startedOrigin(ctx);
+  while (skep_next_event(ctx)) |event| {
+    skep_event_free(event);
+  }
+  var request: u32 = 0;
+  try testing.expectEqual(err(.INVAL), skep_rotate_network_key(ctx, 7, &request));
+  // No device needed: the key goes out encrypted with the current one.
+  const old = ctx.state.?.network_key;
+  try testing.expectEqual(0, skep_rotate_network_key(ctx, 0, &request));
+  try testing.expectEqual(null, try nextEventType(ctx));
+  try testing.expectEqual(1, ctx.driver.?.sim.keys_broadcast);
+  try testing.expectEqual(0, ctx.driver.?.sim.keys_sent);
+  try testing.expectEqual(0, skep_advance(ctx, Context.key_switch_delay));
+  skep_event_free((try nextOfType(ctx, .state_changed)).?);
+  const done = skep_next_event(ctx).?;
+  defer skep_event_free(done);
+  try testing.expectEqual(0, skep_event_get_error(done));
+  try testing.expect(!std.mem.eql(u8, &old, &ctx.state.?.network_key));
+}
+
+test "per device, the network key is sent to each device, then switched to" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&testing.allocator, &devices);
   defer skep_free(ctx);
   var request: u32 = 0;
   // No device to send it to, from which the dongle learns it too.
-  try testing.expectEqual(err(.NODEV), skep_rotate_network_key(ctx, &request));
+  try testing.expectEqual(err(.NODEV), skep_rotate_network_key(ctx, 1, &request));
   try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
   skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
@@ -1703,9 +1727,9 @@ test "the network key is sent to each device, then switched to" {
   }
   const old = ctx.state.?.network_key;
   const sequence = ctx.state.?.network_key_sequence_number;
-  try testing.expectEqual(0, skep_rotate_network_key(ctx, &request));
+  try testing.expectEqual(0, skep_rotate_network_key(ctx, 1, &request));
   var second: u32 = 0;
-  try testing.expectEqual(err(.NOBUFS), skep_rotate_network_key(ctx, &second));
+  try testing.expectEqual(err(.NOBUFS), skep_rotate_network_key(ctx, 1, &second));
   // Sent to the device, then the switch waits for sleepy ones to collect it.
   try testing.expectEqual(null, try nextEventType(ctx));
   try testing.expectEqual(1, ctx.driver.?.sim.keys_sent);

@@ -42,6 +42,7 @@ pub const FrameId = enum(u16) {
   add_transient_link_key = 0x00af,
   get_value = 0x00aa,
   set_value = 0x00ab,
+  broadcast_next_network_key = 0x0073,
   broadcast_network_key_switch = 0x0074,
   set_radio_power = 0x0099,
   unicast_nwk_key_update = 0x00a9,

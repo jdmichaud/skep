@@ -881,13 +881,17 @@ test "the network gets a new key" {
   try bench.initWith(&devices);
   defer bench.deinit();
   var buffer: [4096]u8 = undefined;
-  bench.ask("{\"id\": 1, \"method\": \"rotate_network_key\"}\n");
+  bench.ask(
+    "{\"id\": 1, \"method\": \"rotate_network_key\", \"params\": {\"per_device\": true}}\n",
+  );
   try expectContains(bench.received(&buffer), "\"code\":\"ENODEV\"");
   bench.ask("{\"id\": 2, \"method\": \"permit_join\", \"params\": {\"seconds\": 254}}\n");
   bench.sim().device(.{ .ieee = 0xf44250000d350000, .nwk = 0x1bce, .kind = .joined });
   bench.pump();
   _ = bench.received(&buffer);
-  bench.ask("{\"id\": 3, \"method\": \"rotate_network_key\"}\n");
+  bench.ask(
+    "{\"id\": 3, \"method\": \"rotate_network_key\", \"params\": {\"per_device\": true}}\n",
+  );
   try testing.expectEqual(0, bench.received(&buffer).len);
   bench.protocol.now += c.SKEP_KEY_SWITCH_DELAY * 1000;
   bench.pump();

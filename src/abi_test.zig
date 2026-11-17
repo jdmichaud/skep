@@ -66,6 +66,11 @@ test "skep.h's limits are libskep's" {
   try std.testing.expectEqual(c.SKEP_KEY_SWITCH_DELAY * 1000, Context.key_switch_delay);
 }
 
+test "skep.h's key rotations are libskep's" {
+  try std.testing.expectEqual(c.SKEP_KEY_BROADCAST, @backingInt(Context.KeyRotation.broadcast));
+  try std.testing.expectEqual(c.SKEP_KEY_PER_DEVICE, @backingInt(Context.KeyRotation.per_device));
+}
+
 /// Each value of a Zig enum, by name, against the header's constant of that name.
 fn expectSameValues(
   comptime Ours: type,

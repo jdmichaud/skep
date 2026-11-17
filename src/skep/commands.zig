@@ -78,7 +78,10 @@ fn above(a: Argument, min: f64) Argument {
 /// An option of a command, after it: --transition <seconds>.
 pub const Option = struct {
   name: []const u8,
-  value: Argument,
+  /// What it takes; nothing for a flag, given or not.
+  value: ?Argument = null,
+  /// What a flag does.
+  help: []const u8 = "",
 };
 
 /// How a command runs.
@@ -149,6 +152,7 @@ pub const Call = struct {
     return &.{};
   }
 
+  /// The value of an option, or "" for a flag, if given.
   pub fn option(c: *const Call, name: []const u8) ?[]const u8 {
     for (c.command.options, 0..) |o, i| {
       if (std.mem.eql(u8, o.name, name)) return c.options[i];
@@ -277,14 +281,21 @@ pub const commands = [_]Command{
     .names = &.{ "rekey" },
     .method = "rotate_network_key",
     .forms = &.{.{ .arguments = &.{} }},
+    .options = &.{.{
+      .name = "--evict",
+      .help = "send it to each device under its own link key instead",
+    }},
     .summary = "give the network a new key",
     .help =
-    \\Gives the network a new, random key: sent to each device, encrypted with its own link key,
-    \\then switched to after 15 seconds. A device that was removed and still listens cannot read
-    \\it: rekey after removing a device you no longer trust. A sleepy device that missed it
-    \\rejoins, or must be paired again.
+    \\Gives the network a new, random key, broadcast encrypted with the current one, then
+    \\switched to after 15 seconds. A sleepy device that missed it rejoins, if it has a link key
+    \\of its own, or must be paired again.
+    \\
+    \\A removed device that still listens gets the new key too, unless --evict sends it to each
+    \\device under that device's own link key; devices without one, which did not obtain one
+    \\when they joined, must then be paired again.
     ,
-    .params = noParams,
+    .params = rekeyParams,
     .render = output.rekey,
   },
   .{
@@ -616,6 +627,8 @@ pub fn parse(a: std.mem.Allocator, args: []const []const u8) error{ OutOfMemory 
       return .version;
     } else if (eq(arg, "--json")) {
       global.json = true;
+    } else if (flagIndex(command, arg)) |index| {
+      given[index] = "";
     } else if (eq(arg, "--socket") or eq(arg, "--timeout") or optionIndex(command, arg) != null) {
       if (i + 1 == args.len) {
         return problem(a, command, name, "{s} needs a value", .{ arg });
@@ -632,7 +645,7 @@ pub fn parse(a: std.mem.Allocator, args: []const []const u8) error{ OutOfMemory 
         global.timeout = value;
       } else {
         const index = optionIndex(command, arg).?;
-        if (try check(a, command.?.options[index].value, value, &.{}, null)) |message| {
+        if (try check(a, command.?.options[index].value.?, value, &.{}, null)) |message| {
           return problem(a, command, name, "{s}: {s}", .{ arg, message });
         }
         given[index] = value;
@@ -703,6 +716,12 @@ fn optionIndex(command: ?*const Command, name: []const u8) ?usize {
     if (eq(o.name, name)) return i;
   }
   return null;
+}
+
+/// The index of the command's flag of that name, an option that takes no value.
+fn flagIndex(command: ?*const Command, name: []const u8) ?usize {
+  const i = optionIndex(command, name) orelse return null;
+  return if (command.?.options[i].value == null) i else null;
 }
 
 const Mismatch = struct {
@@ -932,6 +951,13 @@ fn noParams(_: *Stringify, _: *const Call) Stringify.Error!void {}
 fn deviceParams(j: *Stringify, call: *const Call) Stringify.Error!void {
   try j.objectField("device");
   try j.write(call.get("device").?);
+}
+
+fn rekeyParams(j: *Stringify, call: *const Call) Stringify.Error!void {
+  if (call.option("--evict") != null) {
+    try j.objectField("per_device");
+    try j.write(true);
+  }
 }
 
 fn permitParams(j: *Stringify, call: *const Call) Stringify.Error!void {
@@ -1202,7 +1228,11 @@ pub fn writeSynopsis(
   }
   if (form.options) {
     for (command.options) |o| {
-      try w.print(" [{s} {s}]", .{ o.name, o.value.label });
+      if (o.value) |value| {
+        try w.print(" [{s} {s}]", .{ o.name, value.label });
+      } else {
+        try w.print(" [{s}]", .{ o.name });
+      }
     }
   }
 }
@@ -1236,9 +1266,14 @@ pub fn writeHelp(w: *Io.Writer, command: *const Command) Io.Writer.Error!void {
     }
   }
   for (command.options, 0..) |o, i| {
-    labels[count] = std.fmt.bufPrint(&option_labels[i], "{s} {s}", .{ o.name, o.value.label }) catch
-      o.name;
-    helps[count] = o.value.help;
+    if (o.value) |value| {
+      labels[count] = std.fmt.bufPrint(&option_labels[i], "{s} {s}", .{ o.name, value.label }) catch
+        o.name;
+      helps[count] = value.help;
+    } else {
+      labels[count] = o.name;
+      helps[count] = o.help;
+    }
     count += 1;
   }
   if (count > 0) {
@@ -1302,6 +1337,7 @@ test "command lines become requests" {
   try expectParsed(&.{ "devices" }, "{\"id\":1,\"method\":\"devices\",\"params\":{}}\n");
   try expectParsed(&.{ "permit" }, "\"method\":\"permit_join\",\"params\":{\"seconds\":60}}");
   try expectParsed(&.{ "rekey" }, "\"method\":\"rotate_network_key\",\"params\":{}}");
+  try expectParsed(&.{ "rekey", "--evict" }, "\"params\":{\"per_device\":true}}");
   try expectParsed(
     &.{ "set", "lamp", "level", "50%", "--transition", "1.5" },
     "\"params\":{\"device\":\"lamp\",\"reading\":\"level\",\"value\":50,\"transition\":1.5}}",

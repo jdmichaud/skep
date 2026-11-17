@@ -96,10 +96,15 @@ pub fn rotate_network_key(
   id: i64,
   ps: Params,
 ) Error!void {
-  try p.params(ps, &.{});
+  try p.params(ps, &.{ "per_device" });
+  const per_device = switch (ps.get("per_device") orelse std.json.Value{ .bool = false }) {
+    .bool => |b| b,
+    else => return p.fail("EINVAL", "per_device: true or false", .{}),
+  };
   try p.room(client);
   var req: u32 = 0;
-  const r = c.skep_rotate_network_key(p.ctx, &req);
+  const how: c_uint = if (per_device) c.SKEP_KEY_PER_DEVICE else c.SKEP_KEY_BROADCAST;
+  const r = c.skep_rotate_network_key(p.ctx, how, &req);
   if (libskep.is(r, .NODEV)) return p.fail("ENODEV", "no device to send a new key to", .{});
   if (libskep.is(r, .NOBUFS)) return p.fail("ENOBUFS", "the key is already being changed", .{});
   if (r != 0) return p.failErrno(r);

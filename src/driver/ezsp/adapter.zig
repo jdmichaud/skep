@@ -89,6 +89,10 @@ pub const Adapter = struct {
     a.driver.sendNetworkKey(nwk, ieee, key);
   }
 
+  pub fn broadcastNetworkKey(a: *Adapter, key: [16]u8) void {
+    a.driver.broadcastNetworkKey(key);
+  }
+
   pub fn switchNetworkKey(a: *Adapter) void {
     a.driver.switchNetworkKey();
   }

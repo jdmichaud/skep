@@ -156,7 +156,8 @@ pub const Event = union(enum) {
   refreshed: Held,
   /// `permitJoin` was done: null if it worked, why not otherwise.
   permit_join_done: ?Failure,
-  /// `sendNetworkKey` was done: null if the key went out, why not otherwise.
+  /// `sendNetworkKey` or `broadcastNetworkKey` was done: null if the key went out, why not
+  /// otherwise.
   key_sent: ?Failure,
   /// `switchNetworkKey` was done: null if it worked, why not otherwise.
   key_switched: ?Failure,
@@ -238,6 +239,15 @@ pub const Driver = union(Name) {
   pub fn sendNetworkKey(d: *Driver, nwk: u16, ieee: u64, key: [16]u8) void {
     switch (d.*) {
       inline else => |*driver| driver.sendNetworkKey(nwk, ieee, key),
+    }
+  }
+
+  /// Broadcasts the network key to come, encrypted with the current one: every device that knows
+  /// the current key gets it, one removed that still listens among them. Makes it the trust
+  /// center's next key. Once the network is up. Reports `key_sent`.
+  pub fn broadcastNetworkKey(d: *Driver, key: [16]u8) void {
+    switch (d.*) {
+      inline else => |*driver| driver.broadcastNetworkKey(key),
     }
   }
 

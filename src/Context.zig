@@ -92,6 +92,7 @@ const Op = struct {
   /// The request it ends; null once canceled, and for the refresh `stop` makes.
   request: ?u32,
   seconds: u8 = 0,
+  how: KeyRotation = .broadcast,
 };
 
 /// One join window, one refresh and one key rotation at a time.
@@ -101,17 +102,34 @@ const max_ops = 3;
 /// sleepy ones collect it from their parents when they wake up, and parents hold it 7.68 s.
 pub const key_switch_delay = 15_000;
 
-/// A network key rotation under way: the new key, the device it goes to next, and when to switch
-/// to it once every device was sent it.
+/// How a new network key reaches devices, as `enum skep_key_rotation`.
+pub const KeyRotation = enum(c_int) {
+  /// Broadcast, encrypted with the current network key.
+  broadcast = 0,
+  /// To each device, encrypted with its own link key.
+  per_device = 1,
+  _,
+};
+
+/// A network key rotation under way: the new key, how it goes out, the device it goes to next,
+/// and when to switch to it once it is out.
 const Rekey = struct {
   key: [16]u8,
+  how: KeyRotation,
   next: usize = 0,
-  /// The device it is being sent to.
+  /// The device it is being sent to, and whether it is a second try.
   sending: u64 = 0,
+  retry: bool = false,
+  /// When to send it to the next device, after a refusal.
+  send_at: ?u64 = null,
   /// How many devices took it.
   sent: usize = 0,
   switch_at: ?u64 = null,
 };
+
+/// How long to wait before sending a new key again to a device the dongle refused it for, in
+/// ms: one sleepy device too many can leave the dongle without a buffer.
+const key_retry_delay = 2000;
 
 /// How far libskep sets devices up: the interview, then the bindings and reporting their entries
 /// in devices.zig ask for; or the interview only, the application binding and configuring what it
@@ -286,17 +304,21 @@ pub fn permitJoin(ctx: *Context, seconds: c_uint, request: *u32) c_int {
 }
 
 /// Gives the network a new key, as `skep_rotate_network_key`.
-pub fn rotateNetworkKey(ctx: *Context, request: *u32) c_int {
+pub fn rotateNetworkKey(ctx: *Context, how: KeyRotation, request: *u32) c_int {
   if (ctx.status != .running or ctx.stopping) return err(.NETDOWN);
-  if (ctx.pending(.rekey)) return err(.NOBUFS);
-  // The trust center learns the key from the first device it is sent to: none, and it could not.
-  for (ctx.state.?.devices.items) |d| {
-    if (d.nwk != null) break;
-  } else {
-    return err(.NODEV);
+  switch (how) {
+    .broadcast => {},
+    // The trust center learns the key from the first device it is sent to: none, and it could not.
+    .per_device => for (ctx.state.?.devices.items) |d| {
+      if (d.nwk != null) break;
+    } else {
+      return err(.NODEV);
+    },
+    _ => return err(.INVAL),
   }
+  if (ctx.pending(.rekey)) return err(.NOBUFS);
   const id = ctx.newRequest();
-  ctx.push(.{ .kind = .rekey, .request = id });
+  ctx.push(.{ .kind = .rekey, .request = id, .how = how });
   request.* = id;
   return 0;
 }
@@ -424,8 +446,11 @@ pub fn kick(ctx: *Context) void {
     .rekey => {
       var key: [16]u8 = undefined;
       ctx.random.random().bytes(&key);
-      ctx.rekey = .{ .key = key };
-      ctx.rekeyNext();
+      ctx.rekey = .{ .key = key, .how = op.how };
+      switch (op.how) {
+        .broadcast => d.broadcastNetworkKey(key),
+        else => ctx.rekeyNext(),
+      }
     },
   }
 }
@@ -434,6 +459,10 @@ pub fn kick(ctx: *Context) void {
 /// for sleepy ones to collect it; with none that took it, the network keeps its key.
 fn rekeyNext(ctx: *Context) void {
   const r = &ctx.rekey.?;
+  if (r.how == .broadcast) {
+    r.switch_at = ctx.now +| key_switch_delay;
+    return;
+  }
   const devices = ctx.state.?.devices.items;
   while (r.next < devices.len) {
     const device = devices[r.next];
@@ -660,7 +689,11 @@ pub fn outputDone(ctx: *Context, len: usize, now: u64) void {
 pub fn nextDeadline(ctx: *const Context) ?u64 {
   const d = if (ctx.driver) |*d| d else return null;
   var deadline = d.nextDeadline();
-  for ([_]?u64{ exchange.nextDeadline(ctx), if (ctx.rekey) |r| r.switch_at else null }) |other| {
+  for ([_]?u64{
+    exchange.nextDeadline(ctx),
+    if (ctx.rekey) |r| r.switch_at else null,
+    if (ctx.rekey) |r| r.send_at else null,
+  }) |other| {
     const t = other orelse continue;
     deadline = if (deadline) |earlier| @min(earlier, t) else t;
   }
@@ -671,8 +704,15 @@ pub fn advance(ctx: *Context, now: u64) c_int {
   ctx.now = now;
   if (ctx.driver) |*d| {
     d.advance(now);
-    // The devices had their time to take the new key.
     if (ctx.rekey) |*r| {
+      // A device the dongle refused the key for, again.
+      if (r.send_at) |t| {
+        if (now >= t) {
+          r.send_at = null;
+          ctx.rekeyNext();
+        }
+      }
+      // The devices had their time to take the new key.
       if (r.switch_at) |t| {
         if (now >= t) {
           r.switch_at = null;
@@ -803,16 +843,28 @@ fn process(ctx: *Context) c_int {
       .key_sent => |failure| {
         const r = &ctx.rekey.?;
         if (failure) |f| {
-          const message: driver_layer.Message = .init(
-            "device {x:0>16} was not sent the new network key ({s}): once the network switches, " ++
-              "it rejoins, or is paired again",
-            .{ r.sending, f.message.text() },
-          );
-          ctx.logMessage(.warning, message.text());
+          if (r.how == .broadcast) {
+            ctx.logMessage(.err, f.message.text());
+            ctx.rekeyDone(err(errnoOf(f.kind)));
+          } else if (!r.retry) {
+            // Once more, a moment later.
+            r.retry = true;
+            r.next -= 1;
+            r.send_at = ctx.now +| key_retry_delay;
+          } else {
+            const message: driver_layer.Message = .init(
+              "device {x:0>16} missed the new network key: {s}",
+              .{ r.sending, f.message.text() },
+            );
+            ctx.logMessage(.warning, message.text());
+            r.retry = false;
+            ctx.rekeyNext();
+          }
         } else {
           r.sent += 1;
+          r.retry = false;
+          ctx.rekeyNext();
         }
-        ctx.rekeyNext();
       },
       .key_switched => |failure| {
         if (failure) |f| {

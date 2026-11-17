@@ -65,6 +65,7 @@ pub const Driver = struct {
   /// The network key sent to devices, until the switch, and to how many.
   next_key: ?[16]u8 = null,
   keys_sent: usize = 0,
+  keys_broadcast: usize = 0,
 
   pub fn start(d: *Driver) void {
     d.pending_len = 0;
@@ -94,6 +95,12 @@ pub const Driver = struct {
   pub fn sendNetworkKey(d: *Driver, _: u16, _: u64, key: [16]u8) void {
     d.next_key = key;
     d.keys_sent += 1;
+    d.post(.{ .key_sent = null });
+  }
+
+  pub fn broadcastNetworkKey(d: *Driver, key: [16]u8) void {
+    d.next_key = key;
+    d.keys_broadcast += 1;
     d.post(.{ .key_sent = null });
   }
 

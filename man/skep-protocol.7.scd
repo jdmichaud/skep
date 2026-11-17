@@ -190,11 +190,14 @@ value the hexadecimal digits of its encoding.
 	once the coordinator and the routers have been told.
 	Result: {}
 
-*rotate_network_key*
-	Give the network a new, random key, sent to each device encrypted with its
-	own link key, then switched to after 15 seconds. Done once the dongle holds
-	the new key; "EHOSTUNREACH" if no device took it, in which case the network
-	keeps its own; "ENODEV" if there is no device to send it to.
+*rotate_network_key* {"per_device": _boolean_}
+	Give the network a new, random key, then switch to it after 15 seconds:
+	broadcast, encrypted with the current key; or, with "per_device" true,
+	sent to each device under its own link key, which a removed device that
+	still listens cannot read, nor a device without a link key of its own.
+	Done once the dongle holds the new key; per device, "EHOSTUNREACH" if no
+	device took it, in which case the network keeps its own, and "ENODEV" if
+	there is no device to send it to.
 	Result: {}
 
 *devices*

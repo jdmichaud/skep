@@ -694,12 +694,20 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   announces only itself, from the address it announces.
 - A removed device keeps the network key, and can rejoin with it. The
   network key is rotated on request (`skep_rotate_network_key()`,
-  `skep rekey`), never by libskep on its own: the new key goes to each
-  device libskep knows, encrypted with its own link key, rather than
-  broadcast under the current network key, which every device that knew
-  it could read; then the network switches to it. The trust center learns
-  the key from the first device it is sent to, so with no device there is
-  no rotation.
+  `skep rekey`), never by libskep on its own, in one of two ways. By
+  default, as Zigbee stacks do (Silicon Labs' broadcast plugin, ZBOSS's
+  key switch procedure, TI Z-Stack), the next key is broadcast encrypted
+  with the current one: every device on the network gets it, whatever its
+  link key, and so does a removed device that still listens. Per device
+  (`SKEP_KEY_PER_DEVICE`, `skep rekey --evict`), it goes to each device
+  libskep knows under that device's own link key, which keeps a listening
+  removed device out, but also a device without a link key of its own,
+  which must then be paired again: our ThirdReality plug could not read it
+  when we tried, while the ZL4 bulbs could. Either way, the network
+  switches to the key after 15 seconds, for sleepy devices to collect it
+  from their parents; and per device, the trust center learns the key
+  from the first device it is sent to, so with no device there is no
+  rotation.
 
 ## Milestones
 
