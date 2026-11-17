@@ -109,6 +109,9 @@ pub const Options = struct {
 /// The names of `driver_layer.Level`, in its order.
 const LogLevelName = enum { @"error", warning, info, debug };
 
+/// The longest the join window stays open, in seconds: SKEP_MAX_PERMIT_JOIN.
+pub const max_permit_join = 254;
+
 /// Spare events kept ready, as many as a driver event can lead to, besides the state change,
 /// which takes one after, and log messages, which take none: a failure ends both requests and
 /// stops the context; a device that leaves on request ends the request and is reported gone.
@@ -240,7 +243,7 @@ pub fn start(ctx: *Context) c_int {
 /// Opens the network to new devices, as `skep_permit_join`.
 pub fn permitJoin(ctx: *Context, seconds: c_uint, request: *u32) c_int {
   if (ctx.status != .running or ctx.stopping) return err(.NETDOWN);
-  if (seconds > 254) return err(.INVAL);
+  if (seconds > max_permit_join) return err(.INVAL);
   // One at a time: a second would race the first.
   if (ctx.pending(.permit_join)) return err(.NOBUFS);
   const id = ctx.newRequest();

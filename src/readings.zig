@@ -181,6 +181,13 @@ pub fn read(definition: *const Definition, value: zcl.Value) ?Reading {
   };
 }
 
+/// The longest transition a setting takes, in seconds: 0xfffe tenths, SKEP_MAX_TRANSITION.
+pub const max_transition = 6553.4;
+
+/// Why a setting cannot be made: a value out of the reading's range, or a value, transition or
+/// reading that is not one at all.
+pub const SettingError = error{ OutOfRange, Invalid };
+
 /// The values a settable reading takes, in its unit, within `limits` of the attribute's own if the
 /// device has some, such as a light's range of colour temperatures.
 pub fn range(definition: *const Definition, limits: ?[2]u64) [2]f64 {
@@ -199,27 +206,28 @@ pub fn range(definition: *const Definition, limits: ?[2]u64) [2]f64 {
 }
 
 /// The command that sets a reading to a value in its unit, over a transition in seconds where it
-/// takes one, within `limits` of the attribute's own if the device has some; null for a value or
-/// transition out of range, or a reading that cannot be set.
+/// takes one, within `limits` of the attribute's own if the device has some.
 pub fn setting(
   definition: *const Definition,
   value: f64,
   transition: f64,
   limits: ?[2]u64,
-) ?Command {
-  const set = definition.set orelse return null;
-  if (!std.math.isFinite(value)) return null;
+) SettingError!Command {
+  const set = definition.set orelse return error.Invalid;
+  if (!std.math.isFinite(value)) return error.Invalid;
   switch (set) {
     .on_off => return .{ .id = if (value != 0) 0x01 else 0x00 },
     .move => |m| {
-      const tenths = transitionOf(transition) orelse return null;
-      if (definition.inverse and value <= 0) return null;
+      const tenths = try transitionOf(transition);
+      if (definition.inverse and value <= 0) return error.OutOfRange;
       const raw = @round(
         if (definition.inverse) definition.divisor / value else value * definition.divisor,
       );
-      if (!(raw >= 0 and raw <= @as(f64, @floatFromInt(m.max)))) return null;
+      if (!(raw >= 0 and raw <= @as(f64, @floatFromInt(m.max)))) return error.OutOfRange;
       if (limits) |l| {
-        if (raw < @as(f64, @floatFromInt(l[0])) or raw > @as(f64, @floatFromInt(l[1]))) return null;
+        if (raw < @as(f64, @floatFromInt(l[0])) or raw > @as(f64, @floatFromInt(l[1]))) {
+          return error.OutOfRange;
+        }
       }
       var c: Command = .{ .id = m.command };
       c.add(.unsigned(m.type, @intFromFloat(raw)));
@@ -234,10 +242,10 @@ pub fn setting(
 
 /// The command that sets a light's colour, an sRGB colour as 0xRRGGBB, over a transition in
 /// seconds: Color Control's Move to Color, with the colour's CIE 1931 chromaticity. Its brightness
-/// is left to the level; black, which has none, is null.
-pub fn colorSetting(rgb: u32, transition: f64) ?Command {
-  if (rgb > 0xffffff) return null;
-  const tenths = transitionOf(transition) orelse return null;
+/// is left to the level; black has none, and is invalid.
+pub fn colorSetting(rgb: u32, transition: f64) SettingError!Command {
+  if (rgb > 0xffffff) return error.Invalid;
+  const tenths = try transitionOf(transition);
   // sRGB to linear light, then to CIE 1931 XYZ (IEC 61966-2-1).
   var linear: [3]f64 = undefined;
   for (&linear, [_]u5{ 16, 8, 0 }) |*l, shift| {
@@ -249,7 +257,7 @@ pub fn colorSetting(rgb: u32, transition: f64) ?Command {
   const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   const z = 0.0193 * r + 0.1192 * g + 0.9505 * b;
   const sum = x + y + z;
-  if (sum == 0) return null;
+  if (sum == 0) return error.Invalid;
   var c: Command = .{ .id = 0x07 };
   for ([_]f64{ x / sum, y / sum }) |coordinate| {
     c.add(.unsigned(zcl.Type.uint16, @intFromFloat(@min(@round(coordinate * 65536), 0xfeff))));
@@ -259,8 +267,8 @@ pub fn colorSetting(rgb: u32, transition: f64) ?Command {
 }
 
 /// A transition in seconds, in the tenths of a second commands take; null if it does not fit.
-fn transitionOf(seconds: f64) ?u64 {
-  if (!(seconds >= 0 and seconds <= 6553.4)) return null;
+fn transitionOf(seconds: f64) SettingError!u64 {
+  if (!(seconds >= 0 and seconds <= max_transition)) return error.Invalid;
   return @intFromFloat(@round(seconds * 10));
 }
 
@@ -312,37 +320,41 @@ fn expectArguments(command: Command, id: u8, arguments: []const u64) !void {
 test "readings are set by their clusters' commands, scaled back" {
   const level = find(&.{}, 0x0008, 0x0000).?;
   // 50 %, over 1 s: Move to Level with On/Off.
-  try expectArguments(setting(level, 50, 1, null).?, 0x04, &.{ 127, 10 });
-  try testing.expect(null == setting(level, 101, 0, null));
-  try testing.expect(null == setting(level, -1, 0, null));
-  try testing.expect(null == setting(level, 50, -1, null));
-  try testing.expect(null == setting(level, std.math.nan(f64), 0, null));
+  try expectArguments(try setting(level, 50, 1, null), 0x04, &.{ 127, 10 });
+  try testing.expectError(error.OutOfRange, setting(level, 101, 0, null));
+  try testing.expectError(error.OutOfRange, setting(level, -1, 0, null));
+  try testing.expectError(error.Invalid, setting(level, 50, -1, null));
+  try testing.expectError(error.Invalid, setting(level, std.math.nan(f64), 0, null));
   // 2700 K: 370 mireds.
-  try expectArguments(setting(find(&.{}, 0x0300, 0x0007).?, 2700, 0, null).?, 0x0a, &.{ 370, 0 });
-  try testing.expect(null == setting(find(&.{}, 0x0300, 0x0007).?, 0, 0, null));
+  try expectArguments(try setting(find(&.{}, 0x0300, 0x0007).?, 2700, 0, null), 0x0a, &.{ 370, 0 });
+  try testing.expectError(error.OutOfRange, setting(find(&.{}, 0x0300, 0x0007).?, 0, 0, null));
   // 180°, the shortest way round.
-  try expectArguments(setting(find(&.{}, 0x0300, 0x0000).?, 180, 0, null).?, 0x00, &.{ 127, 0, 0 });
+  try expectArguments(
+    try setting(find(&.{}, 0x0300, 0x0000).?, 180, 0, null),
+    0x00,
+    &.{ 127, 0, 0 },
+  );
   const on = find(&.{}, 0x0006, 0x0000).?;
-  try expectArguments(setting(on, 1, 0, null).?, 0x01, &.{});
-  try expectArguments(setting(on, 0, 0, null).?, 0x00, &.{});
+  try expectArguments(try setting(on, 1, 0, null), 0x01, &.{});
+  try expectArguments(try setting(on, 0, 0, null), 0x00, &.{});
   // A light's own range: 142 to 454 mireds, 2203 to 7042 K.
   const color_temperature = find(&.{}, 0x0300, 0x0007).?;
-  try testing.expect(null == setting(color_temperature, 1000, 0, .{ 142, 454 }));
-  try expectArguments(setting(color_temperature, 2700, 0, .{ 142, 454 }).?, 0x0a, &.{ 370, 0 });
+  try testing.expectError(error.OutOfRange, setting(color_temperature, 1000, 0, .{ 142, 454 }));
+  try expectArguments(try setting(color_temperature, 2700, 0, .{ 142, 454 }), 0x0a, &.{ 370, 0 });
   const kelvins = range(color_temperature, .{ 142, 454 });
   try testing.expectApproxEqAbs(2202.6, kelvins[0], 0.1);
   try testing.expectApproxEqAbs(7042.3, kelvins[1], 0.1);
   try testing.expectEqual(.{ 0, 100 }, range(level, null));
   // Not settable.
-  try testing.expect(null == setting(find(&.{}, 0x0402, 0x0000).?, 20, 0, null));
+  try testing.expectError(error.Invalid, setting(find(&.{}, 0x0402, 0x0000).?, 20, 0, null));
 }
 
 test "colours are set by their chromaticity" {
   // sRGB's red primary, and its white point, D65.
-  try expectArguments(colorSetting(0xff0000, 0.5).?, 0x07, &.{ 0xa3dc, 0x5479, 5 });
-  try expectArguments(colorSetting(0xffffff, 0).?, 0x07, &.{ 0x500e, 0x5439, 0 });
+  try expectArguments(try colorSetting(0xff0000, 0.5), 0x07, &.{ 0xa3dc, 0x5479, 5 });
+  try expectArguments(try colorSetting(0xffffff, 0), 0x07, &.{ 0x500e, 0x5439, 0 });
   // Brightness is the level's: a darker orange has the same chromaticity.
-  try expectArguments(colorSetting(0xff8000, 0).?, 0x07, &.{ 0x8b03, 0x6833, 0 });
-  try testing.expect(null == colorSetting(0x000000, 0));
-  try testing.expect(null == colorSetting(0x1000000, 0));
+  try expectArguments(try colorSetting(0xff8000, 0), 0x07, &.{ 0x8b03, 0x6833, 0 });
+  try testing.expectError(error.Invalid, colorSetting(0x000000, 0));
+  try testing.expectError(error.Invalid, colorSetting(0x1000000, 0));
 }

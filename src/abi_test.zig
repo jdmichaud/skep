@@ -4,6 +4,7 @@
 const std = @import("std");
 const c = @import("skep_h");
 const CAllocator = @import("allocator.zig").CAllocator;
+const Context = @import("Context.zig");
 const Event = @import("Event.zig");
 const readings = @import("readings.zig");
 const requests = @import("requests.zig");
@@ -50,4 +51,11 @@ test "every function skep.h declares is exported" {
     count += 1;
   }
   try std.testing.expect(count > 50);
+}
+
+test "skep.h's limits are libskep's" {
+  try std.testing.expectEqual(c.SKEP_MAX_PERMIT_JOIN, Context.max_permit_join);
+  try std.testing.expectEqual(c.SKEP_MAX_ATTRIBUTES, requests.max_attributes);
+  try std.testing.expectEqual(c.SKEP_MAX_REQUESTS, requests.max_pending);
+  try std.testing.expectEqual(c.SKEP_MAX_TRANSITION, readings.max_transition);
 }

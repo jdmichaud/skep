@@ -19,7 +19,7 @@ pub const version = 1;
 /// Most requests of one client pending at once, so that one client cannot take all of libskep's.
 pub const max_pending_per_client = 16;
 /// Most attributes in a request, as libskep takes.
-const max_attributes = 16;
+const max_attributes = c.SKEP_MAX_ATTRIBUTES;
 
 gpa: std.mem.Allocator,
 io: Io,
@@ -274,8 +274,10 @@ fn request(
         u8,
         ps.get("seconds") orelse return p.fail("EINVAL", "no seconds", .{}),
       ) orelse
-        return p.fail("EINVAL", "seconds: 0 to 254", .{});
-      if (seconds > 254) return p.fail("EINVAL", "seconds: 0 to 254", .{});
+        return p.fail("EINVAL", "seconds: 0 to {d}", .{ c.SKEP_MAX_PERMIT_JOIN });
+      if (seconds > c.SKEP_MAX_PERMIT_JOIN) {
+        return p.fail("EINVAL", "seconds: 0 to {d}", .{ c.SKEP_MAX_PERMIT_JOIN });
+      }
       try p.room(client);
       var req: u32 = 0;
       const r = c.skep_permit_join(p.ctx, seconds, &req);
@@ -525,8 +527,8 @@ fn request(
           .float => |f| f,
           else => return p.fail("EINVAL", "transition: seconds", .{}),
         };
-        if (!(setting.transition >= 0 and setting.transition <= 6553.4)) {
-          return p.fail("EINVAL", "transition: from 0 to 6553.4 seconds", .{});
+        if (!(setting.transition >= 0 and setting.transition <= c.SKEP_MAX_TRANSITION)) {
+          return p.fail("EINVAL", "transition: from 0 to {d} seconds", .{ c.SKEP_MAX_TRANSITION });
         }
       }
       const deadline = try p.deadlineOf(ps.get("timeout"));
@@ -560,10 +562,12 @@ fn request(
         const json = try p.settable(a, setting.device);
         return p.failWith("ENOTSUP", "settable", json, "{s} cannot be set", .{ reading });
       }
-      if (r == -@as(c_int, @backingInt(E.INVAL))) {
-        if (color) return p.fail("EINVAL", "black is no colour", .{});
+      if (r == -@as(c_int, @backingInt(E.RANGE))) {
         const json = try p.rangeOf(a, setting.device, setting.endpoint, reading);
-        return p.failWith("EINVAL", "range", json, "{s} out of range", .{ reading });
+        return p.failWith("ERANGE", "range", json, "{s} out of range", .{ reading });
+      }
+      if (color and r == -@as(c_int, @backingInt(E.INVAL))) {
+        return p.fail("EINVAL", "black is no colour", .{});
       }
       if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .set });

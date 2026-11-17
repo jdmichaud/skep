@@ -57,8 +57,8 @@ publishes the section of each released version as its release notes.
 - Setting readings: `skep_set_reading()` sets a light's or a plug's `on`,
   and a light's `level`, `color_temperature`, `hue` and `saturation`,
   with a transition, and `skep_set_color()` a light's colour, from sRGB. A
-  setting outside what the device takes is refused, and each settable
-  reading says its range: a light's colour temperatures are read during
+  setting outside what the device takes is refused with -ERANGE, and each
+  settable reading says its range: a light's colour temperatures are read during
   its interview and kept in the state. The
   protocol's `set` method does both, and devices' readings say which can
   be set.
@@ -67,6 +67,8 @@ publishes the section of each released version as its release notes.
   sleepy one, `skep read <device> <reading>...` asks the device, as in
   `skep read plug power`, and `skep watch` prints events on short lines
   such as `plug: power 11.2 W`.
+- skep.h gives libskep's limits: SKEP_MAX_PERMIT_JOIN, SKEP_MAX_ATTRIBUTES,
+  SKEP_MAX_REQUESTS and SKEP_MAX_TRANSITION.
 - The `flow-control` option tells libskep how the caller opened the port,
   so that it warns of XON or XOFF on a port using RTS/CTS; skepd sets it
   from `--rtscts`.

@@ -102,6 +102,12 @@ struct skep_allocator {
 /* Size of the seed skep_new() takes. */
 #define SKEP_SEED_SIZE 32
 
+/* Limits, which the functions below check. */
+#define SKEP_MAX_PERMIT_JOIN 254   /* seconds the join window stays open */
+#define SKEP_MAX_ATTRIBUTES 16     /* attributes in a request */
+#define SKEP_MAX_REQUESTS 32       /* requests pending at once */
+#define SKEP_MAX_TRANSITION 6553.4 /* seconds a setting may take */
+
 /*
  * Create a context. Configure it with skep_set_option() and, if a state
  * was saved, skep_import_state(); then call skep_start().
@@ -659,13 +665,14 @@ int skep_import_state(skep_ctx *ctx, const uint8_t *data, size_t len);
 int skep_get_network(skep_ctx *ctx, uint8_t *channel, uint16_t *pan_id, uint64_t *extended_pan_id);
 
 /*
- * Let new devices join for the given number of seconds (at most 254), or
+ * Let new devices join for the given number of seconds (at most
+ * SKEP_MAX_PERMIT_JOIN), or
  * close the window with 0. A request like those under Requests: it ends
  * with SKEP_EVENT_REQUEST_DONE once the dongle has opened or closed the
  * window and told the routers, and SKEP_EVENT_PERMIT_JOIN reports the
  * change.
  *
- * Errors: -ENETDOWN, -EINVAL (more than 254 seconds).
+ * Errors: -ENETDOWN, -EINVAL (more than SKEP_MAX_PERMIT_JOIN seconds).
  */
 int skep_permit_join(skep_ctx *ctx, unsigned seconds, uint32_t *request);
 
@@ -937,7 +944,7 @@ struct skep_setting {
   uint64_t device; /* IEEE address */
   uint8_t endpoint;
   /* In seconds, for what changes gradually, such as a light's level or
-   * colour: 0 for at once, 6553.4 at most. */
+   * colour: 0 for at once, SKEP_MAX_TRANSITION at most. */
   double transition;
   uint32_t reserved[4]; /* for later versions; must be 0 */
 };
@@ -953,8 +960,9 @@ struct skep_setting {
  * set up to report it.
  *
  * Errors: -ENOENT (no such reading on the endpoint), -ENOTSUP (a reading
- * that cannot be set), -EINVAL (a value or transition out of range: the
- * value's range is the reading's min and max), and those of all requests.
+ * that cannot be set), -ERANGE (a value outside the reading's min and
+ * max), -EINVAL (a value that is not a number, or a transition outside 0
+ * to SKEP_MAX_TRANSITION), and those of all requests.
  */
 int skep_set_reading(skep_ctx *ctx, const struct skep_setting *setting, const char *reading,
                      double value, uint64_t deadline, uint32_t *request);
@@ -966,8 +974,8 @@ int skep_set_reading(skep_ctx *ctx, const struct skep_setting *setting, const ch
  * level is set apart, and black, which has no colour, is refused.
  *
  * Errors: -ENOENT (no Color Control on the endpoint), -EINVAL (black, a
- * value above 0xFFFFFF, or a transition out of range), and those of all
- * requests.
+ * value above 0xFFFFFF, or a transition outside 0 to
+ * SKEP_MAX_TRANSITION), and those of all requests.
  */
 int skep_set_color(skep_ctx *ctx, const struct skep_setting *setting, uint32_t rgb,
                    uint64_t deadline, uint32_t *request);

@@ -520,8 +520,8 @@ export fn skep_set_reading(
     return err(.NOENT);
   if (definition.set == null) return err(.OPNOTSUPP);
   const limits = limitsOf(e.device, definition);
-  const command = readings.setting(definition, value, setting.transition, limits) orelse
-    return err(.INVAL);
+  const command = readings.setting(definition, value, setting.transition, limits) catch |why|
+    return settingErr(why);
   return sendSetting(ctx, setting, definition.cluster, command, deadline, request);
 }
 
@@ -537,8 +537,16 @@ export fn skep_set_color(
     .err => |code| return code,
   };
   if (!e.endpoint.hasInput(color_control)) return err(.NOENT);
-  const command = readings.colorSetting(rgb, setting.transition) orelse return err(.INVAL);
+  const command = readings.colorSetting(rgb, setting.transition) catch |why| return settingErr(why);
   return sendSetting(ctx, setting, color_control, command, deadline, request);
+}
+
+/// -ERANGE for a value out of the reading's range, -EINVAL for one that is not a value at all.
+fn settingErr(e: readings.SettingError) c_int {
+  return switch (e) {
+    error.OutOfRange => err(.RANGE),
+    error.Invalid => err(.INVAL),
+  };
 }
 
 const color_control = 0x0300;
@@ -1060,12 +1068,12 @@ test "a bulb's readings and colour are set by its clusters' commands" {
   // What cannot be set is refused at once.
   const never = std.math.maxInt(u64);
   try testing.expectEqual(
-    err(.INVAL),
+    err(.RANGE),
     skep_set_reading(ctx, &setting, "level", 150, never, &request),
   );
   // Warmer than the bulb goes: its range, read at setup, is 2203 to 7042 K.
   try testing.expectEqual(
-    err(.INVAL),
+    err(.RANGE),
     skep_set_reading(ctx, &setting, "color_temperature", 1000, never, &request),
   );
   try testing.expectEqualStrings("color_temperature", std.mem.span(sources[2].name));

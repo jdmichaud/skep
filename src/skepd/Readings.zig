@@ -161,7 +161,7 @@ pub fn advance(r: *Readings, ctx: *c.skep_ctx, now: u64) void {
       continue;
     }
     // Those still without a value: a report may have brought them since.
-    var ids: [16]u16 = undefined;
+    var ids: [c.SKEP_MAX_ATTRIBUTES]u16 = undefined;
     const count = r.missing(ctx, read, &ids);
     var request: u32 = 0;
     if (count > 0) {
@@ -218,7 +218,7 @@ fn busy(r: *const Readings, device: u64) bool {
 }
 
 /// The attributes of a read's cluster whose readings have no value, 16 at most.
-fn missing(r: *Readings, ctx: *c.skep_ctx, read: Read, ids: *[16]u16) usize {
+fn missing(r: *Readings, ctx: *c.skep_ctx, read: Read, ids: *[c.SKEP_MAX_ATTRIBUTES]u16) usize {
   const sources = r.sourcesOf(ctx, read.device) orelse return 0;
   defer r.gpa.free(sources);
   var count: usize = 0;
