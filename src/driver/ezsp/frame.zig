@@ -90,7 +90,9 @@ pub const Frame = struct {
   id: FrameId,
   /// A callback the NCP sent by itself, rather than the response to a command.
   callback: bool,
-  /// Points into the bytes decoded.
+  /// In the legacy format, which only the first version command and its response use.
+  legacy: bool = false,
+  /// Points into the bytes decoded; `max_parameters_len` at most.
   parameters: []const u8,
 };
 
@@ -103,6 +105,8 @@ pub const DecodeError = error{
   Truncated,
   /// Reserved bits of the frame control are set: a format we do not know.
   UnknownFormat,
+  /// Longer parameters than a command can have.
+  TooLong,
 };
 
 pub fn decode(bytes: []const u8) DecodeError!Frame {
@@ -112,14 +116,17 @@ pub fn decode(bytes: []const u8) DecodeError!Frame {
   if (control & control_response == 0) return error.NotFromNcp;
   if (control & control_truncated != 0) return error.Truncated;
   if (!extended) {
+    if (bytes.len - 3 > max_parameters_len) return error.TooLong;
     return .{
       .sequence = bytes[0],
       .id = @fromBackingInt(@intCast(bytes[2])),
       .callback = control & control_async_callback != 0,
+      .legacy = true,
       .parameters = bytes[3..],
     };
   }
   if (bytes[2] & control_reserved_mask != 0) return error.UnknownFormat;
+  if (bytes.len - 5 > max_parameters_len) return error.TooLong;
   return .{
     .sequence = bytes[0],
     .id = @fromBackingInt(@intCast(std.mem.readInt(u16, bytes[3..5], .little))),
@@ -171,6 +178,11 @@ test "reject frames that are not from the NCP, truncated, or of an unknown forma
   try testing.expectError(error.NotFromNcp, decode(&hex("0000010000")));
   try testing.expectError(error.Truncated, decode(&hex("0082010000")));
   try testing.expectError(error.UnknownFormat, decode(&hex("0080050000")));
+  // A legacy frame as long as an ASH DATA frame has more parameters than any command.
+  var long: [220]u8 = @splat(0x41);
+  long[0..3].* = hex("009044");
+  try testing.expectError(error.TooLong, decode(&long));
+  try testing.expectEqual(max_parameters_len, (try decode(long[0..218])).parameters.len);
 }
 
 test "fuzz: decoding survives any frame" {
@@ -180,5 +192,6 @@ test "fuzz: decoding survives any frame" {
 fn fuzzDecode(_: void, smith: *testing.Smith) !void {
   var bytes: [220]u8 = undefined;
   const len = smith.slice(&bytes);
-  _ = decode(bytes[0..len]) catch return;
+  const decoded = decode(bytes[0..len]) catch return;
+  try testing.expect(decoded.parameters.len <= max_parameters_len);
 }

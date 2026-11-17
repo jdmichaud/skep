@@ -141,3 +141,8 @@ publishes the section of each released version as its release notes.
   admitting devices and the well-known link key after the window ended.
 - A device rejoining while a new network was being formed made libskep
   abort.
+- Three kinds of input from the dongle made libskep abort: an answer
+  and a failure in one read, which a dongle resetting right after it
+  answers can send; a frame in the legacy EZSP format with more
+  parameters than a command has; and answers to commands not sent yet.
+  The driver now fails instead.

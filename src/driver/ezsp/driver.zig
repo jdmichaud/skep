@@ -368,10 +368,19 @@ pub const Driver = struct {
     return event;
   }
 
+  /// Whether an operation may start: the driver is idle, or it failed, the operation then being
+  /// dropped. An answer and a failure may come in one read: the application, acting on the
+  /// answer, does not know yet of the failure, which ends everything once it does.
+  fn mayStart(d: *const Driver) bool {
+    if (d.step == .failed) return false;
+    std.debug.assert(d.step == .running);
+    return true;
+  }
+
   /// Forms a network, new or saved, once the driver is ready, leaving the dongle's network first
   /// if it holds one. Reports `formed`, or `failed`.
   pub fn form(d: *Driver, parameters: FormParameters) void {
-    std.debug.assert(d.step == .running);
+    if (!d.mayStart()) return;
     d.form_parameters = parameters;
     if (d.network_up) {
       d.step = .leaving;
@@ -385,7 +394,7 @@ pub const Driver = struct {
   /// Sends a message, once the network is up. Reports `send_done`, then `delivered` once the
   /// message was delivered or given up on.
   pub fn sendMessage(d: *Driver, message: *const Message) void {
-    std.debug.assert(d.step == .running);
+    if (!d.mayStart()) return;
     d.sending_tag = message.tag;
     d.step = .sending;
     const version = d.ready.version.protocol_version;
@@ -425,7 +434,7 @@ pub const Driver = struct {
   /// Reads the network's parameters, keys and frame counters again, once the network is up: the
   /// counters advance with every frame the NCP sends. Reports `refreshed`, or `failed`.
   pub fn refresh(d: *Driver) void {
-    std.debug.assert(d.step == .running);
+    if (!d.mayStart()) return;
     d.readNetwork(.refreshed, d.now);
   }
 
@@ -436,7 +445,7 @@ pub const Driver = struct {
   /// key for any device while the window is open, as zigbee-herdsman does: the trust center's own
   /// key is random, and the network key it sends a device that cannot decrypt it is lost on it.
   pub fn permitJoin(d: *Driver, seconds: u8) void {
-    std.debug.assert(d.step == .running);
+    if (!d.mayStart()) return;
     d.permit_seconds = seconds;
     const version = d.ready.version.protocol_version;
     if (seconds == 0) {
@@ -526,8 +535,11 @@ pub const Driver = struct {
       // does not, the command is due an answer now, which it will not get, so that the
       // response timeout fails the driver rather than leave it waiting with no deadline.
       error.NotConnected => d.sent_unwritten = false,
-      // A command at a time, of the right length.
-      error.QueueFull, error.InvalidLength => unreachable,
+      // The driver sends a command once the last is answered, which the NCP acknowledges first:
+      // a full queue is an NCP answering commands it was not sent.
+      error.QueueFull => d.fail(.bad_response),
+      // Of the right length.
+      error.InvalidLength => unreachable,
     };
   }
 
@@ -548,6 +560,8 @@ pub const Driver = struct {
 
   fn receive(d: *Driver, bytes: []const u8, now: u64) void {
     const received = frame.decode(bytes) catch return d.fail(.bad_response);
+    // The version is agreed: the legacy format is over.
+    if (received.legacy) return d.fail(.bad_response);
     const version = d.ready.version.protocol_version;
     if (received.callback) {
       var copy: Callback = .{
@@ -1851,6 +1865,59 @@ test "a link failure that comes with the startup's last answer fails the driver"
     driver.advance(now);
   }
   return error.TestExpectedFailure;
+}
+
+test "a frame in the legacy format once the version is agreed fails the driver" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, true);
+  // poll_handler, as long as an ASH DATA frame allows.
+  var long: [ash.max_data_len]u8 = @splat(0x41);
+  long[0..3].* = hex("009044");
+  ncp.respond(&long);
+  try testing.expect(skipCallbacks(&driver).? == .failed);
+}
+
+test "an NCP that answers commands it was not sent fails the driver" {
+  var driver: Driver = undefined;
+  var ncp = try started(&driver);
+  const first = ncp.take() orelse return error.TestExpectedCommand;
+  // The answers to the configuration, the endpoint and the policies, each as if its command had
+  // come: the driver sends each next one, which the NCP never acknowledges.
+  var ids: [configuration.len + 1 + policies.len]u8 = undefined;
+  @memset(ids[0..configuration.len], @backingInt(frame.FrameId.set_configuration_value));
+  ids[configuration.len] = @backingInt(frame.FrameId.add_endpoint);
+  @memset(ids[configuration.len + 1..], @backingInt(frame.FrameId.set_policy));
+  var sequence = first[0];
+  for (ids) |id| {
+    ncp.respond(&.{ sequence, 0x80, 0x01, id, 0x00, 0x00 });
+    sequence +%= 1;
+  }
+  try testing.expect(skipCallbacks(&driver).? == .failed);
+}
+
+test "operations asked for once the driver failed are dropped" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, true);
+  ncp.send(.{ .err = .{ .version = 2, .code = 0x51 } });
+  // As an application would, acting on an earlier event before it takes the failure.
+  driver.permitJoin(60);
+  driver.refresh();
+  var message: Message = .{
+    .address = 0x7173,
+    .aps = .{
+      .profile = 0x0104,
+      .cluster = 0x0006,
+      .source_endpoint = 1,
+      .destination_endpoint = 1,
+      .options = command.ApsFrame.unicast_options,
+    },
+    .len = 3,
+  };
+  @memcpy(message.payload[0..3], &hex("010001"));
+  driver.sendMessage(&message);
+  driver.form(form_parameters);
+  try testing.expectEqual(null, ncp.take());
+  try testing.expect(skipCallbacks(&driver).? == .failed);
 }
 
 test "open the join window and see a device join" {
