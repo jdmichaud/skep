@@ -192,3 +192,6 @@ publishes the section of each released version as its release notes.
 - libskep aborted when an application passed `skep_output_done()` more
   bytes than `skep_output()` gave, or a time near the end of its clock:
   the first now counts what was given, and deadlines saturate.
+- skep tried the default sockets when nothing answered on the one given
+  by `--socket` or `$SKEP_SOCKET`, and so could act on another network
+  than the one meant: a socket given is now the only one tried.

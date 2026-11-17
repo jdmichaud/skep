@@ -121,8 +121,9 @@ thermometre temperature_ or _skep read thermometre temperature --timeout
 600_. An argument that starts with -- goes after a *--*.
 
 *--socket* _path_
-	skepd's socket. By default, _$SKEP_SOCKET_, then
-	_$XDG_RUNTIME_DIR/skep/skepd.sock_, then _/run/skep/skepd.sock_.
+	skepd's socket. By default, _$SKEP_SOCKET_; without it,
+	_$XDG_RUNTIME_DIR/skep/skepd.sock_, then _/run/skep/skepd.sock_. A socket
+	given, by this option or by _$SKEP_SOCKET_, is the only one tried.
 
 *--json*
 	Print skepd's answers, and events, as it sends them: JSON, one per line.

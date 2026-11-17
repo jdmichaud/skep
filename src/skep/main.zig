@@ -121,12 +121,11 @@ fn connect(
   err: *Io.Writer,
 ) !linux.fd_t {
   var paths: std.ArrayList([]const u8) = .empty;
-  if (given) |path| {
+  // A socket asked for is the only one tried: falling back to another would act on another
+  // network than the one meant.
+  if (given orelse environ.get("SKEP_SOCKET")) |path| {
     try paths.append(arena, path);
   } else {
-    if (environ.get("SKEP_SOCKET")) |path| {
-      try paths.append(arena, path);
-    }
     if (environ.get("XDG_RUNTIME_DIR")) |dir| {
       try paths.append(arena, try std.fmt.allocPrint(arena, "{s}/skep/skepd.sock", .{ dir }));
     }
@@ -362,6 +361,57 @@ fn readReadings(
   }
   try showRows(out, rows);
   return status;
+}
+
+test "a socket asked for is the only one tried" {
+  var tmp = std.testing.tmpDir(.{});
+  defer tmp.cleanup();
+  var buffer: [128]u8 = undefined;
+  // In /tmp: the build directory may be on a filesystem without sockets, such as sshfs.
+  const dir = try std.fmt.bufPrintSentinel(&buffer, "/tmp/skep-test-{s}", .{ &tmp.sub_path }, 0);
+  _ = linux.mkdir(dir, 0o700);
+  defer _ = linux.rmdir(dir);
+  var skep_buffer: [160]u8 = undefined;
+  const skep_dir = try std.fmt.bufPrintSentinel(&skep_buffer, "{s}/skep", .{ dir }, 0);
+  _ = linux.mkdir(skep_dir, 0o700);
+  defer _ = linux.rmdir(skep_dir);
+  // A skepd at the default path.
+  var path_buffer: [192]u8 = undefined;
+  const path = try std.fmt.bufPrintSentinel(&path_buffer, "{s}/skepd.sock", .{ skep_dir }, 0);
+  const listener: linux.fd_t = @intCast(
+    linux.socket(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0),
+  );
+  defer _ = linux.close(listener);
+  var address: linux.sockaddr.un = .{ .path = @splat(0) };
+  @memcpy(address.path[0..path.len], path);
+  try std.testing.expectEqual(
+    .SUCCESS,
+    linux.errno(linux.bind(listener, @ptrCast(&address), @sizeOf(linux.sockaddr.un))),
+  );
+  defer _ = linux.unlink(path);
+  try std.testing.expectEqual(.SUCCESS, linux.errno(linux.listen(listener, 1)));
+
+  var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+  defer arena.deinit();
+  var environ: std.process.Environ.Map = .init(std.testing.allocator);
+  defer environ.deinit();
+  try environ.put("XDG_RUNTIME_DIR", dir);
+  var err_buffer: [256]u8 = undefined;
+  var err: Io.Writer = .fixed(&err_buffer);
+  // Found by default.
+  _ = linux.close(try connect(arena.allocator(), &environ, null, &err));
+  // Not when another is asked for, by the environment or by --socket.
+  try environ.put("SKEP_SOCKET", "/tmp/skep-test-none/skepd.sock");
+  try std.testing.expectError(error.Unreachable, connect(arena.allocator(), &environ, null, &err));
+  try std.testing.expectEqualStrings(
+    "skep: no skepd socket at /tmp/skep-test-none/skepd.sock; is skepd running?\n",
+    err.buffered(),
+  );
+  err.end = 0;
+  try std.testing.expectError(
+    error.Unreachable,
+    connect(arena.allocator(), &environ, "/tmp/skep-test-none/other.sock", &err),
+  );
 }
 
 test {

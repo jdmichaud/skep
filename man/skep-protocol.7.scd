@@ -17,7 +17,7 @@ a newline, and contains none.
 
 skepd listens on _$RUNTIME_DIRECTORY/skepd.sock_ (_/run/skep/skepd.sock_) when
 run as a system service, on _$XDG_RUNTIME_DIR/skep/skepd.sock_ otherwise.
-Clients look for it in _$SKEP_SOCKET_, then at those two paths.
+Clients look for it in _$SKEP_SOCKET_, or at those two paths without it.
 
 Whoever can connect has full control of the network: opening it to new
 devices, removing devices, sending them commands. Who can is decided by the
