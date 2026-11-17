@@ -252,7 +252,7 @@ pub const Driver = union(Name) {
   }
 
   /// Opens the network to new devices for `seconds`, or closes it with 0, once the network is up.
-  /// The routers are not told yet: that takes ZDO, which comes with device interviews.
+  /// The dongle only opens itself: libskep tells the routers, with a broadcast.
   pub fn permitJoin(d: *Driver, seconds: u8) void {
     switch (d.*) {
       inline else => |*driver| driver.permitJoin(seconds),

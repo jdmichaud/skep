@@ -816,15 +816,7 @@ fn onReady(ctx: *Context, r: driver_layer.Ready) void {
   ctx.ieee = r.ieee;
   if (ctx.state) |*s| return ctx.readyWithState(s, r);
   if (r.network) |held| {
-    const network = held.network;
-    if (!ctx.options.replace_network) {
-      const message: driver_layer.Message = .init(
-        "resumed the dongle's network: channel {d}, PAN ID 0x{x:0>4} ({s})",
-        .{ network.channel, network.pan_id, r.firmware.text() },
-      );
-      ctx.logMessage(.info, message.text());
-      return ctx.started(held, .resumed);
-    }
+    if (!ctx.options.replace_network) return ctx.resumed(held, r);
   }
   const f = ctx.newNetwork();
   const message: driver_layer.Message = if (r.network) |old|
@@ -838,18 +830,23 @@ fn onReady(ctx: *Context, r: driver_layer.Ready) void {
   ctx.driver.?.form(f);
 }
 
+/// The network the dongle holds is the one to run.
+fn resumed(ctx: *Context, held: driver_layer.Held, r: driver_layer.Ready) void {
+  const message: driver_layer.Message = .init(
+    "resumed the dongle's network: channel {d}, PAN ID 0x{x:0>4} ({s})",
+    .{ held.network.channel, held.network.pan_id, r.firmware.text() },
+  );
+  ctx.logMessage(.info, message.text());
+  ctx.started(held, .resumed);
+}
+
 /// The dongle is ready, and a state says which network to run: the dongle's if it is the same,
 /// the state's put back otherwise, but only over another network if replace-network allows.
 fn readyWithState(ctx: *Context, s: *State, r: driver_layer.Ready) void {
   if (r.network) |held| {
     const same_network = held.network.extended_pan_id == s.network.extended_pan_id;
     if (same_network and std.mem.eql(u8, &held.security.network_key, &s.network_key)) {
-      const message: driver_layer.Message = .init(
-        "resumed the dongle's network: channel {d}, PAN ID 0x{x:0>4} ({s})",
-        .{ held.network.channel, held.network.pan_id, r.firmware.text() },
-      );
-      ctx.logMessage(.info, message.text());
-      return ctx.started(held, .resumed);
+      return ctx.resumed(held, r);
     }
     if (!ctx.options.replace_network) {
       const message: driver_layer.Message = if (same_network)
