@@ -167,3 +167,6 @@ publishes the section of each released version as its release notes.
   Default Response, or for a firmware image, one sent at a time: a device
   sending them fast grew the queue without end. One reply waits per
   device at most; the device goes without the others.
+- A refresh took whatever the dongle reported, even another network key,
+  with which a lower frame counter: one that reports another network or
+  other keys is now ignored, and logged.

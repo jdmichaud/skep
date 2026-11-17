@@ -190,6 +190,16 @@ pub fn held(s: *const State, trust_center_link_key: [16]u8) driver.Held {
 /// A key's frame counter never goes down: devices remember the highest they saw, so a dongle
 /// that counts from lower, having refused to carry on from the saved counter, does not lower
 /// what the next restore must pass.
+/// Whether the dongle holds the state's network, with the same keys: the network a refresh may
+/// only read again, its counters having moved.
+pub fn holds(s: *const State, h: driver.Held) bool {
+  if (s.trust_center_link_key) |key| {
+    if (!std.mem.eql(u8, &key, &h.security.trust_center_link_key)) return false;
+  }
+  return s.network.extended_pan_id == h.network.extended_pan_id and
+    std.mem.eql(u8, &s.network_key, &h.security.network_key);
+}
+
 pub fn update(s: *State, coordinator_ieee: u64, h: driver.Held) bool {
   const before = s.*;
   const same_network_key = std.mem.eql(u8, &s.network_key, &h.security.network_key);

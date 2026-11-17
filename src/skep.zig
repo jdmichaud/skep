@@ -1006,6 +1006,24 @@ test "a join window that ends on its own is closed on the trust center too" {
   skep_event_free((try nextOfType(ctx, .stopped)).?);
 }
 
+test "a refresh cannot replace the network's keys" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  _ = try startedOrigin(ctx);
+  const key = ctx.state.?.network_key;
+  const security = &ctx.driver.?.sim.network.?.security;
+  security.network_key = @splat(0xee);
+  security.network_frame_counter = 5;
+  var request: u32 = 0;
+  try testing.expectEqual(0, skep_refresh_state(ctx, &request));
+  const logged = (try nextOfType(ctx, .log)) orelse return error.TestExpectedLog;
+  defer skep_event_free(logged);
+  try testing.expect(std.mem.indexOf(u8, std.mem.span(logged.log()), "refresh ignored") != null);
+  skep_event_free((try nextOfType(ctx, .request_done)).?);
+  try testing.expectEqual(key, ctx.state.?.network_key);
+}
+
 test "a device that rejoins before the network is known is not a crash" {
   const ctx = try testContext(&testing.allocator);
   defer skep_free(ctx);

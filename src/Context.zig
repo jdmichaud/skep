@@ -639,9 +639,19 @@ fn process(ctx: *Context) c_int {
       .formed => |held| ctx.onFormed(held),
       .refreshed => |held| {
         const op = ctx.done();
-        ctx.network = held.network;
-        if (ctx.state.?.update(ctx.ieee, held)) {
-          ctx.stateChanged();
+        const s = &ctx.state.?;
+        if (!s.holds(held)) {
+          // The network runs on: the dongle cannot have replaced it, nor its keys, which libskep
+          // keeps, and their counters with them.
+          ctx.logMessage(
+            .err,
+            "the dongle reports another network or other keys than it runs: refresh ignored",
+          );
+        } else {
+          ctx.network = held.network;
+          if (s.update(ctx.ieee, held)) {
+            ctx.stateChanged();
+          }
         }
         if (op.request) |id| {
           ctx.flushStateChanged();
