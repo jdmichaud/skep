@@ -506,8 +506,10 @@ pub const Driver = struct {
     d.sent_at = now;
     d.sent_unwritten = true;
     d.startup.link.send(frame.encode(&out, d.sequence, id, parameters)) catch |err| switch (err) {
-      // The link failed after the frame being handled arrived: its event comes next.
-      error.NotConnected => {},
+      // The link failed after the frame being handled arrived: its event comes next. In case it
+      // does not, the command is due an answer now, which it will not get, so that the
+      // response timeout fails the driver rather than leave it waiting with no deadline.
+      error.NotConnected => d.sent_unwritten = false,
       // A command at a time, of the right length.
       error.QueueFull, error.InvalidLength => unreachable,
     };
@@ -1076,6 +1078,7 @@ pub const Driver = struct {
 const testing = std.testing;
 const hex = test_ncp.hex;
 const Ncp = test_ncp.Ncp(Driver);
+const ash = @import("ash.zig");
 
 /// The next event that is not a callback logged for debugging.
 fn skipCallbacks(driver: *Driver) ?Event {
@@ -1704,6 +1707,44 @@ test "a link failure after the start is reported" {
     link_layer.Failure{ .ncp_error = 0x51 },
     skipCallbacks(&driver).?.failed.link,
   );
+}
+
+test "a link failure that comes with the startup's last answer fails the driver" {
+  var driver: Driver = .init(.{ .software_flow_control = true });
+  var ncp: Ncp = .{ .host = &driver };
+  try ncp.connect();
+  try ncp.expectCommand(&hex("00000013"));
+  ncp.respond(&(hex("008000") ++ .{ 8 } ++ hex("02306a")));
+  try ncp.expectCommand(&(hex("0100010000") ++ .{ 8 }));
+  ncp.respond(&(hex("0180010000") ++ .{ 8 } ++ hex("02306a")));
+  try ncp.expectCommand(&hex("020001aa0011"));
+  // The answer to the firmware version, which ends the startup, then an ERROR frame, in one
+  // read.
+  var bytes: [2 * ash.max_encoded_len]u8 = undefined;
+  const last = try ash.encode(
+    .{
+      .data = .{
+        .frame_number = ncp.frm_tx,
+        .ack_number = ncp.frm_rx,
+        .retransmitted = false,
+        .payload = &hex("028001aa0000" ++ "07" ++ "2901" ++ "060a03" ++ "00" ++ "aa"),
+      },
+    },
+    bytes[0..ash.max_encoded_len],
+  );
+  const failure = try ash.encode(.{ .err = .{ .version = 2, .code = 0x51 } }, bytes[last.len..]);
+  driver.input(bytes[0..last.len + failure.len], 0);
+  // The driver goes on with its configuration, on a link that failed: it fails, or it at least
+  // keeps a deadline, rather than waiting for ever.
+  var now: u64 = 0;
+  while (now < 60_000) : (now += 1000) {
+    while (driver.nextEvent()) |event| {
+      if (event == .failed) return;
+    }
+    _ = driver.nextDeadline() orelse return error.TestExpectedDeadline;
+    driver.advance(now);
+  }
+  return error.TestExpectedFailure;
 }
 
 test "open the join window and see a device join" {

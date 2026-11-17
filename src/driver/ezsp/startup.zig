@@ -106,8 +106,10 @@ pub const Startup = struct {
   }
 
   fn process(s: *Startup, now: u64) void {
-    while (s.link.nextEvent()) |event| {
-      if (s.step == .finished) continue;
+    // Until it is finished: what the link reports after, its failure among them, is the
+    // driver's to take.
+    while (s.step != .finished) {
+      const event = s.link.nextEvent() orelse return;
       switch (event) {
         .connected => {
           var out: [4]u8 = undefined;
