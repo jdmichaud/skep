@@ -56,8 +56,44 @@ pub fn build(b: *std.Build) !void {
     .optimize = optimize,
   });
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = printable })).step);
-  addSkepd(b, test_step, target, optimize, skep_h, serial, printable, library, skep, build_options);
+  const skepd_tested =
+    addSkepd(
+      b,
+      test_step,
+      target,
+      optimize,
+      skep_h,
+      serial,
+      printable,
+      library,
+      skep,
+      build_options,
+    );
   addSkep(b, test_step, target, optimize, printable, build_options);
+  addFuzzStep(
+    b,
+    &.{
+      .{
+        .module = tested,
+        .tests = &.{
+          "fuzz: libskep survives whatever the dongle sends",
+          "fuzz: ZDO responses are parsed safely",
+          "fuzz: reading survives any document, and what it reads is written back the same",
+          "fuzz: frames and values from devices are parsed safely",
+          "fuzz: decoding survives any frame",
+          "fuzz: the link survives any NCP",
+          "fuzz: the decoder survives any input",
+          "fuzz: decoding gives back what was encoded",
+          "fuzz: parsing survives any parameters",
+        },
+      },
+      .{
+        .module = skepd_tested,
+        .tests = &.{ "fuzz: whatever a client sends, skepd answers in JSON" },
+      },
+      .{ .module = printable, .tests = &.{ "fuzz: what is escaped prints as it is" } },
+    },
+  );
   if (b.isRoot()) {
     try addFormatSteps(b);
     try addManpages(b);
@@ -139,7 +175,7 @@ fn addSkepd(
   library: *std.Build.Step.Compile,
   skep: *std.Build.Module,
   build_options: *std.Build.Step.Options,
-) void {
+) *std.Build.Module {
   const module = b.createModule(.{
     .root_source_file = b.path("src/skepd/main.zig"),
     .target = target,
@@ -174,6 +210,27 @@ fn addSkepd(
     },
   });
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = tested })).step);
+  return tested;
+}
+
+/// The fuzz tests of a module, by name.
+const Fuzzed = struct {
+  module: *std.Build.Module,
+  tests: []const []const u8,
+};
+
+/// `zig build fuzz --fuzz[=N] -Drelease` fuzzes every fuzz test at once, each in a process of
+/// its own: the fuzzer runs one process per run of a test binary, which fuzzes its tests in turn,
+/// and refuses two processes on one test. Each test is a binary of its own, filtered to it. A
+/// fuzz test missing from the list is fuzzed by `zig build test --fuzz` only.
+fn addFuzzStep(b: *std.Build, fuzzed: []const Fuzzed) void {
+  const step = b.step("fuzz", "Fuzz every fuzz test at once (with --fuzz and -Drelease)");
+  for (fuzzed) |f| {
+    for (f.tests) |name| {
+      const binary = b.addTest(.{ .root_module = f.module, .filters = &.{ name } });
+      step.dependOn(&b.addRunArtifact(binary).step);
+    }
+  }
 }
 
 /// `zig build probe -- <device>` resets a Silicon Labs dongle and reports its versions: the

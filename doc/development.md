@@ -27,6 +27,12 @@
   iterations; without a limit it runs until stopped. Fuzz in ReleaseSafe:
   with Zig 0.17, fuzzing a debug build fails with "corrupted coverage
   file ... pcs_len was zero".
+- `zig build fuzz --fuzz=1M -Drelease` fuzzes every fuzz test at once, a
+  process and a core each, where `zig build test --fuzz` runs one process
+  per test binary, which fuzzes its tests in turn. Zig's fuzzer refuses
+  two processes on one test, so a test gets no more than one core. The
+  step lists the fuzz tests by name, in `build.zig`: a new one goes there
+  too.
 - `zig build fmt` formats the Zig code and `zig build fmt-check` checks
   it, with the version of zigfmt pinned in `build.zig.zon`. The first
   build of skep fetches zigfmt and its own dependency from GitHub, into
