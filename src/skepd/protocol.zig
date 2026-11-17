@@ -511,6 +511,9 @@ fn request(
       if (r == -@as(c_int, @backingInt(E.OPNOTSUPP))) {
         return p.fail("ENOTSUP", "{s} cannot be set", .{ reading });
       }
+      if (r == -@as(c_int, @backingInt(E.INVAL))) {
+        return p.fail("EINVAL", "{s}: value or transition out of range", .{ reading });
+      }
       if (r != 0) return p.failErrno(r, "set");
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .set });
     },
@@ -637,7 +640,7 @@ fn endpointWith(
   for (sources[0..@min(count, sources.len)]) |source| {
     if (std.mem.eql(u8, std.mem.span(source.name), name)) return source.endpoint;
   }
-  return p.fail("ENOENT", "no {s}", .{ what });
+  return p.fail("ENOENT", "no reading {s}", .{ what });
 }
 
 /// An sRGB colour, "#rrggbb", as 0xrrggbb.
