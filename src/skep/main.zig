@@ -72,7 +72,7 @@ pub fn main(init: std.process.Init) !u8 {
   try sendAll(fd, request.written());
 
   var client: Client = .{ .fd = fd, .arena = arena };
-  if (call.form.flow == .watch) return watch(&client, out, err, call.global.json);
+  if (call.form.flow == .watch) return watch(&client, init.gpa, out, err, call.global.json);
   // The request is all, except for reads of readings, which need the device first: skepd
   // answers, then closes.
   const by_reading = call.form.flow == .read_readings;
@@ -199,6 +199,11 @@ const Client = struct {
         c.start = end + 1;
         return line;
       }
+      // The lines taken are dropped before reading more: watch reads for ever.
+      const rest = c.buffer.items.len - c.start;
+      std.mem.copyForwards(u8, c.buffer.items[0..rest], c.buffer.items[c.start..]);
+      c.buffer.items.len = rest;
+      c.start = 0;
       var chunk: [4096]u8 = undefined;
       const n = linux.read(c.fd, &chunk, chunk.len);
       switch (linux.errno(n)) {
@@ -212,12 +217,22 @@ const Client = struct {
   }
 };
 
-fn watch(client: *Client, out: *Io.Writer, err: *Io.Writer, json: bool) !u8 {
+fn watch(
+  client: *Client,
+  gpa: std.mem.Allocator,
+  out: *Io.Writer,
+  err: *Io.Writer,
+  json: bool,
+) !u8 {
+  // What an event takes to print, freed after it: watch runs for ever.
+  var scratch: std.heap.ArenaAllocator = .init(gpa);
+  defer scratch.deinit();
   while (try client.nextLine()) |line| {
+    _ = scratch.reset(.retain_capacity);
     if (json) {
       try out.print("{s}\n", .{ line });
     } else {
-      const message = output.parse(client.arena, line) catch continue;
+      const message = output.parse(scratch.allocator(), line) catch continue;
       if (field(message, "error")) |e| {
         try writeError(err, "watch", e);
         return failed;
