@@ -12,6 +12,8 @@ const Names = @import("Names.zig");
 const Protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
 const StateFile = @import("StateFile.zig");
+const libskep = @import("libskep.zig");
+const time = @import("time.zig");
 const Notifier = @import("notify.zig").Notifier;
 
 const linux = std.os.linux;
@@ -156,12 +158,12 @@ const Daemon = struct {
       return null;
     }
     // The state is kept as it is: what it holds would be lost if it were replaced.
-    const why = switch (errnoName(r)) {
+    const why = switch (libskep.errno(r)) {
       .INVAL => "not a state libskep can read; move it away to start without it",
       .OPNOTSUPP => "written by a newer skep",
       else => "cannot be read",
     };
-    d.print("{s}: {s} ({t})", .{ d.state_path, why, errnoName(r) });
+    d.print("{s}: {s} ({t})", .{ d.state_path, why, libskep.errno(r) });
     return 1;
   }
 
@@ -176,7 +178,7 @@ const Daemon = struct {
     defer d.gpa.free(buffer);
     const r = c.skep_export_state(d.ctx, buffer.ptr, buffer.len, &len);
     if (r != 0) {
-      d.print("error: cannot save the state: {t}", .{ errnoName(r) });
+      d.print("error: cannot save the state: {t}", .{ libskep.errno(r) });
       return;
     }
     if (StateFile.write(d.state_path, buffer[0..len])) |failure| {
@@ -193,8 +195,8 @@ const Daemon = struct {
     var request: u32 = 0;
     const r = c.skep_refresh_state(d.ctx, &request);
     // -ENOBUFS: one is already under way.
-    if (r != 0 and r != -@as(c_int, @backingInt(posix.E.NOBUFS))) {
-      d.print("cannot refresh the state: {t}", .{ errnoName(r) });
+    if (r != 0 and !libskep.is(r, .NOBUFS)) {
+      d.print("cannot refresh the state: {t}", .{ libskep.errno(r) });
     }
   }
 
@@ -216,7 +218,7 @@ const Daemon = struct {
     d.fd = fd;
     const r = c.skep_start(d.ctx);
     if (r != 0) {
-      d.print("cannot start: {t}", .{ errnoName(r) });
+      d.print("cannot start: {t}", .{ libskep.errno(r) });
       d.exit_code = 1;
     }
   }
@@ -272,7 +274,7 @@ const Daemon = struct {
   fn check(d: *Daemon, r: c_int) void {
     // Nothing is lost when memory runs out: the next call goes on.
     if (r != 0) {
-      d.print("libskep: {t}", .{ errnoName(r) });
+      d.print("libskep: {t}", .{ libskep.errno(r) });
     }
   }
 
@@ -359,7 +361,7 @@ const Daemon = struct {
           if (error_code != 0) {
             d.print("request {d} failed: {t}", .{
               c.skep_event_get_request(event),
-              errnoName(error_code),
+              libskep.errno(error_code),
             });
           }
         },
@@ -399,12 +401,12 @@ const Daemon = struct {
     if (d.stopping) {
       d.print("stopped", .{});
       d.exit_code = 0;
-    } else if (error_code == -@as(c_int, @backingInt(posix.E.NOTCONN))) {
+    } else if (libskep.is(error_code, .NOTCONN)) {
       d.print("{s}: lost, opening it again in {d} s", .{ d.device, reopen_delay / 1000 });
       d.status("{s}: lost, opening it again", .{ d.device });
       d.reopen_at = d.now() + reopen_delay;
     } else {
-      d.print("stopped: {t}", .{ errnoName(error_code) });
+      d.print("stopped: {t}", .{ libskep.errno(error_code) });
       d.exit_code = 1;
     }
   }
@@ -417,7 +419,7 @@ const Daemon = struct {
     d.notifier.send("STOPPING=1");
     const r = c.skep_stop(d.ctx);
     // Not started: nothing to stop.
-    if (r == -@as(c_int, @backingInt(posix.E.NETDOWN))) {
+    if (libskep.is(r, .NETDOWN)) {
       d.exit_code = 0;
     } else {
       d.check(r);
@@ -438,7 +440,7 @@ const Daemon = struct {
       }
       d.protocol.dropFinished();
 
-      const time = d.now();
+      const current = d.now();
       var deadline: ?u64 = d.reopen_at;
       if (d.refresh_at) |t| {
         deadline = if (deadline) |other| @min(other, t) else t;
@@ -448,7 +450,7 @@ const Daemon = struct {
         deadline = if (deadline) |t| @min(t, libskep_deadline) else libskep_deadline;
       }
       const timeout: i32 = if (deadline) |t|
-        (if (t <= time) 0 else @intCast(@min(t - time, std.math.maxInt(i32))))
+        (if (t <= current) 0 else @intCast(@min(t - current, std.math.maxInt(i32))))
       else
         -1;
       var output: [*c]const u8 = undefined;
@@ -547,20 +549,8 @@ fn writeValue(w: *Io.Writer, v: c.struct_skep_value) !void {
 
 /// The current time in UTC, as ISO 8601 with milliseconds, and a space.
 fn writeTimestamp(w: *Io.Writer, io: Io) !void {
-  const ms: u64 = @intCast(@divTrunc(Io.Clock.real.now(io).nanoseconds, std.time.ns_per_ms));
-  const epoch: std.time.epoch.EpochSeconds = .{ .secs = ms / 1000 };
-  const year_day = epoch.getEpochDay().calculateYearDay();
-  const month_day = year_day.calculateMonthDay();
-  const time = epoch.getDaySeconds();
-  try w.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z ", .{
-    year_day.year,
-    @backingInt(month_day.month),
-    month_day.day_index + 1,
-    time.getHoursIntoDay(),
-    time.getMinutesIntoHour(),
-    time.getSecondsIntoMinute(),
-    ms % 1000,
-  });
+  var buffer: [32]u8 = undefined;
+  try w.print("{s} ", .{ time.format(&buffer, time.now(io)) });
 }
 
 /// Whether stderr goes to journald, as systemd says in JOURNAL_STREAM ("device:inode" of the
@@ -581,10 +571,6 @@ fn toJournald(environ: *const std.process.Environ.Map) bool {
     (minor & 0xffffff00) << 12 |
     (minor & 0xff);
   return dev == device and st.ino == inode;
-}
-
-fn errnoName(r: c_int) posix.E {
-  return @fromBackingInt(@intCast(@as(u16, @intCast(-r))));
 }
 
 pub fn main(init: std.process.Init) !u8 {
@@ -622,7 +608,7 @@ pub fn main(init: std.process.Init) !u8 {
   }) |option| {
     const r = c.skep_set_option(ctx, option[0].ptr, option[1].ptr);
     if (r != 0) {
-      try log.print("skepd: --{s} {s}: {t}\n", .{ option[0], option[1], errnoName(r) });
+      try log.print("skepd: --{s} {s}: {t}\n", .{ option[0], option[1], libskep.errno(r) });
       return 2;
     }
   }
@@ -738,4 +724,6 @@ test {
   _ = @import("protocol.zig");
   _ = @import("notify.zig");
   _ = @import("Readings.zig");
+  _ = @import("libskep.zig");
+  _ = @import("time.zig");
 }

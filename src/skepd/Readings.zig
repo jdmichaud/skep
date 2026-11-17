@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const c = @import("skep_h");
+const libskep = @import("libskep.zig");
 
 const Readings = @This();
 
@@ -178,7 +179,7 @@ pub fn advance(r: *Readings, ctx: *c.skep_ctx, now: u64) void {
         &request,
       );
       // libskep is full: later, when a request ends.
-      if (result == -@as(c_int, @backingInt(std.posix.E.NOBUFS))) return;
+      if (libskep.is(result, .NOBUFS)) return;
       if (result != 0) {
         request = 0;
       }
@@ -240,15 +241,7 @@ fn missing(r: *Readings, ctx: *c.skep_ctx, read: Read, ids: *[c.SKEP_MAX_ATTRIBU
 
 /// The readings a device has, which the caller frees; null for a device not interviewed yet.
 fn sourcesOf(r: *Readings, ctx: *c.skep_ctx, device: u64) ?[]c.struct_skep_reading_source {
-  var count: usize = 0;
-  if (c.skep_device_get_readings(ctx, device, null, 0, &count) != 0) return null;
-  const sources = r.gpa.alloc(c.struct_skep_reading_source, count) catch return null;
-  if (c.skep_device_get_readings(ctx, device, sources.ptr, sources.len, &count) != 0 or
-    count != sources.len) {
-    r.gpa.free(sources);
-    return null;
-  }
-  return sources;
+  return libskep.readings(ctx, r.gpa, device) catch null;
 }
 
 fn sleeps(ctx: *c.skep_ctx, device: u64) bool {

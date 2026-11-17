@@ -4,6 +4,8 @@
 const std = @import("std");
 const c = @import("skep_h");
 const Names = @import("Names.zig");
+const libskep = @import("libskep.zig");
+const time = @import("time.zig");
 const Readings = @import("Readings.zig");
 const Server = @import("Server.zig");
 const values = @import("values.zig");
@@ -131,7 +133,7 @@ fn failErrno(p: *Protocol, r: c_int) Error {
 
 /// What a negative errno value from libskep means, in words, for error messages.
 fn errnoText(r: c_int) []const u8 {
-  return switch (errnoOf(r)) {
+  return switch (libskep.errno(r)) {
     .NODEV => "no such device",
     .NETDOWN => "the network is down",
     .AGAIN => "the device is not interviewed yet",
@@ -148,13 +150,9 @@ fn errnoText(r: c_int) []const u8 {
   };
 }
 
-fn errnoOf(r: c_int) E {
-  return @fromBackingInt(@intCast(@as(u16, @intCast(-r))));
-}
-
 /// The errno name of a negative errno value: "E" and its name, ENOTSUP for EOPNOTSUPP.
 fn errnoCode(buffer: *[24]u8, r: c_int) []const u8 {
-  const e = errnoOf(r);
+  const e = libskep.errno(r);
   if (e == .OPNOTSUPP) return "ENOTSUP";
   return std.fmt.bufPrint(buffer, "E{t}", .{ e }) catch "EIO";
 }
@@ -555,18 +553,18 @@ fn request(
           &req,
         );
       };
-      if (r == -@as(c_int, @backingInt(E.NOENT))) {
+      if (libskep.is(r, .NOENT)) {
         return p.fail("ENOENT", "no {s} on endpoint {d}", .{ reading, setting.endpoint });
       }
-      if (r == -@as(c_int, @backingInt(E.OPNOTSUPP))) {
+      if (libskep.is(r, .OPNOTSUPP)) {
         const json = try p.settable(a, setting.device);
         return p.failWith("ENOTSUP", "settable", json, "{s} cannot be set", .{ reading });
       }
-      if (r == -@as(c_int, @backingInt(E.RANGE))) {
+      if (libskep.is(r, .RANGE)) {
         const json = try p.rangeOf(a, setting.device, setting.endpoint, reading);
         return p.failWith("ERANGE", "range", json, "{s} out of range", .{ reading });
       }
-      if (color and r == -@as(c_int, @backingInt(E.INVAL))) {
+      if (color and libskep.is(r, .INVAL)) {
         return p.fail("EINVAL", "black is no colour", .{});
       }
       if (r != 0) return p.failErrno(r);
@@ -686,13 +684,12 @@ fn endpointWith(
   name: []const u8,
   what: []const u8,
 ) Error!u8 {
-  var count: usize = 0;
-  const r = c.skep_device_get_readings(p.ctx, device, null, 0, &count);
-  if (r == -@as(c_int, @backingInt(E.AGAIN))) return p.fail("EAGAIN", "not interviewed yet", .{});
-  if (r != 0) return p.failErrno(r);
-  const sources = try a.alloc(c.struct_skep_reading_source, count);
-  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
-  for (sources[0..@min(count, sources.len)]) |source| {
+  const sources = libskep.readings(p.ctx, a, device) catch |e| return switch (e) {
+    error.OutOfMemory => error.OutOfMemory,
+    error.NotInterviewed => p.fail("EAGAIN", "not interviewed yet", .{}),
+    error.NoDevice => p.fail("ENODEV", "no such device", .{}),
+  };
+  for (sources) |source| {
     if (std.mem.eql(u8, std.mem.span(source.name), name)) return source.endpoint;
   }
   return p.failWith("ENOENT", "settable", try p.settable(a, device), "no reading {s}", .{ what });
@@ -758,11 +755,10 @@ fn sourcesOf(
   a: std.mem.Allocator,
   device: u64,
 ) Error![]const c.struct_skep_reading_source {
-  var count: usize = 0;
-  if (c.skep_device_get_readings(p.ctx, device, null, 0, &count) != 0) return &.{};
-  const sources = try a.alloc(c.struct_skep_reading_source, count);
-  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
-  return sources[0..@min(count, sources.len)];
+  return libskep.readings(p.ctx, a, device) catch |e| switch (e) {
+    error.OutOfMemory => error.OutOfMemory,
+    error.NoDevice, error.NotInterviewed => &.{},
+  };
 }
 
 /// An sRGB colour, "#rrggbb", as 0xrrggbb.
@@ -1257,19 +1253,19 @@ fn remember(p: *Protocol, device: u64, endpoint: u8, cluster: u16, e: *const c.s
 
 /// The time in milliseconds since the epoch.
 fn wallTime(p: *Protocol) i64 {
-  return @intCast(@divTrunc(Io.Clock.real.now(p.io).nanoseconds, std.time.ns_per_ms));
+  return time.now(p.io);
 }
 
 /// "readings": what the device can be read for, with what it last reported or was read, and
 /// when.
 fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u64) !void {
-  var count: usize = 0;
-  if (c.skep_device_get_readings(p.ctx, device, null, 0, &count) != 0) return;
-  const sources = try a.alloc(c.struct_skep_reading_source, count);
-  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
+  const sources = libskep.readings(p.ctx, a, device) catch |e| switch (e) {
+    error.OutOfMemory => return error.OutOfMemory,
+    error.NoDevice, error.NotInterviewed => return,
+  };
   try j.objectField("readings");
   try j.beginArray();
-  for (sources[0..@min(count, sources.len)]) |source| {
+  for (sources) |source| {
     try j.beginObject();
     try j.objectField("endpoint");
     try j.write(source.endpoint);
@@ -1296,7 +1292,7 @@ fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u
       try readingMembers(j, source.name, source.unit, last.scaled);
       var buffer: [32]u8 = undefined;
       try j.objectField("time");
-      try j.write(formatTime(&buffer, last.time));
+      try j.write(time.format(&buffer, last.time));
     } else {
       try j.objectField("reading");
       try j.write(std.mem.span(source.name));
@@ -1370,8 +1366,8 @@ fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   const status = c.skep_event_get_status(e);
   if (pending.method == .remove) {
     // Forgotten unless canceled, answered or not: done, which SKEP_EVENT_DEVICE_LEFT follows.
-    if (error_code == 0 or error_code == -@as(c_int, @backingInt(E.TIMEDOUT)) or
-      error_code == -@as(c_int, @backingInt(E.HOSTUNREACH))) {
+    if (error_code == 0 or libskep.is(error_code, .TIMEDOUT) or
+      libskep.is(error_code, .HOSTUNREACH)) {
       var m: Message = undefined;
       m.init(p.gpa);
       defer m.deinit();
@@ -1451,28 +1447,7 @@ pub fn dropFinished(p: *Protocol) void {
 
 /// The current time in UTC, as ISO 8601 with milliseconds.
 fn timestamp(p: *Protocol, buffer: *[32]u8) []const u8 {
-  return formatTime(
-    buffer,
-    @intCast(@divTrunc(Io.Clock.real.now(p.io).nanoseconds, std.time.ns_per_ms)),
-  );
-}
-
-/// A time in milliseconds since the epoch, in UTC, as ISO 8601 with milliseconds.
-fn formatTime(buffer: *[32]u8, time: i64) []const u8 {
-  const ms: u64 = @intCast(@max(time, 0));
-  const epoch: std.time.epoch.EpochSeconds = .{ .secs = ms / 1000 };
-  const year_day = epoch.getEpochDay().calculateYearDay();
-  const month_day = year_day.calculateMonthDay();
-  const day = epoch.getDaySeconds();
-  return std.fmt.bufPrint(buffer, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
-    year_day.year,
-    @backingInt(month_day.month),
-    month_day.day_index + 1,
-    day.getHoursIntoDay(),
-    day.getMinutesIntoHour(),
-    day.getSecondsIntoMinute(),
-    ms % 1000,
-  }) catch "";
+  return time.format(buffer, time.now(p.io));
 }
 
 const testing = std.testing;
