@@ -121,6 +121,10 @@ export fn skep_event_get_error(event: *const Event) c_int {
   return event.error_code;
 }
 
+export fn skep_event_get_removed(event: *const Event) c_int {
+  return @intFromBool(event.removed);
+}
+
 export fn skep_event_get_network_origin(event: *const Event) c_int {
   return @backingInt(event.origin);
 }
@@ -863,7 +867,11 @@ test "devices join while the window is open" {
   try testing.expectEqual(0x00124b0012345678, skep_event_get_device(joined));
   // The new device is in the state; the rejoin, with the same address, is only logged.
   try testing.expectEqual(@backingInt(Event.Type.state_changed), try nextEventType(ctx));
-  try testing.expectEqual(@backingInt(Event.Type.device_left), try nextEventType(ctx));
+  // Gone by itself: not removed.
+  const gone = skep_next_event(ctx).?;
+  defer skep_event_free(gone);
+  try testing.expectEqual(@backingInt(Event.Type.device_left), skep_event_get_type(gone));
+  try testing.expectEqual(0, skep_event_get_removed(gone));
 }
 
 /// Exports the state into a buffer of the testing allocator.
@@ -1399,6 +1407,7 @@ test "devices are described, and requests reach them" {
   const left = (try nextOfType(ctx, .device_left)) orelse return error.TestExpectedLeft;
   defer skep_event_free(left);
   try testing.expectEqual(sensor_ieee, skep_event_get_device(left));
+  try testing.expectEqual(1, skep_event_get_removed(left));
   try testing.expectEqual(0, skep_get_devices(ctx, null, 0, &count));
   try testing.expectEqual(0, count);
 }

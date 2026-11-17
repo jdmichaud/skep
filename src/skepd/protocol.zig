@@ -1108,9 +1108,7 @@ fn handleEvent(p: *Protocol, e: *const c.skep_event) bool {
     },
     c.SKEP_EVENT_DEVICE_LEFT => {
       const device = c.skep_event_get_device(e);
-      var setup: c.enum_skep_setup = undefined;
-      // Forgotten by libskep: removed, not gone by itself.
-      const removed = c.skep_device_get_setup(p.ctx, device, &setup) != 0;
+      const removed = c.skep_event_get_removed(e) != 0;
       var m: Message = undefined;
       m.init(p.gpa);
       defer m.deinit();

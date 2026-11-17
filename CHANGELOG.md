@@ -67,6 +67,8 @@ publishes the section of each released version as its release notes.
   sleepy one, `skep read <device> <reading>...` asks the device, as in
   `skep read plug power`, and `skep watch` prints events on short lines
   such as `plug: power 11.2 W`.
+- `skep_event_get_removed()` tells whether a device that left was removed
+  and forgotten, or left by itself.
 - skep.h gives libskep's limits: SKEP_MAX_PERMIT_JOIN, SKEP_MAX_ATTRIBUTES,
   SKEP_MAX_REQUESTS and SKEP_MAX_TRANSITION.
 - The `flow-control` option tells libskep how the caller opened the port,

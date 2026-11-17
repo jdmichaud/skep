@@ -527,7 +527,11 @@ pub fn forgetDevice(ctx: *Context, ieee: u64) void {
     _ = s.devices.orderedRemove(j);
     break;
   }
-  ctx.deviceEvent(.device_left, ieee);
+  const event = ctx.spares.pop().?;
+  event.type = .device_left;
+  event.device = ieee;
+  event.removed = true;
+  ctx.events.push(event);
   ctx.stateChanged();
 }
 

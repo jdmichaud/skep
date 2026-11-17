@@ -49,6 +49,8 @@ status: u8 = 0,
 duration: c_uint = 0,
 origin: Origin = .none,
 device: u64 = 0,
+/// For device_left: forgotten, after skep_remove_device(), rather than gone by itself.
+removed: bool = false,
 log_level: c_int = 0,
 log_buffer: [max_log_len + 1]u8 = @splat(0),
 /// For ATTRIBUTES and COMMAND: where the frame came from.

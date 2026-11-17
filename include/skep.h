@@ -344,11 +344,11 @@ enum skep_event_type {
    */
   SKEP_EVENT_DEVICE_READY = 5,
   /*
-   * A device left the network, by itself or after skep_remove_device().
-   * libskep keeps a device that left by itself: it may come back, and a
-   * report of a leave is not always final (a device that loses its parent
-   * may be reported as gone, then rejoin). Only skep_remove_device()
-   * forgets a device.
+   * A device left the network, by itself or after skep_remove_device(),
+   * which skep_event_get_removed() tells. libskep keeps a device that left
+   * by itself: it may come back, and a report of a leave is not always
+   * final (a device that loses its parent may be reported as gone, then
+   * rejoin). Only skep_remove_device() forgets a device.
    */
   SKEP_EVENT_DEVICE_LEFT = 6,
   /*
@@ -445,6 +445,12 @@ enum skep_network_origin {
   /* A new network: devices must be paired. */
   SKEP_NETWORK_FORMED = 3,
 };
+
+/*
+ * SKEP_EVENT_DEVICE_LEFT: 1 if the device was removed with
+ * skep_remove_device(), and forgotten; 0 if it left by itself.
+ */
+int skep_event_get_removed(const skep_event *event);
 
 /* SKEP_EVENT_STARTED: how the network was brought up. */
 enum skep_network_origin skep_event_get_network_origin(const skep_event *event);
