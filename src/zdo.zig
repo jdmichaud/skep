@@ -168,11 +168,7 @@ pub fn leaveRequest(out: *[10]u8, sequence: u8, ieee: u64) []const u8 {
 
 const testing = std.testing;
 
-fn hex(comptime text: []const u8) [text.len / 2]u8 {
-  var bytes: [text.len / 2]u8 = undefined;
-  _ = std.fmt.hexToBytes(&bytes, text) catch unreachable;
-  return bytes;
-}
+const hex = @import("hex.zig").hex;
 
 test "what the sensor says about itself" {
   // Node_Desc_rsp: an end device of manufacturer 0x1407, its receiver off when idle.

@@ -351,11 +351,7 @@ pub const Decoder = struct {
 
 const testing = std.testing;
 
-fn hex(comptime text: []const u8) [text.len / 2]u8 {
-  var bytes: [text.len / 2]u8 = undefined;
-  _ = std.fmt.hexToBytes(&bytes, text) catch unreachable;
-  return bytes;
-}
+const hex = @import("test_ncp.zig").hex;
 
 fn expectEncoded(frame: Frame, comptime expected: []const u8) !void {
   var out: [max_encoded_len]u8 = undefined;

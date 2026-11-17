@@ -129,11 +129,7 @@ pub fn decode(bytes: []const u8) DecodeError!Frame {
 
 const testing = std.testing;
 
-fn hex(comptime text: []const u8) [text.len / 2]u8 {
-  var bytes: [text.len / 2]u8 = undefined;
-  _ = std.fmt.hexToBytes(&bytes, text) catch unreachable;
-  return bytes;
-}
+const hex = @import("test_ncp.zig").hex;
 
 test "the first version command uses the legacy format" {
   var out: [4]u8 = undefined;

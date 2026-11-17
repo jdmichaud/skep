@@ -674,11 +674,7 @@ pub fn parseGetValue(parameters: []const u8, version: u8) error{ TooShort }!stru
 
 const testing = std.testing;
 
-fn hex(comptime text: []const u8) [text.len / 2]u8 {
-  var bytes: [text.len / 2]u8 = undefined;
-  _ = std.fmt.hexToBytes(&bytes, text) catch unreachable;
-  return bytes;
-}
+const hex = @import("test_ncp.zig").hex;
 
 test "parse the version response" {
   // Recorded from a real NCP by zigbee-herdsman's tests: EZSP 13, EmberZNet 7.4.1.

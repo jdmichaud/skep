@@ -421,11 +421,7 @@ pub const Reporting = struct {
 
 const testing = std.testing;
 
-fn hex(comptime text: []const u8) [text.len / 2]u8 {
-  var bytes: [text.len / 2]u8 = undefined;
-  _ = std.fmt.hexToBytes(&bytes, text) catch unreachable;
-  return bytes;
-}
+const hex = @import("hex.zig").hex;
 
 test "values of every kind are read" {
   try testing.expectEqual(2361, (try readValue(0x21, &hex("3909"))).value.v.u);
