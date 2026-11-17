@@ -66,6 +66,10 @@ publishes the section of each released version as its release notes.
   such as `plug: power 11.2 W`.
 - `--help` after any skep command tells how to use it (`skep set
   --help`), and skepd takes `--help` too.
+- skep's mistakes are told with the command, the argument and what is
+  wrong with it, then that command's usage, rather than the usage of
+  all commands; skepd's refusals read as sentences. skep's options go
+  before or after the command.
 - `skep set <device> <reading> <value>` sets a reading, with
   `--transition`: `skep set bulb level 50%`, `skep set bulb
   color_temperature 2700K`, `skep set bulb color "#ff8000"`, `skep set

@@ -4,337 +4,10 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
+const commands = @import("commands.zig");
 
 const linux = std.os.linux;
 const Io = std.Io;
-
-/// A command: how it is used, in one form or more; what it does, in a few words for skep --help,
-/// and in full for its own --help.
-const Command = struct {
-  names: []const []const u8,
-  forms: []const []const u8,
-  summary: []const u8,
-  help: []const u8,
-};
-
-/// The readings, which get and read take, in their help.
-const readings_help =
-  \\
-  \\
-  \\Readings, as devices have them:
-  \\
-  \\  on                 yes or no
-  \\  level              a light's brightness, in %
-  \\  color_temperature  a light's white, in K
-  \\  hue                a light's hue, in degrees
-  \\  saturation         a light's saturation, in %
-  \\  color_x, color_y   a light's colour, as CIE 1931 coordinates
-  \\  temperature        in °C
-  \\  humidity           in %
-  \\  pressure           in hPa
-  \\  battery            in %
-  \\  battery_voltage    in V
-  \\  power              in W
-  \\  energy             in kWh
-  \\  voltage            in V
-  \\  current            in A
-  \\  power_factor       from 0 to 1
-  \\  frequency          in Hz
-;
-
-const commands = [_]Command{
-  .{
-    .names = &.{ "version" },
-    .forms = &.{ "version" },
-    .summary = "the versions of skepd and of its protocol",
-    .help =
-    \\Prints the versions of skepd and of skep-protocol(7), which it speaks.
-    ,
-  },
-  .{
-    .names = &.{ "network" },
-    .forms = &.{ "network" },
-    .summary = "the network",
-    .help =
-    \\Prints whether the network is up, its channel, PAN ID and extended PAN ID, and how long
-    \\devices may still join.
-    ,
-  },
-  .{
-    .names = &.{ "permit" },
-    .forms = &.{ "permit [<seconds>]" },
-    .summary = "let new devices join, 60 s by default, 0 to stop",
-    .help =
-    \\Lets new devices join the network for a while.
-    \\
-    \\  <seconds>  how long, 60 by default, 254 at most; 0 stops letting them
-    ,
-  },
-  .{
-    .names = &.{ "devices" },
-    .forms = &.{ "devices" },
-    .summary = "the devices, and what they last reported",
-    .help =
-    \\Lists the devices, one per line: their name, or their address without one, their model,
-    \\and the first three readings they reported, or how far their setup got.
-    ,
-  },
-  .{
-    .names = &.{ "device" },
-    .forms = &.{ "device <device>" },
-    .summary = "one device, in detail",
-    .help =
-    \\Prints what the device's interview found: its address, type, manufacturer and model, its
-    \\endpoints and clusters, and its readings, as get gives them.
-    \\
-    \\  <device>  its IEEE address, such as f44250000d350000, or its name
-    ,
-  },
-  .{
-    .names = &.{ "get" },
-    .forms = &.{ "get <device> [<reading>...]" },
-    .summary = "what a device last reported, or was read for",
-    .help =
-    \\Prints the device's readings, or those named: the last value it reported or was read for,
-    \\and how long ago. It answers at once, even for a device that sleeps.
-    \\
-    \\  <device>   its IEEE address, such as f44250000d350000, or its name
-    \\  <reading>  one of the device's readings, which get without one lists
-    ++ readings_help,
-  },
-  .{
-    .names = &.{ "read" },
-    .forms = &.{
-      "read <device> <reading>...",
-      "read <device> <endpoint> <cluster> <attribute>...",
-    },
-    .summary = "ask a device for readings, such as temperature",
-    .help =
-    \\Asks the device for readings, or for attributes by number. A device that sleeps answers
-    \\when it wakes up, which can take minutes: --timeout gives up earlier.
-    \\
-    \\  <device>     its IEEE address, such as f44250000d350000, or its name
-    \\  <reading>    one of the device's readings, which get lists
-    \\  <endpoint>   the number of one of its endpoints, such as 1
-    \\  <cluster>    the id of a cluster of the endpoint, such as 0x0402
-    \\  <attribute>  the id of an attribute of the cluster, such as 0x0000
-    ++ readings_help,
-  },
-  .{
-    .names = &.{ "set" },
-    .forms = &.{ "set <device> <reading> <value> [--transition <seconds>]" },
-    .summary = "set a reading, such as level 50%, or a colour: color #ff8000",
-    .help =
-    \\Sets a reading of the device, or a light's colour.
-    \\
-    \\  <device>                its IEEE address, such as f44250000d350000, or its name
-    \\  --transition <seconds>  how long a light takes to get there, 0 by default
-    \\
-    \\Readings and their values:
-    \\
-    \\  on yes|no                    a light or a plug, on or off
-    \\  level <percent>              a light's brightness, such as 50%; 0 switches it off
-    \\  color_temperature <kelvins>  a light's white, such as 2700K
-    \\  hue <degrees>                a light's hue, such as 120
-    \\  saturation <percent>         a light's saturation, such as 80%
-    \\  color <#rrggbb>              a light's colour, in sRGB, such as #ff8000; its brightness
-    \\                               is the level's
-    ,
-  },
-  .{
-    .names = &.{ "rename" },
-    .forms = &.{ "rename <device> [<name>]" },
-    .summary = "name a device, or forget its name",
-    .help =
-    \\Gives the device a name, which commands then take instead of its address, or forgets its
-    \\name without one.
-    \\
-    \\  <device>  its IEEE address, such as f44250000d350000, or its name
-    \\  <name>    up to 64 bytes of text, without control characters, other than an
-    \\            IEEE address; quoted if it has spaces, such as "living room"
-    ,
-  },
-  .{
-    .names = &.{ "setup" },
-    .forms = &.{ "setup <device>" },
-    .summary = "interview and set a device up again",
-    .help =
-    \\Interviews the device and sets it up again from the start: after a failed setup, or when it
-    \\lost its configuration.
-    \\
-    \\  <device>  its IEEE address, such as f44250000d350000, or its name
-    ,
-  },
-  .{
-    .names = &.{ "remove" },
-    .forms = &.{ "remove <device>" },
-    .summary = "make a device leave the network, and forget it",
-    .help =
-    \\Asks the device to leave the network, and forgets it. It gives up waiting for an answer
-    \\after 60 seconds, or --timeout: the device is forgotten either way.
-    \\
-    \\  <device>  its IEEE address, such as f44250000d350000, or its name
-    ,
-  },
-  .{
-    .names = &.{ "write" },
-    .forms = &.{ "write <device> <endpoint> <cluster> <attribute> <type> <value>" },
-    .summary = "write an attribute",
-    .help =
-    \\Writes an attribute of a cluster of the device.
-    \\
-    \\  <device>     its IEEE address, such as f44250000d350000, or its name
-    \\  <endpoint>   the number of one of its endpoints, such as 1
-    \\  <cluster>    the id of a cluster of the endpoint, such as 0x0006
-    \\  <attribute>  the id of an attribute of the cluster, such as 0x4003
-    \\  <type>       the attribute's ZCL type, such as bool, uint8, int16, enum8 or
-    \\               char_string; skep-protocol(7) names them all
-    \\  <value>      a number, true or false, or text
-    ,
-  },
-  .{
-    .names = &.{ "report" },
-    .forms = &.{ "report <device> <endpoint> <cluster> <attribute> <type> <min> <max> [<change>]" },
-    .summary = "configure how a device reports an attribute",
-    .help =
-    \\Configures how the device reports an attribute: when it changes enough, but at most every
-    \\<min> seconds, and at least every <max> seconds.
-    \\
-    \\  <device>     its IEEE address, such as f44250000d350000, or its name
-    \\  <endpoint>   the number of one of its endpoints, such as 1
-    \\  <cluster>    the id of a cluster of the endpoint, such as 0x0402
-    \\  <attribute>  the id of an attribute of the cluster, such as 0x0000
-    \\  <type>       the attribute's ZCL type, such as int16
-    \\  <min>        the fewest seconds between two reports
-    \\  <max>        the most seconds between two reports: 0 for reports on change only,
-    \\               65535 for no reports
-    \\  <change>     how much it must change to be reported, for numbers, in its own units:
-    \\               100 for 1 °C of a temperature in hundredths of a degree
-    ,
-  },
-  .{
-    .names = &.{ "bind" },
-    .forms = &.{ "bind <device> <endpoint> <cluster>" },
-    .summary = "bind a cluster to the coordinator",
-    .help =
-    \\Binds the cluster to the coordinator, so that the device sends it reports and commands.
-    \\
-    \\  <device>    its IEEE address, such as f44250000d350000, or its name
-    \\  <endpoint>  the number of one of its endpoints, such as 1
-    \\  <cluster>   the id of a cluster of the endpoint, such as 0x0402
-    ,
-  },
-  .{
-    .names = &.{ "unbind" },
-    .forms = &.{ "unbind <device> <endpoint> <cluster>" },
-    .summary = "remove a binding",
-    .help =
-    \\Removes the binding of the cluster to the coordinator.
-    \\
-    \\  <device>    its IEEE address, such as f44250000d350000, or its name
-    \\  <endpoint>  the number of one of its endpoints, such as 1
-    \\  <cluster>   the id of a cluster of the endpoint, such as 0x0402
-    ,
-  },
-  .{
-    .names = &.{ "command" },
-    .forms = &.{ "command <device> <endpoint> <cluster> <command> [<type>:<value>...]" },
-    .summary = "send a cluster command",
-    .help =
-    \\Sends a cluster command, with its arguments in order.
-    \\
-    \\  <device>        its IEEE address, such as f44250000d350000, or its name
-    \\  <endpoint>      the number of one of its endpoints, such as 1
-    \\  <cluster>       the id of a cluster of the endpoint, such as 0x0008
-    \\  <command>       the command's id in the cluster, such as 0x04
-    \\  <type>:<value>  an argument, with its ZCL type, such as uint8:128 then uint16:10
-    ,
-  },
-  .{
-    .names = &.{ "on", "off", "toggle" },
-    .forms = &.{ "on|off|toggle <device> [<endpoint>]" },
-    .summary = "switch a device on, off, or the other way",
-    .help =
-    \\Switches the device on, off, or the other way, with its On/Off cluster.
-    \\
-    \\  <device>    its IEEE address, such as f44250000d350000, or its name
-    \\  <endpoint>  the number of the endpoint, 1 by default
-    ,
-  },
-  .{
-    .names = &.{ "watch" },
-    .forms = &.{ "watch" },
-    .summary = "print events until interrupted",
-    .help =
-    \\Prints what happens on the network, one event per line, until interrupted: its time in UTC,
-    \\the device, and what happened, such as the readings it reported.
-    ,
-  },
-};
-
-/// skep --help: how to use skep, and its commands in a few words, each after its form, or under it
-/// when the form is long.
-const usage = usage: {
-  @setEvalBranchQuota(100_000);
-  const column = 34;
-  var lines: []const u8 =
-    \\usage: skep [--socket <path>] [--json] [--timeout <seconds>] <command> [<arguments>]
-    \\
-    \\Asks skepd about the Zigbee network, and tells it what to do.
-    \\
-    \\
-  ;
-  for (commands) |command| {
-    for (command.forms, 0..) |form, k| {
-      lines = lines ++ "  " ++ form;
-      if (k == 0 and form.len + 2 < column) {
-        lines = lines ++ spaces(column - 2 - form.len) ++ command.summary;
-      } else if (k == 0) {
-        lines = lines ++ "\n" ++ spaces(column) ++ command.summary;
-      }
-      lines = lines ++ "\n";
-    }
-  }
-  break :usage lines ++
-    \\
-    \\A device is its IEEE address or its name. Clusters, attributes and commands are numbers,
-    \\in hexadecimal after 0x. A reading is a name such as temperature, which get lists.
-    \\--json prints skepd's answers as they are. skep <command> --help tells how to use a
-    \\command, skep(1) more.
-    \\
-  ;
-};
-
-fn spaces(comptime n: usize) []const u8 {
-  const padding: [n]u8 = @splat(' ');
-  return &padding;
-}
-
-/// The command named, or null.
-fn commandNamed(name: []const u8) ?*const Command {
-  for (&commands) |*command| {
-    for (command.names) |n| {
-      if (std.mem.eql(u8, n, name)) return command;
-    }
-  }
-  return null;
-}
-
-/// skep <command> --help.
-fn writeCommandHelp(out: *Io.Writer, command: *const Command) !void {
-  for (command.forms, 0..) |form, k| {
-    try out.print("{s} skep [<options>] {s}\n", .{ if (k == 0) "usage:" else "      ", form });
-  }
-  try out.print("\n{s}\n\nskep --help lists the options and the commands; skep(1) tells more.\n", .{
-    command.help,
-  });
-}
-
-const Options = struct {
-  socket: ?[]const u8 = null,
-  json: bool = false,
-  timeout: ?[]const u8 = null,
-};
 
 /// Exit statuses.
 const ok = 0;
@@ -353,362 +26,83 @@ pub fn main(init: std.process.Init) !u8 {
   defer err.flush() catch {};
 
   const arena = init.arena.allocator();
-  const args = try init.minimal.args.toSlice(arena);
-  var options: Options = .{};
-  var i: usize = 1;
-  while (i < args.len and std.mem.startsWith(u8, args[i], "--")) : (i += 1) {
-    const arg = args[i];
-    if (std.mem.eql(u8, arg, "--help")) {
-      try out.writeAll(usage);
+  const given = try init.minimal.args.toSlice(arena);
+  const args = try arena.alloc([]const u8, given.len -| 1);
+  for (args, given[1..]) |*arg, typed| {
+    arg.* = typed;
+  }
+  const call = switch (try commands.parse(arena, args)) {
+    .help => |command| {
+      if (command) |c| {
+        try commands.writeHelp(out, c);
+      } else {
+        try commands.writeUsage(out);
+      }
       return ok;
-    } else if (std.mem.eql(u8, arg, "--version")) {
+    },
+    .version => {
       try out.writeAll("skep " ++ build_options.version ++ "\n");
       return ok;
-    } else if (std.mem.eql(u8, arg, "--json")) {
-      options.json = true;
-    } else if (std.mem.eql(u8, arg, "--socket") and i + 1 < args.len) {
-      i += 1;
-      options.socket = args[i];
-    } else if (std.mem.eql(u8, arg, "--timeout") and i + 1 < args.len) {
-      i += 1;
-      options.timeout = args[i];
-    } else {
-      try err.writeAll(usage);
-      return misused;
-    }
-  }
-  if (i == args.len) {
-    try err.writeAll(usage);
-    return misused;
-  }
-  const command = args[i];
-  const rest = args[i + 1..];
-  for (rest) |arg| {
-    if (!std.mem.eql(u8, arg, "--help")) continue;
-    if (commandNamed(command)) |c| {
-      try writeCommandHelp(out, c);
-    } else {
-      try out.writeAll(usage);
-    }
-    return ok;
-  }
-
-  var request: Io.Writer.Allocating = .init(arena);
-  const method = build(&request, command, rest, options) catch |e| switch (e) {
-    error.Usage => {
-      try err.writeAll(usage);
+    },
+    .problem => |p| {
+      try commands.writeProblem(err, p);
       return misused;
     },
-    else => return e,
+    .call => |call| call,
   };
+  var request: Io.Writer.Allocating = .init(arena);
+  try commands.writeRequest(&request.writer, &call);
 
-  const fd = connect(arena, init.environ_map, options.socket) catch |e| {
-    try err.print("skep: cannot reach skepd: {t}\n", .{ e });
-    return failed;
-  };
+  const fd = connect(arena, init.environ_map, call.global.socket, err) catch return failed;
   defer _ = linux.close(fd);
   try sendAll(fd, request.written());
 
   var client: Client = .{ .fd = fd, .arena = arena };
-  if (std.mem.eql(u8, method, "watch")) return watch(&client, out, err, options);
+  if (call.form.flow == .watch) return watch(&client, out, err, call.global.json);
   // The request is all, except for reads of readings, which need the device first: skepd
   // answers, then closes.
-  const by_reading = byReading(command, rest);
+  const by_reading = call.form.flow == .read_readings;
   if (!by_reading) {
     _ = linux.shutdown(fd, linux.SHUT.WR);
   }
   const line = (try client.nextLine()) orelse {
-    try err.writeAll("skep: skepd closed the connection without answering\n");
+    try err.print("skep {s}: skepd closed the connection without answering\n", .{ call.name });
     return failed;
   };
-  if (options.json and !by_reading) {
+  if (call.global.json and !by_reading) {
     try out.print("{s}\n", .{ line });
   }
   const response = std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{}) catch {
-    try err.writeAll("skep: an answer that is not JSON\n");
+    try err.print("skep {s}: skepd answered something that is not JSON\n", .{ call.name });
     return failed;
   };
   if (field(response, "error")) |e| {
-    try err.print("skep: {s}: {s}\n", .{ text(field(e, "code")), text(field(e, "message")) });
+    try err.print("skep {s}: {s}\n", .{ call.name, text(field(e, "message")) });
     return failed;
   }
   const result = field(response, "result") orelse {
-    try err.writeAll("skep: an answer without a result\n");
+    try err.print("skep {s}: skepd answered without a result\n", .{ call.name });
     return failed;
   };
-  if (by_reading) return readReadings(&client, out, err, rest, result, options);
-  if (options.json) return statusOf(result);
+  if (by_reading) return readReadings(&client, out, err, &call, result);
+  if (call.global.json) return statusOf(result);
   const now: i64 = @intCast(@divTrunc(Io.Clock.real.now(io).nanoseconds, std.time.ns_per_ms));
-  return show(out, err, command, rest, result, now, arena);
-}
-
-// Building requests.
-
-/// Writes the request for `command`, and returns its method.
-fn build(
-  w: *Io.Writer.Allocating,
-  command: []const u8,
-  args: []const [:0]const u8,
-  options: Options,
-) ![]const u8 {
-  var j: std.json.Stringify = .{ .writer = &w.writer };
-  try j.beginObject();
-  try j.objectField("id");
-  try j.write(1);
-  const method: []const u8 = method: {
-    if (eq(command, "version") or
-      eq(command, "network") or
-      eq(command, "devices") or
-      eq(command, "watch")) {
-      if (args.len != 0) return error.Usage;
-      break :method command;
-    }
-    if (eq(command, "on") or eq(command, "off") or eq(command, "toggle")) break :method "command";
-    if (eq(command, "get") or byReading(command, args)) {
-      if (args.len < 1) return error.Usage;
-      break :method "device";
-    }
-    if (eq(command, "permit")) break :method "permit_join";
-    if (eq(command, "report")) break :method "configure_reporting";
-    for ([_][]const u8{
-      "device",
-      "rename",
-      "setup",
-      "remove",
-      "read",
-      "write",
-      "bind",
-      "unbind",
-      "command",
-      "set",
-    }) |m| {
-      if (eq(command, m)) break :method m;
-    }
-    return error.Usage;
-  };
-  try j.objectField("method");
-  try j.write(method);
-  try j.objectField("params");
-  try j.beginObject();
-  if (eq(command, "permit")) {
-    if (args.len > 1) return error.Usage;
-    try j.objectField("seconds");
-    try number(&j, if (args.len == 1) args[0] else "60");
-  } else if (eq(command, "get") or byReading(command, args)) {
-    try j.objectField("device");
-    try j.write(args[0]);
-  } else if (eq(command, "device") or eq(command, "setup") or eq(command, "remove")) {
-    if (args.len != 1) return error.Usage;
-    try j.objectField("device");
-    try j.write(args[0]);
-    if (eq(command, "remove")) {
-      // A device that is gone never answers: give up after a minute, unless told otherwise.
-      try j.objectField("timeout");
-      try number(&j, options.timeout orelse "60");
-    }
-  } else if (eq(command, "set")) {
-    // <device> <reading> <value>, and --transition <seconds> anywhere after.
-    var positional: [3][]const u8 = undefined;
-    var count: usize = 0;
-    var transition: ?[]const u8 = null;
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-      if (eq(args[i], "--transition")) {
-        if (i + 1 == args.len) return error.Usage;
-        i += 1;
-        transition = args[i];
-      } else {
-        if (count == positional.len) return error.Usage;
-        positional[count] = args[i];
-        count += 1;
-      }
-    }
-    if (count != positional.len) return error.Usage;
-    try j.objectField("device");
-    try j.write(positional[0]);
-    try j.objectField("reading");
-    try j.write(positional[1]);
-    try j.objectField("value");
-    try settingValue(&j, positional[1], positional[2]);
-    if (transition) |t| {
-      try j.objectField("transition");
-      try number(&j, t);
-    }
-    if (options.timeout) |t| {
-      try j.objectField("timeout");
-      try number(&j, t);
-    }
-  } else if (eq(command, "rename")) {
-    if (args.len < 1 or args.len > 2) return error.Usage;
-    try j.objectField("device");
-    try j.write(args[0]);
-    try j.objectField("name");
-    try j.write(if (args.len == 2) args[1] else null);
-  } else if (eq(command, "on") or eq(command, "off") or eq(command, "toggle")) {
-    if (args.len < 1 or args.len > 2) return error.Usage;
-    try target(&j, args[0], if (args.len == 2) args[1] else "1", "0x0006", options);
-    try j.objectField("command");
-    try j.write(@as(u8, if (eq(command, "off")) 0 else if (eq(command, "on")) 1 else 2));
-  } else if (eq(command, "read")) {
-    if (args.len < 4) return error.Usage;
-    try target(&j, args[0], args[1], args[2], options);
-    try j.objectField("attributes");
-    try j.beginArray();
-    for (args[3..]) |a| {
-      try number(&j, a);
-    }
-    try j.endArray();
-  } else if (eq(command, "write")) {
-    if (args.len != 6) return error.Usage;
-    try target(&j, args[0], args[1], args[2], options);
-    try j.objectField("attributes");
-    try j.beginArray();
-    try j.beginObject();
-    try j.objectField("id");
-    try number(&j, args[3]);
-    try typedValue(&j, args[4], args[5]);
-    try j.endObject();
-    try j.endArray();
-  } else if (eq(command, "report")) {
-    if (args.len < 7 or args.len > 8) return error.Usage;
-    try target(&j, args[0], args[1], args[2], options);
-    try j.objectField("reporting");
-    try j.beginArray();
-    try j.beginObject();
-    try j.objectField("id");
-    try number(&j, args[3]);
-    try j.objectField("type");
-    try j.write(args[4]);
-    try j.objectField("min_interval");
-    try number(&j, args[5]);
-    try j.objectField("max_interval");
-    try number(&j, args[6]);
-    if (args.len == 8) {
-      try j.objectField("change");
-      try value(&j, args[7]);
-    }
-    try j.endObject();
-    try j.endArray();
-  } else if (eq(command, "bind") or eq(command, "unbind")) {
-    if (args.len != 3) return error.Usage;
-    try target(&j, args[0], args[1], args[2], options);
-  } else if (eq(command, "command")) {
-    if (args.len < 4) return error.Usage;
-    try target(&j, args[0], args[1], args[2], options);
-    try j.objectField("command");
-    try number(&j, args[3]);
-    if (args.len > 4) {
-      try j.objectField("arguments");
-      try j.beginArray();
-      for (args[4..]) |a| {
-        const colon = std.mem.indexOfScalar(u8, a, ':') orelse return error.Usage;
-        try j.beginObject();
-        try typedValue(&j, a[0..colon], a[colon + 1..]);
-        try j.endObject();
-      }
-      try j.endArray();
-    }
-  }
-  try j.endObject();
-  try j.endObject();
-  try w.writer.writeByte('\n');
-  return method;
+  return show(out, err, &call, result, now, arena);
 }
 
 fn eq(a: []const u8, b: []const u8) bool {
   return std.mem.eql(u8, a, b);
 }
 
-/// Whether the command reads readings by name, `read plug power`, rather than attributes by
-/// endpoint, cluster and id: readings are names, endpoints numbers.
-fn byReading(command: []const u8, args: []const [:0]const u8) bool {
-  return eq(command, "read") and args.len >= 2 and std.ascii.isAlphabetic(args[1][0]);
-}
-
-fn target(
-  j: *std.json.Stringify,
-  device: []const u8,
-  endpoint: []const u8,
-  cluster: []const u8,
-  options: Options,
-) !void {
-  try j.objectField("device");
-  try j.write(device);
-  try j.objectField("endpoint");
-  try number(j, endpoint);
-  try j.objectField("cluster");
-  try number(j, cluster);
-  if (options.timeout) |t| {
-    try j.objectField("timeout");
-    try number(j, t);
-  }
-}
-
-/// A number as typed: hexadecimal after 0x is left for skepd to read, as a string.
-fn number(j: *std.json.Stringify, arg: []const u8) !void {
-  if (std.mem.startsWith(u8, arg, "0x")) return j.write(arg);
-  const n = std.fmt.parseFloat(f64, arg) catch return error.Usage;
-  if (@floor(n) == n and @abs(n) < 1e15) return j.write(@as(i64, @intFromFloat(n)));
-  try j.write(n);
-}
-
-/// A setting's value as typed: a colour as #rrggbb, with or without its #; yes or no, on or off;
-/// or a number, with its unit if typed, as in 50%, 2700K or 180°.
-fn settingValue(j: *std.json.Stringify, reading: []const u8, arg: []const u8) !void {
-  if (eq(reading, "color")) {
-    if (std.mem.startsWith(u8, arg, "#")) return j.write(arg);
-    var buffer: [64]u8 = undefined;
-    return j.write(std.fmt.bufPrint(&buffer, "#{s}", .{ arg }) catch return error.Usage);
-  }
-  for ([_][]const u8{ "yes", "on", "true" }) |word| {
-    if (std.ascii.eqlIgnoreCase(arg, word)) return j.write(true);
-  }
-  for ([_][]const u8{ "no", "off", "false" }) |word| {
-    if (std.ascii.eqlIgnoreCase(arg, word)) return j.write(false);
-  }
-  var digits = arg;
-  for ([_][]const u8{ "%", "K", "k", "°" }) |unit| {
-    if (std.mem.endsWith(u8, digits, unit)) {
-      digits = digits[0..digits.len - unit.len];
-    }
-  }
-  try number(j, digits);
-}
-
-/// A value as typed: a number, true or false, or text.
-fn value(j: *std.json.Stringify, arg: []const u8) !void {
-  if (eq(arg, "true")) return j.write(true);
-  if (eq(arg, "false")) return j.write(false);
-  if (std.fmt.parseInt(i64, arg, 10)) |n| return j.write(n) else |_| {}
-  if (std.fmt.parseFloat(f64, arg)) |f| return j.write(f) else |_| {}
-  try j.write(arg);
-}
-
-fn typedValue(j: *std.json.Stringify, type_name: []const u8, arg: []const u8) !void {
-  try j.objectField("type");
-  try j.write(type_name);
-  try j.objectField("value");
-  // Text and hexadecimal digits stay strings, whatever they look like.
-  if (std.mem.endsWith(u8, type_name, "_string") or
-    eq(type_name, "array") or
-    eq(type_name, "struct") or
-    eq(type_name, "set") or
-    eq(type_name, "bag") or
-    eq(type_name, "key128") or
-    eq(type_name, "ieee_address")) {
-    try j.write(arg);
-  } else {
-    try value(j, arg);
-  }
-}
-
 // Talking to skepd.
 
-/// Connects to skepd's socket: the one given, $SKEP_SOCKET, or the usual places.
+/// Connects to skepd's socket: the one given, $SKEP_SOCKET, or the usual places. Says why it
+/// cannot, then fails.
 fn connect(
   arena: std.mem.Allocator,
   environ: *const std.process.Environ.Map,
   given: ?[]const u8,
+  err: *Io.Writer,
 ) !linux.fd_t {
   var paths: std.ArrayList([]const u8) = .empty;
   if (given) |path| {
@@ -722,7 +116,10 @@ fn connect(
     }
     try paths.append(arena, "/run/skep/skepd.sock");
   }
-  var last: anyerror = error.FileNotFound;
+  // The most telling reason, from the socket it comes from: one skep may not use, then one
+  // nothing listens on, then none at all.
+  var denied: ?[]const u8 = null;
+  var refused: ?[]const u8 = null;
   for (paths.items) |path| {
     var address: linux.sockaddr.un = .{ .path = @splat(0) };
     if (path.len >= address.path.len) continue;
@@ -733,14 +130,30 @@ fn connect(
     const e = linux.errno(linux.connect(fd, @ptrCast(&address), @sizeOf(linux.sockaddr.un)));
     if (e == .SUCCESS) return fd;
     _ = linux.close(fd);
-    last = switch (e) {
-      .NOENT => error.FileNotFound,
-      .ACCES, .PERM => error.AccessDenied,
-      .CONNREFUSED => error.ConnectionRefused,
-      else => error.Unexpected,
-    };
+    switch (e) {
+      .ACCES, .PERM => denied = denied orelse path,
+      .CONNREFUSED => refused = refused orelse path,
+      else => {},
+    }
   }
-  return last;
+  if (denied) |path| {
+    try err.print(
+      "skep: cannot use skepd's socket {s}: permission denied; the system's skepd lets the skep group in\n",
+      .{ path },
+    );
+  } else if (refused) |path| {
+    try err.print("skep: nothing answers on {s}; is skepd running?\n", .{ path });
+  } else {
+    try err.writeAll("skep: no skepd socket at");
+    for (paths.items, 0..) |path, i| {
+      try err.print("{s} {s}", .{
+        if (i == 0) "" else if (i + 1 == paths.items.len) " or" else ",",
+        path,
+      });
+    }
+    try err.writeAll("; is skepd running?\n");
+  }
+  return error.Unreachable;
 }
 
 fn sendAll(fd: linux.fd_t, bytes: []const u8) !void {
@@ -783,15 +196,15 @@ const Client = struct {
   }
 };
 
-fn watch(client: *Client, out: *Io.Writer, err: *Io.Writer, options: Options) !u8 {
+fn watch(client: *Client, out: *Io.Writer, err: *Io.Writer, json: bool) !u8 {
   while (try client.nextLine()) |line| {
-    if (options.json) {
+    if (json) {
       try out.print("{s}\n", .{ line });
     } else {
       const message = std.json.parseFromSliceLeaky(std.json.Value, client.arena, line, .{}) catch
         continue;
       if (field(message, "error")) |e| {
-        try err.print("skep: {s}: {s}\n", .{ text(field(e, "code")), text(field(e, "message")) });
+        try err.print("skep watch: {s}\n", .{ text(field(e, "message")) });
         return failed;
       }
       if (field(message, "event") != null) {
@@ -800,7 +213,7 @@ fn watch(client: *Client, out: *Io.Writer, err: *Io.Writer, options: Options) !u
     }
     try out.flush();
   }
-  try err.writeAll("skep: skepd closed the connection\n");
+  try err.writeAll("skep watch: skepd closed the connection\n");
   return failed;
 }
 
@@ -810,12 +223,13 @@ fn readReadings(
   client: *Client,
   out: *Io.Writer,
   err: *Io.Writer,
-  args: []const [:0]const u8,
+  call: *const commands.Call,
   device: std.json.Value,
-  options: Options,
 ) !u8 {
   const a = client.arena;
-  const wanted = try chosen(a, err, args[0], device, args[1..]) orelse return failed;
+  const device_name = call.get("device").?;
+  const wanted = try chosen(a, err, call.name, device_name, device, call.all("reading")) orelse
+    return failed;
   // One request per endpoint and cluster, its id one more than its index.
   var groups: std.ArrayList(std.json.Value) = .empty;
   var group_of = try a.alloc(usize, wanted.len);
@@ -840,14 +254,12 @@ fn readReadings(
     try j.write("read");
     try j.objectField("params");
     try j.beginObject();
-    var endpoint: [8]u8 = undefined;
-    var cluster: [8]u8 = undefined;
-    try target(
+    try commands.writeTarget(
       &j,
-      args[0],
-      try std.fmt.bufPrint(&endpoint, "{d}", .{ integer(field(g, "endpoint")) orelse 0 }),
-      try std.fmt.bufPrint(&cluster, "{d}", .{ integer(field(g, "cluster")) orelse 0 }),
-      options,
+      device_name,
+      @intCast(integer(field(g, "endpoint")) orelse 0),
+      @intCast(integer(field(g, "cluster")) orelse 0),
+      call.global.timeout,
     );
     try j.objectField("attributes");
     try j.beginArray();
@@ -871,10 +283,10 @@ fn readReadings(
   var left = groups.items.len;
   while (left > 0) {
     const line = (try client.nextLine()) orelse {
-      try err.writeAll("skep: skepd closed the connection without answering\n");
+      try err.print("skep {s}: skepd closed the connection without answering\n", .{ call.name });
       return failed;
     };
-    if (options.json) {
+    if (call.global.json) {
       try out.print("{s}\n", .{ line });
     }
     const response = std.json.parseFromSliceLeaky(std.json.Value, a, line, .{}) catch continue;
@@ -883,7 +295,7 @@ fn readReadings(
     const k: usize = @intCast(id - 2);
     left -= 1;
     if (field(response, "error")) |e| {
-      try err.print("skep: {s}: {s}\n", .{ text(field(e, "code")), text(field(e, "message")) });
+      try err.print("skep {s}: {s}\n", .{ call.name, text(field(e, "message")) });
       status = failed;
     } else if (field(response, "result")) |result| {
       answers[k] = result;
@@ -892,7 +304,7 @@ fn readReadings(
       }
     }
   }
-  if (options.json) return status;
+  if (call.global.json) return status;
 
   // As asked, from the attributes of the answers.
   var rows = try a.alloc(Row, wanted.len);
@@ -927,13 +339,16 @@ fn readReadings(
 fn chosen(
   a: std.mem.Allocator,
   err: *Io.Writer,
+  command_name: []const u8,
   device_name: []const u8,
   device: std.json.Value,
-  names: []const [:0]const u8,
+  names: []const []const u8,
 ) !?[]std.json.Value {
   const readings = (field(device, "readings") orelse {
     if (field(device, "endpoints") != null) {
-      try err.writeAll("skep: skepd gives no readings: it is older than skep\n");
+      try err.print("skep {s}: skepd gives no readings: it is older than skep\n", .{
+        command_name,
+      });
     } else {
       try err.print("skep: {s}: not interviewed yet, its readings are not known\n", .{
         device_name,
@@ -951,7 +366,11 @@ fn chosen(
       }
     }
     if (list.items.len == before) {
-      try err.print("skep: {s} has no reading {s}; it has", .{ device_name, name });
+      try err.print("skep {s}: {s} has no reading {s}; it has", .{
+        command_name,
+        device_name,
+        name,
+      });
       for (readings, 0..) |r, i| {
         try err.print("{s} {s}", .{ if (i == 0) "" else ",", text(field(r, "reading")) });
       }
@@ -1162,12 +581,12 @@ fn statusOf(result: std.json.Value) u8 {
 fn show(
   out: *Io.Writer,
   err: *Io.Writer,
-  command: []const u8,
-  args: []const [:0]const u8,
+  call: *const commands.Call,
   result: std.json.Value,
   now: i64,
   a: std.mem.Allocator,
 ) !u8 {
+  const command = call.name;
   if (eq(command, "version")) {
     try out.print("skepd {s}, protocol {d}\n", .{
       text(field(result, "skepd")),
@@ -1193,7 +612,7 @@ fn show(
       try out.writeByte('\n');
     }
   } else if (eq(command, "permit")) {
-    const seconds = if (args.len == 1) args[0] else "60";
+    const seconds = call.get("seconds") orelse "60";
     if (eq(seconds, "0")) {
       try out.writeAll("devices may no longer join\n");
     } else {
@@ -1214,7 +633,15 @@ fn show(
       }
     }
   } else if (eq(command, "get")) {
-    const readings = try chosen(a, err, args[0], result, args[1..]) orelse return failed;
+    const readings = try chosen(
+      a,
+      err,
+      command,
+      call.get("device").?,
+      result,
+      call.all("reading"),
+    ) orelse
+      return failed;
     try showRows(out, try readingRows(a, result, readings, now));
   } else if (eq(command, "read")) {
     if (field(result, "attributes")) |attributes| {
@@ -1237,7 +664,10 @@ fn show(
   if (status != ok) {
     if (integer(field(result, "status"))) |s| {
       if (s != 0) {
-        try err.print("skep: the device refused, status 0x{x:0>2}\n", .{ @as(u64, @intCast(s)) });
+        try err.print("skep {s}: the device refused it, status 0x{x:0>2}\n", .{
+          command,
+          @as(u64, @intCast(s)),
+        });
       }
     }
   }
@@ -1513,19 +943,6 @@ test "readings are written short, in their units" {
   }
 }
 
-test "every command has its help" {
-  for ([_][]const u8{
-    "version", "network", "permit", "devices", "device", "get",    "read",    "set", "rename",
-    "setup",   "remove",  "write",  "report",  "bind",   "unbind", "command", "on",  "off",
-    "toggle",  "watch",
-  }) |name| {
-    const command = commandNamed(name) orelse return error.TestExpectedHelp;
-    try testing.expect(command.help.len > 0);
-  }
-  // And no more than skep knows.
-  var count: usize = 0;
-  for (commands) |command| {
-    count += command.names.len;
-  }
-  try testing.expectEqual(20, count);
+test {
+  _ = commands;
 }

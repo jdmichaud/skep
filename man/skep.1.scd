@@ -105,6 +105,10 @@ temperature in °C rather than the hundredths of a degree the device sends.
 
 # OPTIONS
 
+Options go before or after the command, as in _skep --timeout 600 read
+thermometre temperature_ or _skep read thermometre temperature --timeout
+600_. An argument that starts with -- goes after a *--*.
+
 *--socket* _path_
 	skepd's socket. By default, _$SKEP_SOCKET_, then
 	_$XDG_RUNTIME_DIR/skep/skepd.sock_, then _/run/skep/skepd.sock_.
@@ -118,8 +122,24 @@ temperature in °C rather than the hundredths of a degree the device sends.
 	*remove*.
 
 *--help*, *--version*
-	Print how to use skep, or its version. After a command, *--help* prints
+	Print how to use skep, or its version. With a command, *--help* prints
 	how to use that command, as in _skep set --help_.
+
+# ERRORS
+
+A mistake on the command line is told with the command, the argument, and
+what is wrong with it, then how to use the command:
+
+```
+skep set: missing <value>; "color_temperature" was taken as <device>, "1000K" as <reading>
+usage: skep [<options>] set <device> <reading> <value> [--transition <seconds>]
+skep set --help tells more.
+```
+
+What skepd refuses, or a device, is told the same way: _skep set: no
+reading levl; it can set on, level, color_temperature, hue, saturation and
+color_. *--json* shows skepd's answers as they are, with their error
+codes.
 
 # EXIT STATUS
 

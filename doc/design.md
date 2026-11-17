@@ -544,9 +544,23 @@ The API is in [include/skep.h](../include/skep.h).
   available for what has no reading. `skep set bulb level 50` sets one,
   in the same terms, with units as typed (`2700K`, `50%`), and `skep set
   bulb color "#ff8000"` a colour.
-- `--help` and `--version`; data on stdout, diagnostics on stderr. Human
-  readable output by default, `--json` for scripts. Exit status 0 on
-  success, 1 on failure, 2 on usage errors.
+- One declaration per command (`src/skep/commands.zig`) says its forms,
+  its arguments, what kind of value each takes and in what range, its
+  options, and its help; parsing, checking, error messages, the help and
+  the request all come from it, so they cannot drift apart, and tests
+  cover each command from its command line to its request.
+  - Not chosen: a library such as zig-clap or one that derives the
+    command line from a struct, none of which was known to build on Zig
+    0.17, and whose error messages could not be shaped.
+- Mistakes say which command, which argument and what is wrong, then
+  show that command's usage only. Too few arguments are told before bad
+  ones, with how those given were taken, since the missing one is often
+  not the last. skepd's refusals are shown as its messages, after the
+  command's name; `--json` keeps their codes.
+- Options go before or after the command. `--help` and `--version`;
+  data on stdout, diagnostics on stderr. Human readable output by
+  default, `--json` for scripts. Exit status 0 on success, 1 on failure,
+  2 on usage errors.
 
 ## Files
 
