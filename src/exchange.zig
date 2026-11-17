@@ -237,11 +237,35 @@ pub fn answer(ctx: *Context, d: *const State.Device, frame: *const driver_layer.
     }
     if (frame.profile == zdo.profile or frame.cluster != e.frame.cluster) continue;
     const parsed = zcl.Frame.parse(payload) catch continue;
-    if (parsed.header.sequence != e.sequence or !parsed.header.from_server) continue;
+    const request = zcl.Frame.parse(e.frame.bytes()) catch continue;
+    if (!answers(request.header, parsed)) continue;
     end(ctx, i, .{ .zcl = parsed });
     return true;
   }
   return false;
+}
+
+/// Whether a ZCL frame from a device answers a request it was sent: the same sequence number,
+/// from the cluster's server side, and the request's own response, or a Default Response to its
+/// command. A report or a request of the device's own, whose sequence number may be the same
+/// by chance, answers nothing.
+fn answers(request: zcl.Header, frame: zcl.Frame) bool {
+  const h = frame.header;
+  if (h.sequence != request.sequence or !h.from_server) return false;
+  if (!h.cluster_specific and h.command == zcl.Command.default_response) {
+    const response = zcl.parseDefaultResponse(frame.payload) catch return false;
+    return response.command == request.command;
+  }
+  // A cluster's own response, such as a scene's: its commands are the cluster's to define.
+  if (request.cluster_specific) return h.cluster_specific;
+  if (h.cluster_specific) return false;
+  const expected: u8 = switch (request.command) {
+    zcl.Command.read_attributes => zcl.Command.read_attributes_response,
+    zcl.Command.write_attributes => zcl.Command.write_attributes_response,
+    zcl.Command.configure_reporting => zcl.Command.configure_reporting_response,
+    else => return false,
+  };
+  return h.command == expected;
 }
 
 /// An exchange was not delivered or answered, or the driver refused it: the device is silent.
@@ -347,4 +371,118 @@ pub fn cancelAll(ctx: *Context) void {
 
 fn err(e: E) c_int {
   return Context.err(e);
+}
+
+test "only a request's response or a Default Response to it answers it" {
+  const read: zcl.Header = .{
+    .cluster_specific = false,
+    .from_server = false,
+    .sequence = 0x40,
+    .command = zcl.Command.read_attributes,
+  };
+  const Case = struct {
+    header: zcl.Header,
+    payload: []const u8 = &.{},
+    answers: bool,
+  };
+  for ([_]Case{
+    .{
+      .header = .{
+        .cluster_specific = false,
+        .from_server = true,
+        .sequence = 0x40,
+        .command = zcl.Command.read_attributes_response,
+      },
+      .answers = true,
+    },
+    // A report with the same sequence number, by chance.
+    .{
+      .header = .{
+        .cluster_specific = false,
+        .from_server = true,
+        .sequence = 0x40,
+        .command = zcl.Command.report_attributes,
+      },
+      .answers = false,
+    },
+    .{
+      .header = .{
+        .cluster_specific = false,
+        .from_server = true,
+        .sequence = 0x41,
+        .command = zcl.Command.read_attributes_response,
+      },
+      .answers = false,
+    },
+    .{
+      .header = .{
+        .cluster_specific = false,
+        .from_server = false,
+        .sequence = 0x40,
+        .command = zcl.Command.read_attributes_response,
+      },
+      .answers = false,
+    },
+    .{
+      .header = .{
+        .cluster_specific = false,
+        .from_server = true,
+        .sequence = 0x40,
+        .command = zcl.Command.default_response,
+      },
+      .payload = &.{ 0x00, 0x86 },
+      .answers = true,
+    },
+    // A Default Response to another command.
+    .{
+      .header = .{
+        .cluster_specific = false,
+        .from_server = true,
+        .sequence = 0x40,
+        .command = zcl.Command.default_response,
+      },
+      .payload = &.{ 0x0a, 0x00 },
+      .answers = false,
+    },
+  }) |case| {
+    try std.testing.expectEqual(
+      case.answers,
+      answers(read, .{ .header = case.header, .payload = case.payload }),
+    );
+  }
+  // A cluster command: a Default Response to it, or a response of its cluster.
+  const move: zcl.Header = .{
+    .cluster_specific = true,
+    .from_server = false,
+    .sequence = 7,
+    .command = 0x04,
+  };
+  try std.testing.expect(
+    answers(move, .{
+      .header = .{
+        .cluster_specific = false,
+        .from_server = true,
+        .sequence = 7,
+        .command = zcl.Command.default_response,
+      },
+      .payload = &.{ 0x04, 0x00 },
+    }),
+  );
+  try std.testing.expect(
+    answers(move, .{
+      .header = .{ .cluster_specific = true, .from_server = true, .sequence = 7, .command = 0x00 },
+      .payload = &.{},
+    }),
+  );
+  try std.testing.expect(
+    !answers(move, .{
+      .header = .{
+        .cluster_specific = false,
+        .from_server = true,
+        .sequence = 7,
+        .command = zcl.Command.report_attributes,
+      },
+      .payload = &.{},
+    }),
+  );
 }
