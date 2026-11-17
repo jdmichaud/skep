@@ -7,14 +7,15 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const CAllocator = @import("allocator.zig").CAllocator;
-const Context = @import("Context.zig");
+/// For skepd's tests, which give the sim driver its devices.
+pub const Context = @import("Context.zig");
 const Event = @import("Event.zig");
 const State = @import("State.zig");
 const requests = @import("requests.zig");
 const setup = @import("setup.zig");
 const readings = @import("readings.zig");
-const zcl = @import("zcl.zig");
-const sim = @import("driver/sim/sim.zig");
+pub const zcl = @import("zcl.zig");
+pub const sim = @import("driver/sim/sim.zig");
 const driver_layer = @import("driver/driver.zig");
 
 /// Version of libskep, taken from `.version` in `build.zig.zon`.

@@ -49,7 +49,7 @@ pub fn build(b: *std.Build) !void {
   });
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = serial })).step);
   addProbe(b, test_step, target, optimize, serial);
-  addSkepd(b, test_step, target, optimize, skep_h, serial, library, build_options);
+  addSkepd(b, test_step, target, optimize, skep_h, serial, library, skep, build_options);
   addSkep(b, test_step, target, optimize, build_options);
   if (b.isRoot()) {
     try addFormatSteps(b);
@@ -129,6 +129,7 @@ fn addSkepd(
   skep_h: *std.Build.Module,
   serial: *std.Build.Module,
   library: *std.Build.Step.Compile,
+  skep: *std.Build.Module,
   build_options: *std.Build.Step.Options,
 ) void {
   const module = b.createModule(.{
@@ -144,8 +145,22 @@ fn addSkepd(
   const run = b.addRunArtifact(skepd);
   run.addPassthruArgs();
   b.step("skepd", "Run skepd (-- --device <path>)").dependOn(&run.step);
-  // The parts of skepd that need no dongle.
-  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = module })).step);
+  // The parts of skepd that need no dongle, with libskep's sources rather than the library, so
+  // that tests can give the sim driver its devices: skepd itself knows libskep by skep.h only.
+  const tested = b.createModule(.{
+    .root_source_file = b.path("src/skepd/main.zig"),
+    .target = target,
+    .optimize = optimize,
+    .link_libc = true,
+    .imports = &.{
+      .{ .name = "skep_h", .module = skep_h },
+      .{ .name = "serial", .module = serial },
+      .{ .name = "libskep", .module = skep },
+      // libskep's own: a file belongs to one module of a binary.
+      .{ .name = "build_options", .module = skep.import_table.get("build_options").? },
+    },
+  });
+  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = tested })).step);
 }
 
 /// `zig build probe -- <device>` resets a Silicon Labs dongle and reports its versions: the

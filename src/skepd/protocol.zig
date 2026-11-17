@@ -532,7 +532,15 @@ const TestBench = struct {
   protocol: Protocol,
   client: linux.fd_t,
 
+  /// libskep's insides, which only tests reach: the sim driver and its devices.
+  const libskep_internal = @import("libskep");
+
   fn init(b: *TestBench) !void {
+    return b.initWith(&.{});
+  }
+
+  /// With `devices` in the simulated network, which the test keeps, and makes join.
+  fn initWith(b: *TestBench, devices: []libskep_internal.sim.Device) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const dir = try std.fmt.bufPrint(&b.dir, "/tmp/skep-test-{s}", .{ &tmp.sub_path });
@@ -542,6 +550,7 @@ const TestBench = struct {
     if (c.skep_new(null, &seed, &ctx) != 0) return error.OutOfMemory;
     errdefer c.skep_free(ctx);
     if (c.skep_set_option(ctx, "driver", "sim") != 0) return error.TestUnexpectedResult;
+    internal(ctx.?).sim_dongle.devices = devices;
     if (c.skep_start(ctx) != 0) return error.TestUnexpectedResult;
     var socket_path: [96]u8 = undefined;
     var errno: std.os.linux.E = .SUCCESS;
@@ -566,6 +575,15 @@ const TestBench = struct {
     b.client = try connect(b.protocol.server.path);
     try b.protocol.server.accept();
     b.pump();
+  }
+
+  fn internal(ctx: *c.skep_ctx) *libskep_internal.Context {
+    return @ptrCast(@alignCast(ctx));
+  }
+
+  /// The sim driver, once started.
+  fn sim(b: *TestBench) *libskep_internal.sim.Driver {
+    return &internal(b.protocol.ctx).driver.?.sim;
   }
 
   fn deinit(b: *TestBench) void {
@@ -684,6 +702,91 @@ test "clients ask skepd, and watch the network" {
   try expectContains(got, "{\"id\":10,\"result\":{}}");
   bench.ask("{\"id\": 11, \"method\": \"network\"}\n");
   try expectContains(bench.received(&buffer), "\"permit_join\":60}}");
+}
+
+test "a device joins, is described and set, gets a name, and is removed" {
+  const sim = TestBench.libskep_internal.sim;
+  const zcl = TestBench.libskep_internal.zcl;
+  var devices = [_]sim.Device{.{
+    .ieee = 0xc4d7fdba7b600000,
+    .nwk = 0x6442,
+    .model = "3RCB02070Z",
+    .input_clusters = &.{ 0x0000, 0x0003, 0x0006, 0x0008, 0x0300 },
+    .color_temperature_range = .{ 142, 454 },
+    .attributes = &.{
+      .{ .cluster = 0x0006, .id = 0x0000, .value = .unsigned(zcl.Type.boolean, 1) },
+      .{ .cluster = 0x0008, .id = 0x0000, .value = .unsigned(zcl.Type.uint8, 254) },
+      .{ .cluster = 0x0300, .id = 0x0007, .value = .unsigned(zcl.Type.uint16, 370) },
+    },
+  }};
+  var bench: TestBench = undefined;
+  try bench.initWith(&devices);
+  defer bench.deinit();
+  var buffer: [16384]u8 = undefined;
+  bench.ask("{\"id\": 1, \"method\": \"watch\"}\n");
+  _ = bench.received(&buffer);
+
+  bench.sim().device(.{ .ieee = 0xc4d7fdba7b600000, .nwk = 0x6442, .kind = .joined });
+  for (0..8) |_| {
+    bench.pump();
+  }
+  var got = bench.received(&buffer);
+  try expectContains(got, "{\"event\":\"device_joined\"");
+  try expectContains(got, "{\"event\":\"device_ready\"");
+
+  // Its readings, read by skepd once it is set up, with their ranges.
+  bench.ask(
+    "{\"id\": 2, \"method\": \"device\", \"params\": {\"device\": \"c4d7fdba7b600000\"}}\n",
+  );
+  got = bench.received(&buffer);
+  try expectContains(got, "\"model\":\"3RCB02070Z\"");
+  try expectContains(got, "\"reading\":\"level\",\"scaled\":100,\"unit\":\"%\"");
+  try expectContains(got, "\"settable\":true,\"min\":2202.643171806167,\"max\":7042.2535211267605");
+  try expectContains(got, "\"scaled\":2702.7027027027025,\"unit\":\"K\"");
+
+  // Set and read, by name.
+  bench.ask(
+    "{\"id\": 3, \"method\": \"rename\", \"params\": {\"device\": \"c4d7fdba7b600000\", \"name\": \"lamp\"}}\n",
+  );
+  bench.ask(
+    "{\"id\": 4, \"method\": \"set\", \"params\": {\"device\": \"lamp\", \"reading\": \"level\", \"value\": 50, \"transition\": 1}}\n",
+  );
+  for (0..4) |_| {
+    bench.pump();
+  }
+  got = bench.received(&buffer);
+  try expectContains(got, "{\"id\":3,\"result\":{}}");
+  try expectContains(got, "{\"id\":4,\"result\":{\"status\":0}}");
+  const sent = bench.sim().sent[bench.sim().sent_len - 1];
+  try testing.expectEqualSlices(u8, &.{ 0x01, sent.payload[1], 0x04, 127, 10, 0 }, sent.bytes());
+  bench.ask(
+    "{\"id\": 5, \"method\": \"set\", \"params\": {\"device\": \"lamp\", \"reading\": \"color_temperature\", \"value\": 1000}}\n",
+  );
+  bench.ask(
+    "{\"id\": 6, \"method\": \"read\", \"params\": {\"device\": \"lamp\", \"endpoint\": 1, \"cluster\": 6, \"attributes\": [0]}}\n",
+  );
+  for (0..4) |_| {
+    bench.pump();
+  }
+  got = bench.received(&buffer);
+  try expectContains(got, "{\"id\":5,\"error\":{\"code\":\"ERANGE\"");
+  try expectContains(got, "\"range\":{\"reading\":\"color_temperature\"");
+  try expectContains(
+    got,
+    "{\"id\":6,\"result\":{\"status\":0,\"attributes\":[{\"id\":0,\"status\":0,\"type\":\"bool\",\"value\":true,\"reading\":\"on\"",
+  );
+
+  // Removed: gone with its name, which its event still gives.
+  bench.ask("{\"id\": 7, \"method\": \"remove\", \"params\": {\"device\": \"lamp\"}}\n");
+  for (0..4) |_| {
+    bench.pump();
+  }
+  got = bench.received(&buffer);
+  try expectContains(got, "{\"event\":\"device_left\"");
+  try expectContains(got, "\"name\":\"lamp\",\"removed\":true}");
+  try expectContains(got, "{\"id\":7,\"result\":");
+  bench.ask("{\"id\": 8, \"method\": \"device\", \"params\": {\"device\": \"lamp\"}}\n");
+  try expectContains(bench.received(&buffer), "{\"id\":8,\"error\":{\"code\":\"ENODEV\"");
 }
 
 test "settings skepd cannot make are refused" {

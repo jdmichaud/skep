@@ -636,6 +636,11 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   retransmissions and sleepy devices are tested without waiting, and
   every run is the same.
 - The `sim` driver lets libskep and skepd be tested without hardware.
+  Its devices answer interviews, setups and reads as the test gives
+  them. skepd runs on it with `--driver sim`, and skepd's tests build
+  libskep from its sources rather than link the library, so that they
+  can give the sim its devices; skepd itself knows libskep by skep.h
+  only.
 - Fuzz tests for every parser of external input: serial link, Zigbee
   frames, IPC requests, configuration.
 - Tests against the real dongle are run by hand, as described in

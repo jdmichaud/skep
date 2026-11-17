@@ -26,9 +26,18 @@ pub const Device = struct {
   bind_status: u8 = 0,
   /// The colour temperatures it shows, in mireds, if it is such a light.
   color_temperature_range: ?[2]u16 = null,
+  /// The values of its endpoint's attributes, which it answers reads with.
+  attributes: []const Attribute = &.{},
   /// What it accepted.
   binds: u8 = 0,
   configurations: u8 = 0,
+};
+
+/// An attribute of a simulated device's cluster, and its value.
+pub const Attribute = struct {
+  cluster: u16,
+  id: u16,
+  value: zcl.Value,
 };
 
 pub const Driver = struct {
@@ -216,6 +225,9 @@ pub const Driver = struct {
               } else if (mireds) |m| {
                 w.writeAll(&.{ zcl.Status.success, zcl.Type.uint16 }) catch unreachable;
                 w.writeInt(u16, m, .little) catch unreachable;
+              } else if (valueOf(dev, message.cluster, id)) |v| {
+                w.writeAll(&.{ zcl.Status.success, v.type }) catch unreachable;
+                zcl.writeValue(&w, v) catch unreachable;
               } else {
                 w.writeByte(zcl.Status.unsupported_attribute) catch unreachable;
               }
@@ -310,6 +322,13 @@ pub const Driver = struct {
 };
 
 /// A network for tests, with keys of no importance.
+fn valueOf(dev: *const Device, cluster: u16, id: u16) ?zcl.Value {
+  for (dev.attributes) |a| {
+    if (a.cluster == cluster and a.id == id) return a.value;
+  }
+  return null;
+}
+
 pub fn testNetwork(network: driver.Network) driver.Held {
   return .{
     .network = network,

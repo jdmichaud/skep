@@ -748,4 +748,6 @@ test {
   _ = @import("Readings.zig");
   _ = @import("libskep.zig");
   _ = @import("time.zig");
+  // libskep's sources, whose exports the tests call: the test build has no library to link.
+  _ = @import("libskep");
 }
