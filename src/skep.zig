@@ -1630,6 +1630,22 @@ test "a device asked to leave is forgotten even if it does not answer" {
   try testing.expectEqual(0, count);
 }
 
+test "libskep keeps so many endpoints of a device" {
+  var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce, .endpoints = 40 }};
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "log-level", "warning"));
+  try openWindow(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
+  const logged = (try nextOfType(ctx, .log)) orelse return error.TestExpectedLog;
+  defer skep_event_free(logged);
+  try testing.expect(std.mem.indexOf(u8, std.mem.span(logged.log()), "40 endpoints") != null);
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+  const d = ctx.state.?.device(sensor_ieee).?;
+  try testing.expectEqual(State.max_endpoints, d.endpoints.len);
+  try testing.expectEqual(State.max_endpoints, d.endpoints[State.max_endpoints - 1].id);
+}
+
 test "time near the end of the application's clock does not overflow" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&testing.allocator, &devices);

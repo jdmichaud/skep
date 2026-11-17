@@ -11,6 +11,7 @@
 const std = @import("std");
 const Context = @import("Context.zig");
 const State = @import("State.zig");
+const driver_layer = @import("driver/driver.zig");
 const devices = @import("devices.zig");
 const exchange = @import("exchange.zig");
 const zcl = @import("zcl.zig");
@@ -213,8 +214,16 @@ fn zdoAnswer(ctx: *Context, d: *State.Device, payload: []const u8) void {
       moveTo(ctx, d, .{ .stage = .endpoints });
     },
     .endpoints => {
-      const ids = zdo.parseActiveEndpoints(payload) catch
+      const all = zdo.parseActiveEndpoints(payload) catch
         return fail(ctx, d, Context.err(.PROTO), 0);
+      const ids = all[0..@min(all.len, State.max_endpoints)];
+      if (ids.len < all.len) {
+        const message: driver_layer.Message = .init(
+          "device {x:0>16} has {d} endpoints: libskep keeps the first {d}",
+          .{ d.ieee, all.len, State.max_endpoints },
+        );
+        ctx.logMessage(.warning, message.text());
+      }
       const endpoints = ctx.gpa.alloc(State.Endpoint, ids.len) catch return;
       for (endpoints, ids) |*e, id| {
         e.* = .{ .id = id };

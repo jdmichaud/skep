@@ -17,9 +17,11 @@ pub const Device = struct {
   rx_on_when_idle: bool = true,
   manufacturer: []const u8 = "Third Reality, Inc",
   model: []const u8 = "3RTHS0224Z",
-  /// The input and output clusters of its only endpoint, 1.
+  /// The input and output clusters of each of its endpoints.
   input_clusters: []const u16 = &.{ 0x0000, 0x0001, 0x0003, 0x0402, 0x0405 },
   output_clusters: []const u16 = &.{ 0x0019 },
+  /// Its endpoints: 1 to this.
+  endpoints: u8 = 1,
   /// Picks nothing up, and answers nothing: asleep, or gone.
   silent: bool = false,
   /// The ZDO status it answers bindings with.
@@ -154,7 +156,11 @@ pub const Driver = struct {
           ) catch unreachable;
         },
         zdo.Cluster.active_endpoints_request => {
-          w.writeAll(&.{ 0, @truncate(dev.nwk), @truncate(dev.nwk >> 8), 1, 1 }) catch unreachable;
+          w.writeAll(&.{ 0, @truncate(dev.nwk), @truncate(dev.nwk >> 8), dev.endpoints }) catch
+            unreachable;
+          for (1..@as(usize, dev.endpoints) + 1) |id| {
+            w.writeByte(@intCast(id)) catch unreachable;
+          }
         },
         zdo.Cluster.simple_descriptor_request => {
           const len = 8 + 2 * (dev.input_clusters.len + dev.output_clusters.len);
@@ -164,7 +170,8 @@ pub const Driver = struct {
               @truncate(dev.nwk),
               @truncate(dev.nwk >> 8),
               @intCast(len),
-              1,
+              // The endpoint asked about.
+              if (message.len >= 4) message.payload[3] else 1,
               0x04,
               0x01,
               0x02,

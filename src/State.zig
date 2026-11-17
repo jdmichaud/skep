@@ -29,6 +29,13 @@ devices: std.ArrayList(Device) = .empty,
 /// The most devices libskep records: a bound on the state, and on what a device on the network
 /// can make libskep keep by pretending others joined.
 pub const max_devices = 1024;
+/// The most endpoints libskep keeps of a device: more than any device has, and a bound on what a
+/// device, or one answering in its name, can make libskep keep. A frame bounds its clusters.
+pub const max_endpoints = 32;
+/// The longest state libskep writes, in bytes: that of `max_devices` devices with
+/// `max_endpoints` endpoints each, and all the clusters and text frames can carry, which a test
+/// writes. Applications may refuse to read a longer one.
+pub const max_written_len = 32 << 20;
 
 /// A device, and what libskep learnt of it.
 pub const Device = struct {
@@ -424,13 +431,22 @@ fn writeDevice(j: *std.json.Stringify, d: *const Device) std.Io.Writer.Error!voi
   try j.endObject();
 }
 
+/// Writes clusters on one line: a line each would make up most of the state.
 fn writeClusters(j: *std.json.Stringify, clusters: []const u16) std.Io.Writer.Error!void {
-  try j.beginArray();
-  for (clusters) |cluster| {
-    try j.print("\"{x:0>4}\"", .{ cluster });
-  }
-  try j.endArray();
+  try j.print("{f}", .{ ClusterList{ .clusters = clusters } });
 }
+
+const ClusterList = struct {
+  clusters: []const u16,
+
+  pub fn format(l: ClusterList, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    try w.writeByte('[');
+    for (l.clusters, 0..) |cluster, i| {
+      try w.print("{s}\"{x:0>4}\"", .{ if (i == 0) "" else ", ", cluster });
+    }
+    try w.writeByte(']');
+  }
+};
 
 /// The length of the state as `write` writes it.
 pub fn writtenLen(s: *const State) usize {
@@ -925,4 +941,50 @@ fn fuzzParse(_: void, smith: *testing.Smith) !void {
   try testing.expectEqual(s.network, again.network);
   try testing.expectEqual(s.trust_center_link_key, again.trust_center_link_key);
   try expectSameDevices(&s, &again);
+}
+
+test "no state libskep writes is longer than max_written_len" {
+  const driver_layer = @import("driver/driver.zig");
+  const gpa = testing.allocator;
+  var s: State = .init(0x00124b0000000000, .{
+    .network = .{ .channel = 26, .pan_id = 0xffff, .extended_pan_id = 0xffffffffffffffff },
+    .security = .{ .network_key = @splat(0xff), .trust_center_link_key = @splat(0xff) },
+  });
+  defer s.deinit(gpa);
+  // Text as long as a frame carries, of characters JSON escapes; as many clusters as a Simple
+  // Descriptor response carries, as wide as they come.
+  const text: [driver_layer.Frame.max_payload_len]u8 = @splat('"');
+  const max_clusters = (driver_layer.Frame.max_payload_len - 13) / 2;
+  var cluster_ids: [max_clusters]u16 = @splat(0xffff);
+  var endpoints: [max_endpoints]Endpoint = undefined;
+  for (&endpoints, 0..) |*e, i| {
+    e.* = .{
+      .id = @intCast(200 + i),
+      .profile = 0xffff,
+      .device = 0xffff,
+      .input_clusters = &cluster_ids,
+      .output_clusters = &.{},
+    };
+  }
+  var manufacturer = text;
+  var model = text;
+  try s.devices.ensureTotalCapacity(gpa, max_devices);
+  for (0..max_devices) |i| {
+    s.devices.appendAssumeCapacity(.{
+      .ieee = 0xffffffffffff0000 + i,
+      .nwk = 0xfff7,
+      .node = .{ .type = .end_device, .manufacturer_code = 0xffff, .rx_on_when_idle = false },
+      .endpoints = &endpoints,
+      .manufacturer = &manufacturer,
+      .model = &model,
+      .color_temperature_range = .{ .min = 0xffff, .max = 0xffff },
+      .progress = .{ .stage = .setup, .step = std.math.maxInt(@FieldType(Progress, "step")) },
+    });
+  }
+  // The devices only borrow what they point to.
+  defer s.devices.clearRetainingCapacity();
+  const len = s.writtenLen();
+  try testing.expect(len <= max_written_len);
+  // Not far above it either: the bound means something.
+  try testing.expect(len > max_written_len / 2);
 }

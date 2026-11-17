@@ -197,3 +197,8 @@ publishes the section of each released version as its release notes.
   than the one meant: a socket given is now the only one tried.
 - skepd keeps systemd's watchdog, which its units set to 30 seconds:
   a skepd whose loop stops turning is restarted.
+- The state has a bound, `SKEP_MAX_STATE_SIZE` (32 MiB), which skepd
+  reads up to: libskep keeps 32 endpoints of a device, and writes each
+  list of clusters on one line. A device listing more endpoints, or one
+  answering in its name, could make the state grow past what skepd
+  read, and keep it from starting.

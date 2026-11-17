@@ -1077,7 +1077,7 @@ fn newNetwork(ctx: *Context) driver_layer.Form {
 /// Queues a log message if the log level lets it through. Its event is its own, not a spare one,
 /// so that a message never takes an event something else must have; out of memory, the message
 /// is lost.
-fn logMessage(ctx: *Context, level: driver_layer.Level, message: []const u8) void {
+pub fn logMessage(ctx: *Context, level: driver_layer.Level, message: []const u8) void {
   if (@backingInt(level) > @backingInt(ctx.options.log_level)) return;
   const event = Event.create(ctx.c_allocator) catch return;
   event.type = .log;

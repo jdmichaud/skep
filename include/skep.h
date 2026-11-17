@@ -108,6 +108,7 @@ struct skep_allocator {
 #define SKEP_MAX_REQUESTS 32       /* requests pending at once */
 #define SKEP_MAX_TRANSITION 6553.4 /* seconds a setting may take */
 #define SKEP_MAX_DEVICES 1024      /* devices libskep records */
+#define SKEP_MAX_STATE_SIZE 33554432 /* bytes of the longest state exported */
 
 /*
  * Create a context. Configure it with skep_set_option() and, if a state
@@ -652,6 +653,10 @@ const uint8_t *skep_event_get_payload(const skep_event *event, size_t *len);
  * it is; reading it is fine, but the "skep" object is libskep's and
  * changes between versions. A libskep version reads the state written by
  * any older version.
+ *
+ * It is SKEP_MAX_STATE_SIZE bytes at most, however many devices join and
+ * whatever they say: libskep records SKEP_MAX_DEVICES devices, and 32
+ * endpoints of each.
  */
 
 /*

@@ -3,6 +3,7 @@
 //! the network key, so only its owner may read it.
 
 const std = @import("std");
+const c = @import("skep_h");
 
 const linux = std.os.linux;
 
@@ -12,8 +13,8 @@ pub const Failure = struct {
   errno: linux.E,
 };
 
-/// Larger than any state: a file this large is not one.
-const max_len = 16 << 20;
+/// Longer than any state libskep writes: a file this long is not one.
+const max_len = c.SKEP_MAX_STATE_SIZE + 1;
 
 /// Where the state goes by default: the state directory systemd gives the service, or the XDG
 /// data directory. Null if neither can be found.
