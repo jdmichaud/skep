@@ -202,3 +202,6 @@ publishes the section of each released version as its release notes.
   list of clusters on one line. A device listing more endpoints, or one
   answering in its name, could make the state grow past what skepd
   read, and keep it from starting.
+- With EZSP 13 and later, the trust center's frame counter is read too,
+  with `getApsKeyInfo`, rather than left unknown: the state keeps it, and
+  a restored network starts above it.

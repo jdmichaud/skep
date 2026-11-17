@@ -294,6 +294,34 @@ pub fn exportKey(out: *[18]u8, key_type: SecManKeyType) []const u8 {
   return out;
 }
 
+/// `sl_zb_sec_man_aps_key_metadata_t`'s bit telling that it holds the outgoing frame counter.
+const key_has_outgoing_frame_counter: u16 = 0x0002;
+
+/// The answer to `get_aps_key_info`, since EZSP 13: the key's outgoing frame counter, if the
+/// NCP holds one. With EZSP 13, the EUI64, the key's metadata and the status; since EZSP 14, the
+/// status, the metadata and the context.
+pub fn parseApsKeyInfo(parameters: []const u8, version: u8) error{ TooShort }!struct {
+  status: Status,
+  outgoing_frame_counter: ?u32,
+} {
+  var r: Reader = .{ .bytes = parameters };
+  if (version < 14) {
+    _ = try r.slice(8);
+  }
+  var status: u32 = if (version >= 14) try r.int(u32) else 0;
+  const bitmask = try r.int(u16);
+  const outgoing = try r.int(u32);
+  _ = try r.int(u32);
+  _ = try r.int(u16);
+  if (version < 14) {
+    status = try r.int(u32);
+  }
+  return .{
+    .status = .{ .value = status, .sl = true },
+    .outgoing_frame_counter = if (bitmask & key_has_outgoing_frame_counter != 0) outgoing else null,
+  };
+}
+
 /// The answer to `export_key`: the key then the status with EZSP 13, the status, the key and the
 /// context since EZSP 14.
 pub fn parseExportKey(parameters: []const u8, version: u8) error{ TooShort }!struct {
@@ -1064,4 +1092,20 @@ fn fuzzParse(_: void, smith: *testing.Smith) !void {
   _ = MessageSent.parse(bytes[0..len], version) catch {};
   const value = parseGetValue(bytes[0..len], version) catch return;
   _ = VersionInfo.parse(value.value) catch {};
+}
+
+test "the trust center key's frame counter, as EZSP 13 and 14 give it" {
+  const v13 = try parseApsKeyInfo(
+    &hex("0000000000000000" ++ "0200" ++ "40420f00" ++ "00000000" ++ "0000" ++ "00000000"),
+    13,
+  );
+  try testing.expectEqual(1_000_000, v13.outgoing_frame_counter);
+  try testing.expect(v13.status.is(.ok));
+  const v14 = try parseApsKeyInfo(
+    &hex("00000000" ++ "0000" ++ "40420f00" ++ "00000000" ++ "0000") ++ @as([18]u8, @splat(0)),
+    14,
+  );
+  // No counter, by the bitmask.
+  try testing.expectEqual(null, v14.outgoing_frame_counter);
+  try testing.expectError(error.TooShort, parseApsKeyInfo(&hex("00000000"), 14));
 }

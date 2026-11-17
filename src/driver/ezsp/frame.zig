@@ -44,6 +44,7 @@ pub const FrameId = enum(u16) {
   set_value = 0x00ab,
   set_radio_power = 0x0099,
   clear_key_table = 0x00b1,
+  get_aps_key_info = 0x010c,
   import_transient_key = 0x0111,
   export_key = 0x0114,
   get_network_key_info = 0x0116,

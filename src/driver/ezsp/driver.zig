@@ -261,6 +261,8 @@ pub const Driver = struct {
     reading_network_key,
     exporting_network_key,
     reading_trust_center_key,
+    /// Since EZSP 13: its frame counter, apart.
+    reading_trust_center_counter,
     reading_ieee,
     setting_radio_power,
     /// Ready: running the network the dongle holds, if any.
@@ -787,24 +789,26 @@ pub const Driver = struct {
           const key = d.keyOf(received) orelse return;
           security.trust_center_link_key = key.key;
           security.trust_center_frame_counter = key.outgoing_frame_counter;
-        } else {
-          security.trust_center_link_key = d.exportedKey(received) orelse return;
-          security.trust_center_frame_counter = null;
+          return d.networkRead(now);
         }
-        switch (d.reading_for) {
-          .ready => {
-            d.ready.network = d.reading;
-            d.readIeee(now);
+        security.trust_center_link_key = d.exportedKey(received) orelse return;
+        d.step = .reading_trust_center_counter;
+        var out: [18]u8 = undefined;
+        d.send(.get_aps_key_info, command.exportKey(&out, .trust_center_link), now);
+      },
+      .reading_trust_center_counter => {
+        // Unknown if the NCP does not tell: one that does not know the command, or holds no
+        // counter for the key.
+        d.reading.security.trust_center_frame_counter = switch (received.id) {
+          .invalid_command => null,
+          .get_aps_key_info => blk: {
+            const info = command.parseApsKeyInfo(received.parameters, version) catch
+              return d.fail(.bad_response);
+            break :blk if (info.status.is(.ok)) info.outgoing_frame_counter else null;
           },
-          .formed => {
-            d.step = .running;
-            d.post(.{ .formed = d.reading });
-          },
-          .refreshed => {
-            d.step = .running;
-            d.post(.{ .refreshed = d.reading });
-          },
-        }
+          else => return d.fail(.bad_response),
+        };
+        d.networkRead(now);
       },
       .reading_ieee => {
         if (received.id != .get_eui64) return d.fail(.bad_response);
@@ -1117,6 +1121,24 @@ pub const Driver = struct {
     d.send(.get_network_parameters, &.{}, now);
   }
 
+  /// The network is read: for what it was.
+  fn networkRead(d: *Driver, now: u64) void {
+    switch (d.reading_for) {
+      .ready => {
+        d.ready.network = d.reading;
+        d.readIeee(now);
+      },
+      .formed => {
+        d.step = .running;
+        d.post(.{ .formed = d.reading });
+      },
+      .refreshed => {
+        d.step = .running;
+        d.post(.{ .refreshed = d.reading });
+      },
+    }
+  }
+
   fn readIeee(d: *Driver, now: u64) void {
     d.step = .reading_ieee;
     d.send(.get_eui64, &.{}, now);
@@ -1318,6 +1340,13 @@ test "EZSP 13 reads the keys from the security manager" {
   ncp.respond(
     &[_]u8{ link_key[0], 0x80, 0x01, 0x14, 0x01 } ++ @as([16]u8, @splat(0x11)) ++ hex("00000000"),
   );
+  // Its frame counter, apart: EZSP 13 answers with the EUI64, the metadata, then the status.
+  const counter = ncp.take() orelse return error.TestExpectedCommand;
+  try testing.expectEqualSlices(u8, &(hex("0c01" ++ "02") ++ @as([17]u8, @splat(0))), counter[3..]);
+  ncp.respond(
+    &[_]u8{ counter[0], 0x80, 0x01, 0x0c, 0x01 } ++
+      hex("0000000000000000" ++ "0200" ++ "40420f00" ++ "00000000" ++ "0000" ++ "00000000"),
+  );
   const ieee = ncp.take() orelse return error.TestExpectedCommand;
   ncp.respond(&[_]u8{ ieee[0], 0x80, 0x01, 0x26, 0x00 } ++ hex("8877665544332211"));
   const security = (skipCallbacks(&driver) orelse
@@ -1326,7 +1355,7 @@ test "EZSP 13 reads the keys from the security manager" {
   try testing.expectEqual(2, security.network_key_sequence_number);
   try testing.expectEqual(70000, security.network_frame_counter);
   try testing.expectEqual(@as([16]u8, @splat(0x11)), security.trust_center_link_key);
-  try testing.expectEqual(null, security.trust_center_frame_counter);
+  try testing.expectEqual(1_000_000, security.trust_center_frame_counter);
 }
 
 test "a dongle without a network is ready without one" {
