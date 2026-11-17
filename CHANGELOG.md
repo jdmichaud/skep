@@ -64,6 +64,8 @@ publishes the section of each released version as its release notes.
   sleepy one, `skep read <device> <reading>...` asks the device, as in
   `skep read plug power`, and `skep watch` prints events on short lines
   such as `plug: power 11.2 W`.
+- `--help` after any skep command tells how to use it (`skep set
+  --help`), and skepd takes `--help` too.
 - `skep set <device> <reading> <value>` sets a reading, with
   `--transition`: `skep set bulb level 50%`, `skep set bulb
   color_temperature 2700K`, `skep set bulb color "#ff8000"`, `skep set

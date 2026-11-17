@@ -8,6 +8,8 @@ skepd - run a Zigbee network
 
 *skepd* *--device* _path_ [*--state* _path_] [*--socket* _path_] [*--driver* _name_] [*--log-level* _level_] [*--replace-network*] [*--baud* _rate_] [*--rtscts*]
 
+*skepd* *--help*
+
 # DESCRIPTION
 
 *skepd* runs the Zigbee network of a dongle, through libskep. It is the only
@@ -61,6 +63,9 @@ back. It runs in the foreground, and logs to standard error.
 	The serial speed and hardware flow control, if the dongle's firmware does
 	not use the driver's usual ones (115200 bauds, software flow control for
 	ezsp).
+
+*--help*
+	Print how to use skepd, and exit.
 
 # FILES
 

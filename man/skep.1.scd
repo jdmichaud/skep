@@ -118,7 +118,8 @@ temperature in °C rather than the hundredths of a degree the device sends.
 	*remove*.
 
 *--help*, *--version*
-	Print how to use skep, or its version.
+	Print how to use skep, or its version. After a command, *--help* prints
+	how to use that command, as in _skep set --help_.
 
 # EXIT STATUS
 

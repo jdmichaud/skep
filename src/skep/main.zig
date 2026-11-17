@@ -8,37 +8,230 @@ const build_options = @import("build_options");
 const linux = std.os.linux;
 const Io = std.Io;
 
-const usage =
-  \\usage: skep [--socket <path>] [--json] [--timeout <seconds>] <command> [<arguments>]
-  \\
-  \\Asks skepd about the Zigbee network, and tells it what to do.
-  \\
-  \\  version                         the versions of skepd and of its protocol
-  \\  network                         the network
-  \\  permit [<seconds>]              let new devices join, 60 s by default, 0 to stop
-  \\  devices                         the devices, and what they last reported
-  \\  device <device>                 one device, in detail
-  \\  get <device> [<reading>...]     what a device last reported, or was read for
-  \\  read <device> <reading>...      ask a device for readings, such as temperature
-  \\  set <device> <reading> <value> [--transition <seconds>]
-  \\                                  set a reading, such as level 50, or a colour: color #ff8000
-  \\  rename <device> [<name>]        name a device, or forget its name
-  \\  setup <device>                  interview and set a device up again
-  \\  remove <device>                 make a device leave the network, and forget it
-  \\  read <device> <endpoint> <cluster> <attribute>...
-  \\  write <device> <endpoint> <cluster> <attribute> <type> <value>
-  \\  report <device> <endpoint> <cluster> <attribute> <type> <min> <max> [<change>]
-  \\  bind <device> <endpoint> <cluster>
-  \\  unbind <device> <endpoint> <cluster>
-  \\  command <device> <endpoint> <cluster> <command> [<type>:<value>...]
-  \\  on|off|toggle <device> [<endpoint>]
-  \\  watch                           print events until interrupted
-  \\
-  \\A device is its IEEE address or its name. Clusters, attributes and commands are numbers,
-  \\in hexadecimal after 0x. A reading is a name such as temperature, which get lists.
-  \\--json prints skepd's answers as they are. skep(1) tells more.
-  \\
-;
+/// A command: how it is used, in one form or more; what it does, in a few words for skep --help,
+/// and in full for its own --help.
+const Command = struct {
+  names: []const []const u8,
+  forms: []const []const u8,
+  summary: []const u8,
+  help: []const u8,
+};
+
+const commands = [_]Command{
+  .{
+    .names = &.{ "version" },
+    .forms = &.{ "version" },
+    .summary = "the versions of skepd and of its protocol",
+    .help = "Prints the versions of skepd and of skep-protocol(7), which it speaks.",
+  },
+  .{
+    .names = &.{ "network" },
+    .forms = &.{ "network" },
+    .summary = "the network",
+    .help =
+    \\Prints whether the network is up, its channel, PAN ID and extended PAN ID, and how long
+    \\devices may still join.
+    ,
+  },
+  .{
+    .names = &.{ "permit" },
+    .forms = &.{ "permit [<seconds>]" },
+    .summary = "let new devices join, 60 s by default, 0 to stop",
+    .help = "Lets new devices join for <seconds>, 60 by default, 254 at most; 0 stops letting them.",
+  },
+  .{
+    .names = &.{ "devices" },
+    .forms = &.{ "devices" },
+    .summary = "the devices, and what they last reported",
+    .help =
+    \\Lists the devices, one per line: their name, or their address without one, their model,
+    \\and the first three readings they reported, or how far their setup got.
+    ,
+  },
+  .{
+    .names = &.{ "device" },
+    .forms = &.{ "device <device>" },
+    .summary = "one device, in detail",
+    .help =
+    \\Prints what the device's interview found: its address, type, manufacturer and model, its
+    \\endpoints and clusters, and its readings, as get gives them.
+    ,
+  },
+  .{
+    .names = &.{ "get" },
+    .forms = &.{ "get <device> [<reading>...]" },
+    .summary = "what a device last reported, or was read for",
+    .help =
+    \\Prints the device's readings, or those named, such as temperature: the last value it
+    \\reported or was read for, and how long ago. It answers at once, even for a device that
+    \\sleeps.
+    ,
+  },
+  .{
+    .names = &.{ "read" },
+    .forms = &.{
+      "read <device> <reading>...",
+      "read <device> <endpoint> <cluster> <attribute>...",
+    },
+    .summary = "ask a device for readings, such as temperature",
+    .help =
+    \\Asks the device for the readings named, such as temperature, or for attributes of a cluster
+    \\of an endpoint, by number. A device that sleeps answers when it wakes up, which can take
+    \\minutes: --timeout gives up earlier.
+    ,
+  },
+  .{
+    .names = &.{ "set" },
+    .forms = &.{ "set <device> <reading> <value> [--transition <seconds>]" },
+    .summary = "set a reading, such as level 50%, or a colour: color #ff8000",
+    .help =
+    \\Sets a reading: a light's or a plug's on, to yes or no; a light's level, such as 50%; its
+    \\color_temperature, such as 2700K; its hue or saturation. Or sets a light's colour: color
+    \\and an sRGB colour, such as #ff8000, whose brightness is the level's.
+    \\
+    \\  --transition <seconds>  how long a light takes to get there, 0 by default
+    ,
+  },
+  .{
+    .names = &.{ "rename" },
+    .forms = &.{ "rename <device> [<name>]" },
+    .summary = "name a device, or forget its name",
+    .help =
+    \\Gives the device a name, which commands then take instead of its address, or forgets its
+    \\name without one.
+    ,
+  },
+  .{
+    .names = &.{ "setup" },
+    .forms = &.{ "setup <device>" },
+    .summary = "interview and set a device up again",
+    .help =
+    \\Interviews the device and sets it up again from the start: after a failed setup, or when it
+    \\lost its configuration.
+    ,
+  },
+  .{
+    .names = &.{ "remove" },
+    .forms = &.{ "remove <device>" },
+    .summary = "make a device leave the network, and forget it",
+    .help =
+    \\Asks the device to leave the network, and forgets it. It gives up waiting for an answer
+    \\after 60 seconds, or --timeout: the device is forgotten either way.
+    ,
+  },
+  .{
+    .names = &.{ "write" },
+    .forms = &.{ "write <device> <endpoint> <cluster> <attribute> <type> <value>" },
+    .summary = "write an attribute",
+    .help =
+    \\Writes an attribute, with its ZCL type named as skep-protocol(7) names them, such as uint8
+    \\or char_string.
+    ,
+  },
+  .{
+    .names = &.{ "report" },
+    .forms = &.{ "report <device> <endpoint> <cluster> <attribute> <type> <min> <max> [<change>]" },
+    .summary = "configure how a device reports an attribute",
+    .help =
+    \\Configures how the device reports an attribute: at least <min> and at most <max> seconds
+    \\apart, and when it changes by <change>, for analog types.
+    ,
+  },
+  .{
+    .names = &.{ "bind" },
+    .forms = &.{ "bind <device> <endpoint> <cluster>" },
+    .summary = "bind a cluster to the coordinator",
+    .help = "Binds the cluster to the coordinator, so that the device sends it reports and commands.",
+  },
+  .{
+    .names = &.{ "unbind" },
+    .forms = &.{ "unbind <device> <endpoint> <cluster>" },
+    .summary = "remove a binding",
+    .help = "Removes the binding of the cluster to the coordinator.",
+  },
+  .{
+    .names = &.{ "command" },
+    .forms = &.{ "command <device> <endpoint> <cluster> <command> [<type>:<value>...]" },
+    .summary = "send a cluster command",
+    .help = "Sends a cluster command, with its arguments in order, such as uint8:128 uint16:10.",
+  },
+  .{
+    .names = &.{ "on", "off", "toggle" },
+    .forms = &.{ "on|off|toggle <device> [<endpoint>]" },
+    .summary = "switch a device on, off, or the other way",
+    .help =
+    \\Switches the device on, off, or the other way, with the On/Off cluster of <endpoint>, 1 by
+    \\default.
+    ,
+  },
+  .{
+    .names = &.{ "watch" },
+    .forms = &.{ "watch" },
+    .summary = "print events until interrupted",
+    .help =
+    \\Prints what happens on the network, one event per line, until interrupted: its time in UTC,
+    \\the device, and what happened, such as the readings it reported.
+    ,
+  },
+};
+
+/// skep --help: how to use skep, and its commands in a few words, each after its form, or under it
+/// when the form is long.
+const usage = usage: {
+  @setEvalBranchQuota(100_000);
+  const column = 34;
+  var lines: []const u8 =
+    \\usage: skep [--socket <path>] [--json] [--timeout <seconds>] <command> [<arguments>]
+    \\
+    \\Asks skepd about the Zigbee network, and tells it what to do.
+    \\
+    \\
+  ;
+  for (commands) |command| {
+    for (command.forms, 0..) |form, k| {
+      lines = lines ++ "  " ++ form;
+      if (k == 0 and form.len + 2 < column) {
+        lines = lines ++ spaces(column - 2 - form.len) ++ command.summary;
+      } else if (k == 0) {
+        lines = lines ++ "\n" ++ spaces(column) ++ command.summary;
+      }
+      lines = lines ++ "\n";
+    }
+  }
+  break :usage lines ++
+    \\
+    \\A device is its IEEE address or its name. Clusters, attributes and commands are numbers,
+    \\in hexadecimal after 0x. A reading is a name such as temperature, which get lists.
+    \\--json prints skepd's answers as they are. skep <command> --help tells how to use a
+    \\command, skep(1) more.
+    \\
+  ;
+};
+
+fn spaces(comptime n: usize) []const u8 {
+  const padding: [n]u8 = @splat(' ');
+  return &padding;
+}
+
+/// The command named, or null.
+fn commandNamed(name: []const u8) ?*const Command {
+  for (&commands) |*command| {
+    for (command.names) |n| {
+      if (std.mem.eql(u8, n, name)) return command;
+    }
+  }
+  return null;
+}
+
+/// skep <command> --help.
+fn writeCommandHelp(out: *Io.Writer, command: *const Command) !void {
+  for (command.forms, 0..) |form, k| {
+    try out.print("{s} skep [<options>] {s}\n", .{ if (k == 0) "usage:" else "      ", form });
+  }
+  try out.print("\n{s}\n\nskep --help lists the options and the commands; skep(1) tells more.\n", .{
+    command.help,
+  });
+}
 
 const Options = struct {
   socket: ?[]const u8 = null,
@@ -93,6 +286,15 @@ pub fn main(init: std.process.Init) !u8 {
   }
   const command = args[i];
   const rest = args[i + 1..];
+  for (rest) |arg| {
+    if (!std.mem.eql(u8, arg, "--help")) continue;
+    if (commandNamed(command)) |c| {
+      try writeCommandHelp(out, c);
+    } else {
+      try out.writeAll(usage);
+    }
+    return ok;
+  }
 
   var request: Io.Writer.Allocating = .init(arena);
   const method = build(&request, command, rest, options) catch |e| switch (e) {
@@ -1212,4 +1414,21 @@ test "readings are written short, in their units" {
     defer a.free(s);
     try testing.expectEqualStrings(case[1], s);
   }
+}
+
+test "every command has its help" {
+  for ([_][]const u8{
+    "version", "network", "permit", "devices", "device", "get",    "read",    "set", "rename",
+    "setup",   "remove",  "write",  "report",  "bind",   "unbind", "command", "on",  "off",
+    "toggle",  "watch",
+  }) |name| {
+    const command = commandNamed(name) orelse return error.TestExpectedHelp;
+    try testing.expect(command.help.len > 0);
+  }
+  // And no more than skep knows.
+  var count: usize = 0;
+  for (commands) |command| {
+    count += command.names.len;
+  }
+  try testing.expectEqual(20, count);
 }

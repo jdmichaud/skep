@@ -37,6 +37,9 @@ const usage =
   \\                      new one if no state is saved; its devices must then be paired again
   \\  --baud <rate>       the serial speed, if not the driver's usual one
   \\  --rtscts            hardware flow control, if not the driver's usual one
+  \\  --help              print this, and exit
+  \\
+  \\skepd(8) tells more.
   \\
 ;
 
@@ -592,6 +595,12 @@ pub fn main(init: std.process.Init) !u8 {
   defer log.flush() catch {};
 
   const args = try init.minimal.args.toSlice(init.arena.allocator());
+  for (args[1..]) |arg| {
+    if (!std.mem.eql(u8, arg, "--help")) continue;
+    var stdout_writer: Io.File.Writer = .initStreaming(.stdout(), io, &.{});
+    try stdout_writer.interface.writeAll(usage);
+    return 0;
+  }
   const options = parseOptions(args) orelse {
     try log.writeAll(usage);
     return 2;
