@@ -250,9 +250,16 @@ pub const Link = struct {
 
   /// Runs the timers due at time `now`.
   pub fn advance(link: *Link, now: u64) void {
+    link.runTimer(now);
+    // After the timer, which may have queued frames again behind an XOFF.
     if (link.pauseDeadline()) |deadline| {
-      if (now >= deadline) return link.fail(.paused);
+      if (now >= deadline) {
+        link.fail(.paused);
+      }
     }
+  }
+
+  fn runTimer(link: *Link, now: u64) void {
     const deadline = link.timerDeadline() orelse return;
     if (now < deadline) return;
     switch (link.state) {
