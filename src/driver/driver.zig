@@ -72,6 +72,9 @@ pub const Ready = struct {
   ieee: u64,
   /// The network the dongle holds, now up, or null if it holds none.
   network: ?Held,
+  /// Whether the dongle is the coordinator of `network`, rather than a router or an end device
+  /// in it: a network libskep cannot run.
+  coordinator: bool = true,
   /// What the dongle runs, for the log.
   firmware: Message,
 };
@@ -99,6 +102,10 @@ pub const Form = struct {
   /// The network is a saved one put back: its frame counters are set too, so that its devices
   /// accept the coordinator's frames. A new network starts them at 0.
   restore: bool = false,
+  /// The dongle is the coordinator the devices know, whose frame counters they remember: a
+  /// dongle that refuses to set them fails, rather than send frames they ignore. Another
+  /// coordinator's frames are counted apart, from 0.
+  counters_required: bool = false,
 };
 
 /// An APS frame to or from a device: its header, and its payload.

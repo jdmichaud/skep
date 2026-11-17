@@ -205,3 +205,10 @@ publishes the section of each released version as its release notes.
 - With EZSP 13 and later, the trust center's frame counter is read too,
   with `getApsKeyInfo`, rather than left unknown: the state keeps it, and
   a restored network starts above it.
+- libskep took the network a dongle held whatever the dongle's role in
+  it: one that is only a router or an end device in it is now refused,
+  unless replace-network lets libskep form a network in its place. A
+  dongle whose frame counters fell below the saved ones gets the saved
+  network back with them, rather than send frames devices ignore; and
+  when the dongle is the coordinator the devices know, its refusing to
+  set them stops the start.

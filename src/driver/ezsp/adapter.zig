@@ -52,6 +52,7 @@ pub const Adapter = struct {
         .{
           .network = f.security.network_frame_counter,
           .trust_center = f.security.trust_center_frame_counter orelse 0,
+          .required = f.counters_required,
         }
       else
         null,
@@ -124,6 +125,7 @@ fn fromEzsp(event: ezsp.driver.Event) Event {
       .ready = .{
         .ieee = ready.ieee,
         .network = if (ready.network) |network| fromEzspNetwork(network) else null,
+        .coordinator = if (ready.network) |network| network.node_type == .coordinator else true,
         .firmware = .init("EmberZNet {d}.{d}.{d}.{d} build {d}{s}, EZSP {d}", .{
           ready.firmware.major,
           ready.firmware.minor,

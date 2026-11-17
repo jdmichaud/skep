@@ -132,6 +132,8 @@ pub const FormParameters = struct {
   pub const FrameCounters = struct {
     network: u32,
     trust_center: u32,
+    /// The NCP must take them: one that refuses fails.
+    required: bool = false,
   };
 };
 
@@ -852,6 +854,11 @@ pub const Driver = struct {
       .restoring_frame_counter => {
         const status = d.statusOf(received, .set_value) orelse return;
         if (!status.is(.ok)) {
+          if (d.form_parameters.frame_counters.?.required) {
+            return d.fail(.{
+              .refused = .{ .command = .set_value, .status = status, .value = .nwk_frame_counter },
+            });
+          }
           d.post(.{
             .command_refused = .{
               .command = .set_value,
@@ -945,6 +952,11 @@ pub const Driver = struct {
       .restoring_trust_center_counter => {
         const status = d.statusOf(received, .set_value) orelse return;
         if (!status.is(.ok)) {
+          if (d.form_parameters.frame_counters.?.required) {
+            return d.fail(.{
+              .refused = .{ .command = .set_value, .status = status, .value = .aps_frame_counter },
+            });
+          }
           d.post(.{
             .command_refused = .{
               .command = .set_value,
@@ -1561,6 +1573,22 @@ test "replacing a network leaves it first" {
   try answer(&ncp, .set_initial_security_state, 0x00);
   try formed(&driver, &ncp, false);
   try testing.expect(skipCallbacks(&driver).? == .formed);
+}
+
+test "a refused frame counter fails the driver when the devices know the coordinator" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, false);
+  var parameters = form_parameters;
+  parameters.frame_counters = .{
+    .network = 0x00012345,
+    .trust_center = 0x00000400,
+    .required = true,
+  };
+  driver.form(parameters);
+  const counter = ncp.take() orelse return error.TestExpectedCommand;
+  ncp.respond(&.{ counter[0], 0x80, 0x01, 0xab, 0x00, 0x35 });
+  const failure = skipCallbacks(&driver).?.failed;
+  try testing.expectEqual(command.ValueId.nwk_frame_counter, failure.refused.value.?);
 }
 
 test "a saved network is put back with its frame counters" {

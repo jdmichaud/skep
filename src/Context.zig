@@ -906,9 +906,20 @@ fn unsolicited(ctx: *Context, d: *const State.Device, frame: *const driver_layer
 
 fn onReady(ctx: *Context, r: driver_layer.Ready) void {
   ctx.ieee = r.ieee;
+  if (r.network) |held| {
+    if (!r.coordinator and !ctx.options.replace_network) {
+      const message: driver_layer.Message = .init(
+        "the dongle is a router or an end device in a network (extended PAN ID 0x{x:0>16}), " ++
+          "not its coordinator; replace-network lets libskep form one in its place",
+        .{ held.network.extended_pan_id },
+      );
+      ctx.logMessage(.err, message.text());
+      return ctx.finish(err(.EXIST));
+    }
+  }
   if (ctx.state) |*s| return ctx.readyWithState(s, r);
   if (r.network) |held| {
-    if (!ctx.options.replace_network) return ctx.resumed(held, r);
+    if (r.coordinator and !ctx.options.replace_network) return ctx.resumed(held, r);
   }
   const f = ctx.newNetwork();
   const message: driver_layer.Message = if (r.network) |old|
@@ -937,10 +948,18 @@ fn resumed(ctx: *Context, held: driver_layer.Held, r: driver_layer.Ready) void {
 fn readyWithState(ctx: *Context, s: *State, r: driver_layer.Ready) void {
   if (r.network) |held| {
     const same_network = held.network.extended_pan_id == s.network.extended_pan_id;
-    if (same_network and std.mem.eql(u8, &held.security.network_key, &s.network_key)) {
-      return ctx.resumed(held, r);
-    }
-    if (!ctx.options.replace_network) {
+    if (r.coordinator and same_network and
+      std.mem.eql(u8, &held.security.network_key, &s.network_key)) {
+      if (!behind(s, held.security)) return ctx.resumed(held, r);
+      // Devices would ignore the dongle's frames until its counters pass those they saw: the
+      // saved network is put back, with its own.
+      const message: driver_layer.Message = .init(
+        "the dongle's frame counter {d} is below the saved {d}: putting the saved network " ++
+          "back with its counters",
+        .{ held.security.network_frame_counter, s.network_frame_counter },
+      );
+      ctx.logMessage(.warning, message.text());
+    } else if (!ctx.options.replace_network) {
       const message: driver_layer.Message = if (same_network)
         .init(
           "the dongle's network has the saved extended PAN ID but another network key; " ++
@@ -995,7 +1014,20 @@ fn readyWithState(ctx: *Context, s: *State, r: driver_layer.Ready) void {
     ctx.logMessage(.warning, warning.text());
   }
   ctx.restoring = true;
-  ctx.driver.?.form(.{ .network = held.network, .security = held.security, .restore = true });
+  ctx.driver.?.form(.{
+    .network = held.network,
+    .security = held.security,
+    .restore = true,
+    .counters_required = s.coordinator_ieee == r.ieee,
+  });
+}
+
+/// Whether the dongle's frame counters are below those the state saved: it lost some, or is
+/// another dongle with the same network.
+fn behind(s: *const State, security: driver_layer.Security) bool {
+  if (security.network_frame_counter < s.network_frame_counter) return true;
+  const trust_center = security.trust_center_frame_counter orelse return false;
+  return trust_center < s.trust_center_frame_counter;
 }
 
 fn onFormed(ctx: *Context, held: driver_layer.Held) void {

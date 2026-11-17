@@ -58,6 +58,10 @@ pub const Driver = struct {
   devices: []Device = &.{},
   /// The seconds of the last `permitJoin`, if any.
   permitted: ?u8 = null,
+  /// Whether it is the coordinator of `network`.
+  coordinator: bool = true,
+  /// The last `form`, if any.
+  formed: ?driver.Form = null,
 
   pub fn start(d: *Driver) void {
     d.pending_len = 0;
@@ -65,6 +69,7 @@ pub const Driver = struct {
       .ready = .{
         .ieee = d.ieee,
         .network = d.network,
+        .coordinator = d.coordinator,
         .firmware = .init("simulated dongle", .{}),
       },
     });
@@ -72,6 +77,8 @@ pub const Driver = struct {
 
   /// Forms the network: the simulated dongle holds it from now on.
   pub fn form(d: *Driver, f: driver.Form) void {
+    d.formed = f;
+    d.coordinator = true;
     var held: driver.Held = .{ .network = f.network, .security = f.security };
     if (!f.restore) {
       held.security.network_frame_counter = 0;

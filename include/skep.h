@@ -213,13 +213,18 @@ int skep_get_serial_defaults(const skep_ctx *ctx, unsigned *baudrate,
  * Bring the network up, once the caller has opened the dongle.
  * - With an imported state: resume its network if the dongle holds it
  *   (the same extended PAN ID and network key), restore it onto the
- *   dongle if the dongle holds none. If the dongle holds another network,
- *   stop with -EEXIST rather than lose either, unless the replace-network
- *   option allows overwriting it. The state of the last network started
- *   counts as imported, so a context that stops and starts again comes
- *   back to the same network.
+ *   dongle if the dongle holds none, or holds it with frame counters below
+ *   the saved ones, which devices would ignore. If the dongle holds another
+ *   network, stop with -EEXIST rather than lose either, unless the
+ *   replace-network option allows overwriting it. The state of the last
+ *   network started counts as imported, so a context that stops and starts
+ *   again comes back to the same network.
  * - Without a state: resume the dongle's network if it holds one, unless
  *   replace-network asks for a new one; otherwise form a new network.
+ * - A network in which the dongle is a router or an end device, not its
+ *   coordinator, counts as another network.
+ * - Restoring onto the dongle of the coordinator the devices know fails if
+ *   the dongle refuses the frame counters: devices remember them.
  *
  * This only starts the work: the first bytes for the dongle are now in
  * skep_output(). Success is reported by SKEP_EVENT_STARTED, failure by

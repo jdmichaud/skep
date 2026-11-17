@@ -1117,6 +1117,60 @@ test "the state is exported, and brings the network back onto a new dongle" {
   try testing.expectEqual(70 + 100000, network.security.trust_center_frame_counter);
   try testing.expectEqual(0x00124b0012345678, new.state.?.devices.items[0].ieee);
   try testing.expectEqual(0x0200_0000_0000_0002, new.state.?.coordinator_ieee);
+  // Another coordinator: devices count its frames apart, from 0.
+  try testing.expect(!new.driver.?.sim.formed.?.counters_required);
+}
+
+test "a dongle whose counters fell behind the state's gets them back" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  _ = try startedOrigin(ctx);
+  ctx.driver.?.sim.network.?.security.network_frame_counter = 5000;
+  var request: u32 = 0;
+  try testing.expectEqual(0, skep_refresh_state(ctx, &request));
+  skep_event_free((try nextOfType(ctx, .request_done)).?);
+  const saved = try exportState(ctx);
+  defer testing.allocator.free(saved);
+
+  // The same dongle, its network and keys, but its counter far below.
+  const again = try testContext(&testing.allocator);
+  defer skep_free(again);
+  try testing.expectEqual(0, skep_set_option(again, "driver", "sim"));
+  try testing.expectEqual(0, skep_import_state(again, saved.ptr, saved.len));
+  again.sim_dongle.network = ctx.driver.?.sim.network;
+  again.sim_dongle.network.?.security.network_frame_counter = 10;
+  try testing.expectEqual(@backingInt(Event.Origin.restored), try startedOrigin(again));
+  const formed = again.driver.?.sim.formed.?;
+  try testing.expect(formed.restore);
+  // The devices know this coordinator, and its counters.
+  try testing.expect(formed.counters_required);
+  try testing.expectEqual(
+    5000 + 100000,
+    again.driver.?.sim.network.?.security.network_frame_counter,
+  );
+}
+
+test "a network the dongle does not coordinate is not taken" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  // A router in someone's network.
+  ctx.sim_dongle.network = sim.testNetwork(.{
+    .channel = 20,
+    .pan_id = 0x1a62,
+    .extended_pan_id = 1,
+  });
+  ctx.sim_dongle.coordinator = false;
+  try testing.expectEqual(0, skep_start(ctx));
+  const stopped = (try nextOfType(ctx, .stopped)).?;
+  defer skep_event_free(stopped);
+  try testing.expectEqual(err(.EXIST), skep_event_get_error(stopped));
+  try testing.expectEqual(null, ctx.state);
+  // Unless replace-network lets libskep form one in its place.
+  try testing.expectEqual(0, skep_set_option(ctx, "replace-network", "yes"));
+  try testing.expectEqual(@backingInt(Event.Origin.formed), try startedOrigin(ctx));
+  try testing.expect(ctx.network.?.extended_pan_id != 1);
 }
 
 test "a dongle holding another network is not overwritten without replace-network" {
