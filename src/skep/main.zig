@@ -321,7 +321,7 @@ fn readReadings(
       }
     }
     const attributes = field(result, "attributes") orelse continue;
-    for (attributes.array.items) |attribute| {
+    for (items(attributes)) |attribute| {
       if (integer(field(attribute, "id")) != id) continue;
       const s = integer(field(attribute, "status")) orelse 0;
       rows[i].value = if (s != 0)
@@ -343,19 +343,22 @@ fn chosen(
   device_name: []const u8,
   device: std.json.Value,
   names: []const []const u8,
-) !?[]std.json.Value {
-  const readings = (field(device, "readings") orelse {
-    if (field(device, "endpoints") != null) {
-      try err.print("skep {s}: skepd gives no readings: it is older than skep\n", .{
-        command_name,
-      });
-    } else {
-      try err.print("skep: {s}: not interviewed yet, its readings are not known\n", .{
-        device_name,
-      });
-    }
-    return null;
-  }).array.items;
+) !?[]const std.json.Value {
+  const readings = items(
+    field(device, "readings") orelse {
+      if (field(device, "endpoints") != null) {
+        try err.print("skep {s}: skepd gives no readings: it is older than skep\n", .{
+          command_name,
+        });
+      } else {
+        try err.print("skep {s}: {s} is not interviewed yet: its readings are not known\n", .{
+          command_name,
+          device_name,
+        });
+      }
+      return null;
+    },
+  );
   if (names.len == 0) return readings;
   var list: std.ArrayList(std.json.Value) = .empty;
   for (names) |name| {
@@ -435,7 +438,7 @@ fn label(a: std.mem.Allocator, device: std.json.Value, r: std.json.Value) ![]con
   const name = text(field(r, "reading"));
   var count: usize = 0;
   if (field(device, "readings")) |all| {
-    for (all.array.items) |other| {
+    for (items(all)) |other| {
       if (eq(text(field(other, "reading")), name)) {
         count += 1;
       }
@@ -552,6 +555,22 @@ fn integer(v: ?std.json.Value) ?i64 {
   };
 }
 
+fn boolean(v: ?std.json.Value) ?bool {
+  return switch (v orelse return null) {
+    .bool => |b| b,
+    else => null,
+  };
+}
+
+/// An array's items, or none if it is not one: what skepd sends is not trusted to have the
+/// shape this skep expects, as a skepd of another version may not.
+fn items(v: ?std.json.Value) []const std.json.Value {
+  return switch (v orelse return &.{}) {
+    .array => |a| a.items,
+    else => &.{},
+  };
+}
+
 fn float(v: ?std.json.Value) ?f64 {
   return switch (v orelse return null) {
     .integer => |i| @floatFromInt(i),
@@ -571,7 +590,7 @@ fn statusOf(result: std.json.Value) u8 {
   const status = integer(field(result, "status")) orelse return ok;
   if (status != 0) return failed;
   if (field(result, "attributes")) |attributes| {
-    for (attributes.array.items) |a| {
+    for (items(attributes)) |a| {
       if ((integer(field(a, "status")) orelse 0) != 0) return failed;
     }
   }
@@ -593,7 +612,7 @@ fn show(
       integer(field(result, "protocol")) orelse 0,
     });
   } else if (eq(command, "network")) {
-    if (field(result, "up").?.bool) {
+    if (boolean(field(result, "up")) orelse false) {
       try out.print("up: channel {d}, PAN ID 0x{x:0>4}, extended PAN ID {s}", .{
         integer(field(result, "channel")) orelse 0,
         @as(u64, @intCast(integer(field(result, "pan_id")) orelse 0)),
@@ -619,13 +638,13 @@ fn show(
       try out.print("devices may join for {s} s\n", .{ seconds });
     }
   } else if (eq(command, "devices")) {
-    try showDevices(out, field(result, "devices").?.array.items);
+    try showDevices(out, items(field(result, "devices")));
   } else if (eq(command, "device")) {
     try showDevice(out, result);
     if (field(result, "readings")) |readings| {
-      if (readings.array.items.len > 0) {
+      if (items(readings).len > 0) {
         try out.writeAll("readings\n");
-        const rows = try readingRows(a, result, readings.array.items, now);
+        const rows = try readingRows(a, result, items(readings), now);
         for (rows) |*r| {
           r.label = try std.fmt.allocPrint(a, "  {s}", .{ r.label });
         }
@@ -645,12 +664,12 @@ fn show(
     try showRows(out, try readingRows(a, result, readings, now));
   } else if (eq(command, "read")) {
     if (field(result, "attributes")) |attributes| {
-      for (attributes.array.items) |attribute| {
+      for (items(attributes)) |attribute| {
         try showAttribute(out, attribute);
       }
     }
   } else if (eq(command, "write") or eq(command, "report")) {
-    for (field(result, "attributes").?.array.items) |attribute| {
+    for (items(field(result, "attributes"))) |attribute| {
       const status = integer(field(attribute, "status")) orelse 0;
       if (status != 0) {
         try out.print("0x{x:0>4}: refused, status 0x{x:0>2}\n", .{
@@ -702,7 +721,7 @@ fn showDevices(out: *Io.Writer, devices: []const std.json.Value) !void {
     }
     var shown: usize = 0;
     if (field(d, "readings")) |readings| {
-      for (readings.array.items) |r| {
+      for (items(readings)) |r| {
         if (shown == 3) break;
         if (float(field(r, "scaled")) == null) continue;
         if (parts > 0) {
@@ -745,12 +764,12 @@ fn showDevice(out: *Io.Writer, d: std.json.Value) !void {
   if (field(d, "model")) |m| {
     try out.print("model             {s}\n", .{ text(m) });
   }
-  if (field(d, "rx_on_when_idle")) |r| {
-    try out.print("sleeps            {s}\n", .{ if (r.bool) "no" else "yes" });
+  if (boolean(field(d, "rx_on_when_idle"))) |r| {
+    try out.print("sleeps            {s}\n", .{ if (r) "no" else "yes" });
   }
   try out.print("setup             {s}\n", .{ text(field(d, "setup")) });
   if (field(d, "endpoints")) |endpoints| {
-    for (endpoints.array.items) |e| {
+    for (items(endpoints)) |e| {
       try out.print("endpoint {d}: profile 0x{x:0>4}, device type 0x{x:0>4}\n", .{
         integer(field(e, "endpoint")) orelse 0,
         @as(u64, @intCast(integer(field(e, "profile")) orelse 0)),
@@ -759,7 +778,7 @@ fn showDevice(out: *Io.Writer, d: std.json.Value) !void {
       inline for (.{.{ "input_clusters", "in " }, .{ "output_clusters", "out" }}) |side| {
         try out.writeAll("  " ++ side[1] ++ ":");
         if (field(e, side[0])) |clusters| {
-          for (clusters.array.items) |cl| {
+          for (items(clusters)) |cl| {
             try out.print(" 0x{x:0>4}", .{ @as(u64, @intCast(integer(cl) orelse 0)) });
           }
         }
@@ -812,7 +831,7 @@ fn showEvent(out: *Io.Writer, e: std.json.Value) !void {
     try out.print("{s}: ", .{ who(e) });
   }
   if (eq(event, "attributes")) {
-    for (field(e, "attributes").?.array.items, 0..) |attribute, i| {
+    for (items(field(e, "attributes")), 0..) |attribute, i| {
       if (i > 0) {
         try out.writeAll(", ");
       }
@@ -857,7 +876,7 @@ fn showEvent(out: *Io.Writer, e: std.json.Value) !void {
   } else if (eq(event, "device_ready")) {
     try out.writeAll("ready");
   } else if (eq(event, "device_left")) {
-    const removed = if (field(e, "removed")) |r| r == .bool and r.bool else false;
+    const removed = boolean(field(e, "removed")) orelse false;
     try out.writeAll(if (removed) "removed" else "left");
   } else if (eq(event, "device_setup_failed")) {
     try out.writeAll("setup failed");
