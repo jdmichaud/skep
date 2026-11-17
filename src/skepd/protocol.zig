@@ -528,7 +528,10 @@ fn request(
         return p.fail("ENOENT", "no {s} on endpoint {d}", .{ reading, setting.endpoint });
       }
       if (r == -@as(c_int, @backingInt(E.OPNOTSUPP))) {
-        return p.fail("ENOTSUP", "{s} cannot be set", .{ reading });
+        return p.fail("ENOTSUP", "{s} cannot be set; {s}", .{
+          reading,
+          try p.settable(a, setting.device),
+        });
       }
       if (r == -@as(c_int, @backingInt(E.INVAL))) {
         return p.fail("EINVAL", "{s}: value or transition out of range", .{ reading });
@@ -659,7 +662,40 @@ fn endpointWith(
   for (sources[0..@min(count, sources.len)]) |source| {
     if (std.mem.eql(u8, std.mem.span(source.name), name)) return source.endpoint;
   }
-  return p.fail("ENOENT", "no reading {s}", .{ what });
+  return p.fail("ENOENT", "no reading {s}; {s}", .{ what, try p.settable(a, device) });
+}
+
+/// What can be set on a device, in words: "it can set on and level".
+fn settable(p: *Protocol, a: std.mem.Allocator, device: u64) Error![]const u8 {
+  var count: usize = 0;
+  if (c.skep_device_get_readings(p.ctx, device, null, 0, &count) != 0) return "";
+  const sources = try a.alloc(c.struct_skep_reading_source, count);
+  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
+  var names: std.ArrayList([]const u8) = .empty;
+  var color = false;
+  for (sources[0..@min(count, sources.len)]) |source| {
+    const name = std.mem.span(source.name);
+    if (std.mem.eql(u8, name, "color_x")) {
+      color = true;
+    }
+    if (source.settable == 0) continue;
+    for (names.items) |known| {
+      if (std.mem.eql(u8, known, name)) break;
+    } else {
+      try names.append(a, name);
+    }
+  }
+  if (color) {
+    try names.append(a, "color");
+  }
+  if (names.items.len == 0) return "it can set nothing";
+  var w: std.Io.Writer.Allocating = .init(a);
+  try w.writer.writeAll("it can set ");
+  for (names.items, 0..) |name, i| {
+    const separator = if (i == 0) "" else if (i + 1 == names.items.len) " and " else ", ";
+    try w.writer.print("{s}{s}", .{ separator, name });
+  }
+  return w.written();
 }
 
 /// An sRGB colour, "#rrggbb", as 0xrrggbb.
