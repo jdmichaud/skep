@@ -287,9 +287,13 @@ const Daemon = struct {
       switch (c.skep_event_get_type(event)) {
         c.SKEP_EVENT_LOG => {
           var message: [*c]const u8 = undefined;
-          const level = c.skep_event_get_log(event, &message);
-          const names = [_][]const u8{ "error", "warning", "info", "debug" };
-          const name = if (level >= 0 and level < names.len) names[@intCast(level)] else "log";
+          const name = switch (c.skep_event_get_log(event, &message)) {
+            c.SKEP_LOG_ERROR => "error",
+            c.SKEP_LOG_WARNING => "warning",
+            c.SKEP_LOG_INFO => "info",
+            c.SKEP_LOG_DEBUG => "debug",
+            else => "log",
+          };
           d.print("{s}: {s}", .{ name, std.mem.span(message) });
         },
         c.SKEP_EVENT_STARTED => {

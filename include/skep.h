@@ -470,11 +470,18 @@ uint8_t skep_event_get_endpoint(const skep_event *event);
 uint16_t skep_event_get_cluster(const skep_event *event);
 uint16_t skep_event_get_manufacturer_code(const skep_event *event);
 
+enum skep_log_level {
+  SKEP_LOG_ERROR = 0,
+  SKEP_LOG_WARNING = 1,
+  SKEP_LOG_INFO = 2,
+  SKEP_LOG_DEBUG = 3,
+};
+
 /*
- * SKEP_EVENT_LOG: severity (0 error, 1 warning, 2 info, 3 debug) and
- * message. The string is valid until the event is freed.
+ * SKEP_EVENT_LOG: its severity, and its message. The string is valid until
+ * the event is freed.
  */
-int skep_event_get_log(const skep_event *event, const char **message);
+enum skep_log_level skep_event_get_log(const skep_event *event, const char **message);
 
 /* Values ----------------------------------------------------------------- */
 

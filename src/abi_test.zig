@@ -6,6 +6,9 @@ const c = @import("skep_h");
 const CAllocator = @import("allocator.zig").CAllocator;
 const Context = @import("Context.zig");
 const Event = @import("Event.zig");
+const State = @import("State.zig");
+const driver_layer = @import("driver/driver.zig");
+const skep = @import("skep.zig");
 const readings = @import("readings.zig");
 const requests = @import("requests.zig");
 const zcl = @import("zcl.zig");
@@ -58,4 +61,61 @@ test "skep.h's limits are libskep's" {
   try std.testing.expectEqual(c.SKEP_MAX_ATTRIBUTES, requests.max_attributes);
   try std.testing.expectEqual(c.SKEP_MAX_REQUESTS, requests.max_pending);
   try std.testing.expectEqual(c.SKEP_MAX_TRANSITION, readings.max_transition);
+}
+
+/// Each value of a Zig enum, by name, against the header's constant of that name.
+fn expectSameValues(
+  comptime Ours: type,
+  comptime prefix: []const u8,
+  comptime names: anytype,
+) !void {
+  inline for (names) |pair| {
+    const ours = @field(Ours, pair[0]);
+    const theirs = @field(c, prefix ++ pair[1]);
+    try std.testing.expectEqual(@as(c_int, theirs), @as(c_int, @intCast(@backingInt(ours))));
+  }
+}
+
+test "skep.h's enums are libskep's" {
+  try expectSameValues(skep.Setup, "SKEP_SETUP_", .{
+    .{ "pending", "PENDING" },
+    .{ "ready", "READY" },
+    .{ "failed", "FAILED" },
+  });
+  try expectSameValues(skep.ClusterSide, "SKEP_CLUSTER_", .{
+    .{ "input", "INPUT" },
+    .{ "output", "OUTPUT" },
+  });
+  try expectSameValues(State.NodeType, "SKEP_NODE_", .{
+    .{ "coordinator", "COORDINATOR" },
+    .{ "router", "ROUTER" },
+    .{ "end_device", "END_DEVICE" },
+  });
+  try expectSameValues(driver_layer.Level, "SKEP_LOG_", .{
+    .{ "err", "ERROR" },
+    .{ "warning", "WARNING" },
+    .{ "info", "INFO" },
+    .{ "debug", "DEBUG" },
+  });
+  try expectSameValues(driver_layer.FlowControl, "SKEP_FLOW_CONTROL_", .{
+    .{ "none", "NONE" },
+    .{ "software", "SOFTWARE" },
+    .{ "hardware", "HARDWARE" },
+  });
+  try expectSameValues(Event.Origin, "SKEP_NETWORK_", .{
+    .{ "resumed", "RESUMED" },
+    .{ "restored", "RESTORED" },
+    .{ "formed", "FORMED" },
+  });
+  inline for (@typeInfo(Event.Type).@"enum".field_names) |name| {
+    comptime var upper: [name.len]u8 = undefined;
+    inline for (name, 0..) |ch, i| {
+      upper[i] = comptime std.ascii.toUpper(ch);
+    }
+    const theirs = @field(c, "SKEP_EVENT_" ++ upper);
+    try std.testing.expectEqual(
+      @as(c_int, theirs),
+      @as(c_int, @backingInt(@field(Event.Type, name))),
+    );
+  }
 }

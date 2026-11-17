@@ -413,10 +413,9 @@ export fn skep_device_get_clusters(
   };
   if (!interviewed(d)) return err(.AGAIN);
   const e = d.endpoint(endpoint) orelse return err(.NOENT);
-  const list = switch (side) {
-    0 => e.input_clusters,
-    1 => e.output_clusters,
-    else => return err(.INVAL),
+  const list = switch (std.enums.fromInt(ClusterSide, side) orelse return err(.INVAL)) {
+    .input => e.input_clusters,
+    .output => e.output_clusters,
   };
   count.* = list.len;
   if (capacity > 0) {
@@ -431,13 +430,19 @@ export fn skep_device_get_setup(ctx: *const Context, ieee: u64, setup_state: *c_
     .device => |d| d,
     .err => |e| return e,
   };
-  setup_state.* = switch (d.progress.stage) {
-    .ready => 1,
-    .failed => 2,
-    else => 0,
+  const setup_state_of: Setup = switch (d.progress.stage) {
+    .ready => .ready,
+    .failed => .failed,
+    else => .pending,
   };
+  setup_state.* = @backingInt(setup_state_of);
   return 0;
 }
+
+/// The enums of skep.h that libskep has no type of its own for; abi_test.zig checks their values,
+/// and those of the types libskep has, against the header.
+pub const ClusterSide = enum(c_int) { input = 0, output = 1 };
+pub const Setup = enum(c_int) { pending = 0, ready = 1, failed = 2 };
 
 export fn skep_setup_device(ctx: *Context, ieee: u64) c_int {
   return ctx.setupDevice(ieee);
