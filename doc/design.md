@@ -683,6 +683,15 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   window must not cut them off. Only while the window is open does the
   trust center accept new devices and know the well-known link key they
   join with (`ZigBeeAlliance09`); outside it, it accepts rejoins only.
+  A window that ends on its own is closed on the trust center too, and
+  stopping closes one still open: the dongle only closes its own window,
+  and would leave the trust center admitting devices.
+- Devices libskep does not know are recorded only while the window is
+  open, `SKEP_MAX_DEVICES` at most. Any device with the network key can
+  claim that others joined, by announcing them or by telling the trust
+  center that they rejoined through it: recording them at any time would
+  let one device grow the state until it no longer loads. A device
+  announces only itself, from the address it announces.
 
 ## Milestones
 

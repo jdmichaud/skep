@@ -212,7 +212,8 @@ pub const Driver = union(Name) {
   }
 
   /// Opens the network to new devices for `seconds`, or closes it with 0, once the network is up.
-  /// The dongle only opens itself: libskep tells the routers, with a broadcast.
+  /// The dongle only opens itself: libskep tells the routers, with a broadcast. A window that ends
+  /// on its own may leave the trust center admitting devices: libskep closes it with 0.
   pub fn permitJoin(d: *Driver, seconds: u8) void {
     switch (d.*) {
       inline else => |*driver| driver.permitJoin(seconds),

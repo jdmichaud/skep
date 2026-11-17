@@ -726,6 +726,8 @@ test "a device joins, is described and set, gets a name, and is removed" {
   bench.ask("{\"id\": 1, \"method\": \"watch\"}\n");
   _ = bench.received(&buffer);
 
+  bench.ask("{\"id\": 20, \"method\": \"permit_join\", \"params\": {\"seconds\": 254}}\n");
+  bench.pump();
   bench.sim().device(.{ .ieee = 0xc4d7fdba7b600000, .nwk = 0x6442, .kind = .joined });
   for (0..8) |_| {
     bench.pump();

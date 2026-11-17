@@ -54,6 +54,8 @@ pub const Driver = struct {
   sent_len: usize = 0,
   /// The devices of the simulated network, which the test owns and changes as it likes.
   devices: []Device = &.{},
+  /// The seconds of the last `permitJoin`, if any.
+  permitted: ?u8 = null,
 
   pub fn start(d: *Driver) void {
     d.pending_len = 0;
@@ -82,6 +84,7 @@ pub const Driver = struct {
   }
 
   pub fn permitJoin(d: *Driver, seconds: u8) void {
+    d.permitted = seconds;
     d.post(.{ .permit_join_done = null });
     d.post(.{ .join_window = seconds > 0 });
   }
@@ -285,6 +288,11 @@ pub const Driver = struct {
   /// A message comes in from a device. For tests.
   pub fn receive(d: *Driver, message: driver.Frame) void {
     d.post(.{ .message = message });
+  }
+
+  /// The join window's time is up. For tests.
+  pub fn windowEnds(d: *Driver) void {
+    d.post(.{ .join_window = false });
   }
 
   /// A simulated device joins, rejoins or leaves. For tests.

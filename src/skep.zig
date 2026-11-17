@@ -890,6 +890,7 @@ test "devices join while the window is open" {
   try testing.expectEqual(0xfffc, broadcast.address);
   try testing.expectEqual(0x0036, broadcast.cluster);
 
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .joined });
   ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .rejoined });
   ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .left });
@@ -916,6 +917,129 @@ fn exportState(ctx: *Context) ![]u8 {
   try testing.expectEqual(0, skep_export_state(ctx, buf.ptr, buf.len, &len));
   try testing.expectEqual(buf.len, len);
   return buf;
+}
+
+test "devices libskep does not know are recorded only while the trust center admits them" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  try testing.expectEqual(0, skep_set_option(ctx, "log-level", "warning"));
+  _ = try startedOrigin(ctx);
+  const sim_driver = &ctx.driver.?.sim;
+  // With no window open: a rejoin, a join, and an announcement, the last from the device itself.
+  sim_driver.device(.{ .ieee = 0x00124b0000000001, .nwk = 0x1001, .kind = .rejoined });
+  sim_driver.device(.{ .ieee = 0x00124b0000000002, .nwk = 0x1002, .kind = .joined });
+  sim_driver.receive(announcement(0x1003, 0x1003, 0x00124b0000000003));
+  for (0..3) |_| {
+    const logged = (try nextOfType(ctx, .log)) orelse return error.TestExpectedLog;
+    defer skep_event_free(logged);
+    try testing.expect(
+      std.mem.indexOf(u8, std.mem.span(logged.log()), "no join window open") != null,
+    );
+  }
+  try testing.expectEqual(null, try nextEventType(ctx));
+  try testing.expectEqual(0, ctx.state.?.devices.items.len);
+
+  // A window open: an announcement from another address than the one it announces is not the
+  // device's; the device's own is.
+  try openWindow(ctx);
+  sim_driver.receive(announcement(0x2222, 0x1003, 0x00124b0000000003));
+  sim_driver.receive(announcement(0x1003, 0x0000, 0x00124b0000000003));
+  try testing.expectEqual(null, try nextEventType(ctx));
+  sim_driver.receive(announcement(0x1003, 0x1003, 0x00124b0000000003));
+  skep_event_free((try nextOfType(ctx, .device_joined)).?);
+  // An unknown device rejoining while the window is open is new: it is set up.
+  sim_driver.device(.{ .ieee = 0x00124b0000000001, .nwk = 0x1001, .kind = .rejoined });
+  const joined = (try nextOfType(ctx, .device_joined)).?;
+  defer skep_event_free(joined);
+  try testing.expectEqual(0x00124b0000000001, skep_event_get_device(joined));
+  try testing.expectEqual(2, ctx.state.?.devices.items.len);
+
+  // Once the window ends, known devices still rejoin, and move.
+  sim_driver.windowEnds();
+  skep_event_free((try nextOfType(ctx, .permit_join)).?);
+  sim_driver.device(.{ .ieee = 0x00124b0000000001, .nwk = 0x1010, .kind = .rejoined });
+  skep_event_free((try nextOfType(ctx, .state_changed)).?);
+  try testing.expectEqual(0x1010, ctx.state.?.device(0x00124b0000000001).?.nwk);
+}
+
+test "libskep records so many devices, and no more" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  try testing.expectEqual(0, skep_set_option(ctx, "log-level", "warning"));
+  _ = try startedOrigin(ctx);
+  const s = &ctx.state.?;
+  for (0..State.max_devices) |i| {
+    _ = try s.noteDevice(testing.allocator, 0x00124b0000000000 + i, null);
+  }
+  try openWindow(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b00ffffffff, .nwk = 0x1001, .kind = .joined });
+  const logged = (try nextOfType(ctx, .log)).?;
+  defer skep_event_free(logged);
+  try testing.expect(
+    std.mem.indexOf(u8, std.mem.span(logged.log()), "1024 devices at most") != null,
+  );
+  try testing.expectEqual(null, s.device(0x00124b00ffffffff));
+  try testing.expectEqual(State.max_devices, s.devices.items.len);
+}
+
+test "a join window that ends on its own is closed on the trust center too" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  _ = try startedOrigin(ctx);
+  try openWindow(ctx);
+  const sim_driver = &ctx.driver.?.sim;
+  try testing.expectEqual(Context.max_permit_join, sim_driver.permitted);
+  sim_driver.windowEnds();
+  const closed = (try nextOfType(ctx, .permit_join)).?;
+  defer skep_event_free(closed);
+  try testing.expectEqual(0, skep_event_get_duration(closed));
+  // Closed by libskep, which tells the routers too, and reports nothing more.
+  try testing.expectEqual(0, sim_driver.permitted);
+  try testing.expectEqual(0x0036, sim_driver.sent[sim_driver.sent_len - 1].cluster);
+  try testing.expectEqual(null, try nextEventType(ctx));
+  try testing.expect(!ctx.admitting);
+  // Stopping with no window open refreshes, and stops.
+  try testing.expectEqual(0, skep_stop(ctx));
+  skep_event_free((try nextOfType(ctx, .stopped)).?);
+}
+
+test "a device that rejoins before the network is known is not a crash" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  // A network forming: the state is made once it is formed.
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  try testing.expectEqual(0, skep_start(ctx));
+  ctx.driver.?.sim.device(.{ .ieee = 0x00124b0000000001, .nwk = 0x1001, .kind = .rejoined });
+  skep_event_free((try nextOfType(ctx, .started)).?);
+  try testing.expectEqual(null, ctx.state.?.device(0x00124b0000000001));
+}
+
+/// A Device_annce from `from`, announcing `ieee` at `nwk`.
+fn announcement(from: u16, nwk: u16, ieee: u64) driver_layer.Frame {
+  var frame: driver_layer.Frame = .{
+    .address = from,
+    .profile = 0x0000,
+    .cluster = 0x0013,
+    .source_endpoint = 0,
+    .destination_endpoint = 0,
+  };
+  var payload: [12]u8 = undefined;
+  payload[0] = 1;
+  std.mem.writeInt(u16, payload[1..3], nwk, .little);
+  std.mem.writeInt(u64, payload[3..11], ieee, .little);
+  payload[11] = 0x8e;
+  frame.setPayload(&payload);
+  return frame;
+}
+
+/// Opens the join window, as an application does before devices join.
+fn openWindow(ctx: *Context) !void {
+  var request: u32 = 0;
+  try testing.expectEqual(0, skep_permit_join(ctx, Context.max_permit_join, &request));
+  skep_event_free((try nextOfType(ctx, .request_done)) orelse return error.TestExpectedRequestDone);
 }
 
 /// The events up to the next of type `wanted`, which is returned: null if there is none.
@@ -1038,6 +1162,7 @@ test "with setup interview, a device is interviewed and set up no further" {
   try testing.expectEqual(err(.INVAL), skep_set_option(ctx, "setup", "some"));
   try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
   _ = try startedOrigin(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = bulb_ieee, .nwk = 0x6442, .kind = .joined });
   skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
   try testing.expectEqualStrings("3RCB02070Z", ctx.state.?.device(bulb_ieee).?.model.?);
@@ -1049,6 +1174,7 @@ test "a bulb is bound and configured to report its state" {
   var devices = [_]sim.Device{ simBulb() };
   const ctx = try simContext(&testing.allocator, &devices);
   defer skep_free(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = bulb_ieee, .nwk = 0x6442, .kind = .joined });
   skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
   try testing.expectEqual(3, devices[0].binds);
@@ -1082,6 +1208,7 @@ test "a bulb's readings and colour are set by its clusters' commands" {
   var devices = [_]sim.Device{ simBulb() };
   const ctx = try simContext(&testing.allocator, &devices);
   defer skep_free(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = bulb_ieee, .nwk = 0x6442, .kind = .joined });
   skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
 
@@ -1171,6 +1298,7 @@ test "a device that joins is interviewed, set up, and reports" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce, .rx_on_when_idle = false }};
   const ctx = try simContext(&testing.allocator, &devices);
   defer skep_free(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
   const ready = (try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady;
   try testing.expectEqual(sensor_ieee, skep_event_get_device(ready));
@@ -1227,6 +1355,7 @@ test "a device that falls silent is set up further when it is next heard from" {
   }};
   const ctx = try simContext(&testing.allocator, &devices);
   defer skep_free(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
   // Asleep: its interview waits, and nothing more is sent to it.
   try testing.expectEqual(null, try nextOfType(ctx, .device_ready));
@@ -1244,6 +1373,7 @@ test "a device that refuses a step of its setup has failed" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce, .bind_status = 0x8c }};
   const ctx = try simContext(&testing.allocator, &devices);
   defer skep_free(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
   const failed = (try nextOfType(ctx, .device_setup_failed)) orelse
     return error.TestExpectedFailure;
@@ -1259,6 +1389,7 @@ test "devices are described, and requests reach them" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&testing.allocator, &devices);
   defer skep_free(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
   skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
 
@@ -1465,6 +1596,7 @@ test "a device asked to leave is forgotten even if it does not answer" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&testing.allocator, &devices);
   defer skep_free(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
   skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
   // Gone: it picks nothing up.
@@ -1484,6 +1616,7 @@ test "libskep answers devices on the coordinator's behalf" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&testing.allocator, &devices);
   defer skep_free(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
   skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
   // The state, which the setup changed, after the step that made the device ready.
@@ -1540,6 +1673,7 @@ fn interviewOnce(allocator: std.mem.Allocator) !void {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&allocator, &devices);
   defer skep_free(ctx);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = sensor_ieee, .nwk = 0x1bce, .kind = .joined });
   for (0..60) |_| {
     _ = skep_advance(ctx, 0);
@@ -1592,6 +1726,7 @@ fn startAndStop(allocator: std.mem.Allocator) !void {
   ctx.sim_dongle.network = sim.testNetwork(.{ .channel = 15, .pan_id = 1, .extended_pan_id = 1 });
   if (skep_start(ctx) != 0) return error.TestUnexpectedResult;
   try waitFor(ctx, .started);
+  try openWindow(ctx);
   ctx.driver.?.sim.device(.{ .ieee = 0x00124b0012345678, .nwk = 0x1234, .kind = .joined });
   try waitFor(ctx, .device_joined);
   if (skep_stop(ctx) != 0) return error.OutOfMemory;

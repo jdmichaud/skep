@@ -26,6 +26,10 @@ trust_center_frame_counter: u32 = 0,
 /// The devices of the network, each once.
 devices: std.ArrayList(Device) = .empty,
 
+/// The most devices libskep records: a bound on the state, and on what a device on the network
+/// can make libskep keep by pretending others joined.
+pub const max_devices = 1024;
+
 /// A device, and what libskep learnt of it.
 pub const Device = struct {
   ieee: u64,

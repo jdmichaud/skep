@@ -58,6 +58,13 @@ exchanges: exchange.Queue = .{},
 stopping: bool = false,
 /// The join window last asked for, in seconds, reported when the dongle opens it.
 window_seconds: u8 = 0,
+/// The dongle's join window is open, as it last said.
+window_open: bool = false,
+/// The trust center admits new devices: from when a join window is opened until libskep has
+/// closed it. Only then are devices libskep does not know recorded, whether they join, rejoin or
+/// announce themselves: at any other time, such a device is one the trust center did not let in,
+/// or one a device on the network pretends is there.
+admitting: bool = false,
 /// Requests ended without a spare event to report them, by `linkLost`: still to be queued.
 canceled_pending: [max_ops + requests.max_pending]u32 = undefined,
 canceled_len: usize = 0,
@@ -363,7 +370,12 @@ pub fn kick(ctx: *Context) void {
       }
       return;
     }
-    ctx.ops[0] = .{ .kind = .refresh, .request = null };
+    // Stopping: a trust center still admitting devices is closed first, so that it does not stay
+    // open without libskep.
+    ctx.ops[0] = if (ctx.admitting)
+      .{ .kind = .permit_join, .request = null, .seconds = 0 }
+    else
+      .{ .kind = .refresh, .request = null };
     ctx.ops_len = 1;
   }
   const op = ctx.ops[0];
@@ -437,6 +449,9 @@ fn finish(ctx: *Context, error_code: c_int) void {
   ctx.busy = .idle;
   ctx.stopping = false;
   ctx.restoring = false;
+  // A dongle starts with its trust center admitting rejoins only.
+  ctx.window_open = false;
+  ctx.admitting = false;
   ctx.driver = null;
   ctx.status = .stopped;
   ctx.network = null;
@@ -642,6 +657,9 @@ fn process(ctx: *Context) c_int {
         }
       },
       .permit_join_done => |failure| {
+        // Closing, the trust center is taken as closed even if the dongle refused: libskep would
+        // only try again and again.
+        ctx.admitting = ctx.ops[0].seconds > 0 and failure == null;
         if (failure) |f| {
           ctx.logMessage(.err, f.message.text());
           const op = ctx.done();
@@ -674,34 +692,9 @@ fn process(ctx: *Context) c_int {
       },
       .delivered => |delivered| exchange.delivered(ctx, delivered.tag, delivered.ok),
       .message => |frame| ctx.onFrame(&frame),
-      .join_window => |open| {
-        const event = ctx.spares.pop().?;
-        event.type = .permit_join;
-        event.duration = if (open) ctx.window_seconds else 0;
-        ctx.events.push(event);
-      },
+      .join_window => |open| ctx.onJoinWindow(open),
       .device => |device| switch (device.kind) {
-        .joined, .rejoined => {
-          const s = &ctx.state.?;
-          const changed = s.noteDeviceAssumeCapacity(device.ieee, device.nwk);
-          const known = s.device(device.ieee).?;
-          exchange.heard(ctx, known);
-          if (device.kind == .joined) {
-            // New, or joining afresh after a factory reset: set up from the start.
-            ctx.deviceEvent(.device_joined, device.ieee);
-            setup.restart(ctx, known);
-          } else {
-            // A known device keeps its setup: nothing to report.
-            const message: driver_layer.Message = .init("device {x:0>16} rejoined", .{
-              device.ieee,
-            });
-            ctx.logMessage(.debug, message.text());
-            if (changed) {
-              ctx.stateChanged();
-            }
-            setup.next(ctx, known);
-          }
-        },
+        .joined, .rejoined => ctx.onAdmitted(device),
         // libskep keeps a device that left: it may come back.
         .left => {
           const event = ctx.spares.pop().?;
@@ -749,12 +742,82 @@ fn tellRouters(ctx: *Context, seconds: u8) void {
   ctx.driver.?.send(&frame);
 }
 
+/// The dongle opened or closed its join window. Closing on its own once its time is up, it leaves
+/// the trust center as permitJoin left it, admitting devices: libskep closes it, as it would on
+/// a request to.
+fn onJoinWindow(ctx: *Context, open: bool) void {
+  if (open == ctx.window_open) return;
+  ctx.window_open = open;
+  const event = ctx.spares.pop().?;
+  event.type = .permit_join;
+  event.duration = if (open) ctx.window_seconds else 0;
+  ctx.events.push(event);
+  if (open) {
+    ctx.admitting = true;
+  } else if (ctx.admitting and !ctx.stopping and !ctx.pending(.permit_join)) {
+    ctx.push(.{ .kind = .permit_join, .request = null, .seconds = 0 });
+  }
+}
+
+/// A device the trust center let into the network, or back into it.
+fn onAdmitted(ctx: *Context, device: driver_layer.Device) void {
+  // Not before the network is known, on a first start.
+  const s = if (ctx.state) |*s| s else return;
+  if (!deviceAddress(device.nwk)) return;
+  const new = s.device(device.ieee) == null;
+  if (new and !ctx.mayRecord(device.ieee, if (device.kind == .joined) "joined" else "rejoined")) {
+    return;
+  }
+  const changed = s.noteDeviceAssumeCapacity(device.ieee, device.nwk);
+  const known = s.device(device.ieee).?;
+  exchange.heard(ctx, known);
+  if (new or device.kind == .joined) {
+    // New, or joining afresh after a factory reset: set up from the start.
+    ctx.deviceEvent(.device_joined, device.ieee);
+    setup.restart(ctx, known);
+  } else {
+    // A known device keeps its setup: nothing to report.
+    const message: driver_layer.Message = .init("device {x:0>16} rejoined", .{ device.ieee });
+    ctx.logMessage(.debug, message.text());
+    if (changed) {
+      ctx.stateChanged();
+    }
+    setup.next(ctx, known);
+  }
+}
+
+/// Whether a device libskep does not know, which `how` the network, may be recorded: only while
+/// the trust center admits devices, and while there is room. Logs why not.
+fn mayRecord(ctx: *Context, ieee: u64, how: []const u8) bool {
+  if (ieee == ctx.ieee) return false;
+  const message: driver_layer.Message = if (!ctx.admitting)
+    .init("device {x:0>16} {s} with no join window open: not recorded", .{ ieee, how })
+  else if (ctx.state.?.devices.items.len >= State.max_devices)
+    .init("device {x:0>16} {s}, but libskep keeps {d} devices at most: not recorded", .{
+      ieee,
+      how,
+      State.max_devices,
+    })
+  else
+    return true;
+  ctx.logMessage(.warning, message.text());
+  return false;
+}
+
+/// Whether a network address is a device's: not the coordinator's, nor a broadcast address.
+fn deviceAddress(nwk: u16) bool {
+  return nwk != 0x0000 and nwk < 0xfff8;
+}
+
 /// A frame from a device: an announcement, the answer to an exchange, a report, or a command.
 fn onFrame(ctx: *Context, frame: *const driver_layer.Frame) void {
   const s = if (ctx.state) |*s| s else return;
   if (frame.profile == zdo.profile and frame.cluster == zdo.Cluster.device_announce) {
     const announce = zdo.DeviceAnnounce.parse(frame.bytes()) catch return;
+    // A device announces itself, from the address it announces.
+    if (frame.address != announce.nwk or !deviceAddress(announce.nwk)) return;
     const known = s.device(announce.ieee) != null;
+    if (!known and !ctx.mayRecord(announce.ieee, "announced itself")) return;
     if (s.noteDeviceAssumeCapacity(announce.ieee, announce.nwk)) {
       ctx.stateChanged();
     }

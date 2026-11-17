@@ -129,8 +129,13 @@ int main(void) {
   CHECK(skep_event_get_status(event) == 0);
   skep_event_free(event);
 
+  /* Stopping closes the window first. */
   CHECK(skep_stop(ctx) == 0);
   CHECK(skep_advance(ctx, 0) == 0);
+  event = skep_next_event(ctx);
+  CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_PERMIT_JOIN);
+  CHECK(skep_event_get_duration(event) == 0);
+  skep_event_free(event);
   event = skep_next_event(ctx);
   CHECK(event != NULL && skep_event_get_type(event) == SKEP_EVENT_STOPPED);
   CHECK(skep_event_get_error(event) == 0);

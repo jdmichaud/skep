@@ -127,3 +127,17 @@ publishes the section of each released version as its release notes.
   EmberZNet dongle and reports its EZSP and firmware versions.
 - Build checks that the headers compile as C99 and C++ and translate to
   Zig.
+
+### Security
+
+- Devices libskep does not know are recorded only while the join window
+  is open, and `SKEP_MAX_DEVICES` (1024) at most: a device on the network
+  could make libskep record any number of made-up devices, by announcing
+  them or by rejoining them through itself, until skepd could no longer
+  load its state. An announcement must come from the address it
+  announces.
+- A join window that ends on its own is closed on the trust center too,
+  and stopping closes one still open: until then, the trust center kept
+  admitting devices and the well-known link key after the window ended.
+- A device rejoining while a new network was being formed made libskep
+  abort.

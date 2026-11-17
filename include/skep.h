@@ -107,6 +107,7 @@ struct skep_allocator {
 #define SKEP_MAX_ATTRIBUTES 16     /* attributes in a request */
 #define SKEP_MAX_REQUESTS 32       /* requests pending at once */
 #define SKEP_MAX_TRANSITION 6553.4 /* seconds a setting may take */
+#define SKEP_MAX_DEVICES 1024      /* devices libskep records */
 
 /*
  * Create a context. Configure it with skep_set_option() and, if a state
@@ -229,9 +230,9 @@ int skep_get_serial_defaults(const skep_ctx *ctx, unsigned *baudrate,
 int skep_start(skep_ctx *ctx);
 
 /*
- * Stop cleanly: end pending requests with -ECANCELED, refresh the state
- * from the dongle (see skep_refresh_state()), then report
- * SKEP_EVENT_STOPPED. Keep running the loop until then, and save the
+ * Stop cleanly: end pending requests with -ECANCELED, close a join window
+ * still open, refresh the state from the dongle (see
+ * skep_refresh_state()), then report SKEP_EVENT_STOPPED. Keep running the loop until then, and save the
  * state after SKEP_EVENT_STATE_CHANGED as usual. The network stays on the
  * dongle and is resumed by the next skep_start(). Calling it again while
  * stopping does nothing.
@@ -338,9 +339,10 @@ enum skep_event_type {
   /* The join window opened or closed. See skep_event_get_duration(). */
   SKEP_EVENT_PERMIT_JOIN = 3,
   /*
-   * A device joined the network: a new one, or a known one joining afresh
-   * after a factory reset, which lost its bindings and reporting. libskep
-   * now interviews and sets it up. A known device rejoining, for instance
+   * A device joined the network while the join window was open (see
+   * skep_permit_join()): a new one, or a known one joining afresh after a
+   * factory reset, which lost its bindings and reporting. libskep now
+   * interviews and sets it up. A known device rejoining, for instance
    * after losing its parent, keeps its setup and causes no event, even if
    * its network address changed.
    */
@@ -699,6 +701,13 @@ int skep_get_network(const skep_ctx *ctx, uint8_t *channel, uint16_t *pan_id, ui
  * with SKEP_EVENT_REQUEST_DONE once the dongle has opened or closed the
  * window and told the routers, and SKEP_EVENT_PERMIT_JOIN reports the
  * change.
+ *
+ * Only while the window is open does libskep record devices it does not
+ * know, whether they join, rejoin or announce themselves, and
+ * SKEP_MAX_DEVICES at most: at other times, such a device is one the
+ * trust center did not let in, or one that a device on the network
+ * pretends is there. libskep logs it, and ignores it. A window that ends
+ * on its own is closed on the trust center by libskep, as with 0.
  *
  * Errors: -ENETDOWN, -EINVAL (more than SKEP_MAX_PERMIT_JOIN seconds).
  */
