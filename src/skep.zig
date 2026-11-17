@@ -227,6 +227,7 @@ export fn skep_device_get_readings(
             .endpoint = e.id,
             .cluster = definition.cluster,
             .attribute = definition.attribute,
+            .settable = @intFromBool(definition.set != null),
             .name = definition.name.ptr,
             .unit = definition.unit.ptr,
           };
@@ -496,6 +497,109 @@ export fn skep_send_command(
   else
     return err(.INVAL);
   return requests.command(ctx, target, command, list, deadline, request);
+}
+
+const Setting = readings.CSetting;
+
+export fn skep_set_reading(
+  ctx: *Context,
+  setting: *const Setting,
+  reading: [*:0]const u8,
+  value: f64,
+  deadline: u64,
+  request: *u32,
+) c_int {
+  const e = switch (endpointOf(ctx, setting)) {
+    .endpoint => |e| e,
+    .err => |code| return code,
+  };
+  const definition = definitionOn(e.device, e.endpoint, std.mem.span(reading)) orelse
+    return err(.NOENT);
+  if (definition.set == null) return err(.OPNOTSUPP);
+  const command = readings.setting(definition, value, setting.transition) orelse return err(.INVAL);
+  return sendSetting(ctx, setting, definition.cluster, command, deadline, request);
+}
+
+export fn skep_set_color(
+  ctx: *Context,
+  setting: *const Setting,
+  rgb: u32,
+  deadline: u64,
+  request: *u32,
+) c_int {
+  const e = switch (endpointOf(ctx, setting)) {
+    .endpoint => |e| e,
+    .err => |code| return code,
+  };
+  if (!e.endpoint.hasInput(color_control)) return err(.NOENT);
+  const command = readings.colorSetting(rgb, setting.transition) orelse return err(.INVAL);
+  return sendSetting(ctx, setting, color_control, command, deadline, request);
+}
+
+const color_control = 0x0300;
+
+const SettingEndpoint = struct {
+  device: *State.Device,
+  endpoint: *const State.Endpoint,
+};
+
+/// The device and endpoint a setting goes to, once the device is interviewed.
+fn endpointOf(ctx: *Context, setting: *const Setting) union(enum) {
+  endpoint: SettingEndpoint,
+  err: c_int,
+} {
+  if (!std.mem.allEqual(u32, &setting.reserved, 0)) return .{ .err = err(.INVAL) };
+  const d = switch (deviceOf(ctx, setting.device)) {
+    .device => |d| d,
+    .err => |e| return .{ .err = e },
+  };
+  if (!interviewed(d)) return .{ .err = err(.AGAIN) };
+  for (d.endpoints) |*e| {
+    if (e.id == setting.endpoint) return .{ .endpoint = .{ .device = d, .endpoint = e } };
+  }
+  return .{ .err = err(.NOENT) };
+}
+
+/// The definition of a reading of an endpoint, by its name: the device's own, then the standard
+/// ones it does not replace.
+fn definitionOn(
+  d: *const State.Device,
+  e: *const State.Endpoint,
+  name: []const u8,
+) ?*const readings.Definition {
+  const own = setup.entryOf(d).readings;
+  for ([_][]const readings.Definition{ own, &readings.standard }) |definitions| {
+    for (definitions) |*listed| {
+      if (!std.mem.eql(u8, listed.name, name) or !e.hasInput(listed.cluster)) continue;
+      return readings.find(own, listed.cluster, listed.attribute).?;
+    }
+  }
+  return null;
+}
+
+fn sendSetting(
+  ctx: *Context,
+  setting: *const Setting,
+  cluster: u16,
+  command: readings.Command,
+  deadline: u64,
+  request: *u32,
+) c_int {
+  const target: requests.Target = .{
+    .device = setting.device,
+    .endpoint = setting.endpoint,
+    .cluster = cluster,
+    .manufacturer_code = 0,
+    .reserved = @splat(0),
+  };
+  return requests.command(
+    ctx,
+    &target,
+    command.id,
+    command.arguments[0..command.count],
+    deadline,
+    request,
+  );
 }
 
 export fn skep_cancel(ctx: *Context, request: u32) c_int {
@@ -857,6 +961,110 @@ test "a bulb is bound and configured to report its state" {
   skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
   try testing.expectEqual(3, devices[0].binds);
   try testing.expectEqual(7, devices[0].configurations);
+}
+
+/// Sets a reading of the bulb, and returns the ZCL frame it got, once it answered.
+fn setBulb(ctx: *Context, reading: [*:0]const u8, value: f64, transition: f64) ![]const u8 {
+  var request: u32 = 0;
+  const setting: Setting = .{
+    .device = bulb_ieee,
+    .endpoint = 1,
+    .transition = transition,
+    .reserved = @splat(0),
+  };
+  const r = skep_set_reading(ctx, &setting, reading, value, std.math.maxInt(u64), &request);
+  if (r != 0) return error.TestUnexpectedResult;
+  return bulbAnswered(ctx);
+}
+
+fn bulbAnswered(ctx: *Context) ![]const u8 {
+  const done = (try nextOfType(ctx, .request_done)) orelse return error.TestExpectedDone;
+  defer skep_event_free(done);
+  try testing.expectEqual(0, skep_event_get_error(done));
+  try testing.expectEqual(0, skep_event_get_status(done));
+  const sent = &ctx.driver.?.sim.sent[ctx.driver.?.sim.sent_len - 1];
+  return sent.bytes();
+}
+
+test "a bulb's readings and colour are set by its clusters' commands" {
+  var devices = [_]sim.Device{ simBulb() };
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = bulb_ieee, .nwk = 0x6442, .kind = .joined });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+
+  // Listed as settable.
+  var sources: [16]readings.CSource = undefined;
+  var count: usize = 0;
+  try testing.expectEqual(
+    0,
+    skep_device_get_readings(ctx, bulb_ieee, &sources, sources.len, &count),
+  );
+  try testing.expectEqualStrings("on", std.mem.span(sources[0].name));
+  try testing.expectEqual(1, sources[0].settable);
+  try testing.expectEqualStrings("color_x", std.mem.span(sources[5].name));
+  try testing.expectEqual(0, sources[5].settable);
+
+  // Off; 50 % over 1 s; 2700 K; red.
+  var frame = try setBulb(ctx, "on", 0, 0);
+  try testing.expectEqualSlices(u8, &.{ 0x01, frame[1], 0x00 }, frame);
+  frame = try setBulb(ctx, "level", 50, 1);
+  try testing.expectEqualSlices(u8, &.{ 0x01, frame[1], 0x04, 127, 10, 0 }, frame);
+  frame = try setBulb(ctx, "color_temperature", 2700, 0);
+  try testing.expectEqualSlices(u8, &.{ 0x01, frame[1], 0x0a, 0x72, 0x01, 0, 0 }, frame);
+  var request: u32 = 0;
+  var setting: Setting = .{
+    .device = bulb_ieee,
+    .endpoint = 1,
+    .transition = 0,
+    .reserved = @splat(0),
+  };
+  try testing.expectEqual(
+    0,
+    skep_set_color(ctx, &setting, 0xff0000, std.math.maxInt(u64), &request),
+  );
+  frame = try bulbAnswered(ctx);
+  try testing.expectEqualSlices(
+    u8,
+    &.{ 0x01, frame[1], 0x07, 0xdc, 0xa3, 0x79, 0x54, 0, 0 },
+    frame,
+  );
+
+  // What cannot be set is refused at once.
+  const never = std.math.maxInt(u64);
+  try testing.expectEqual(
+    err(.INVAL),
+    skep_set_reading(ctx, &setting, "level", 150, never, &request),
+  );
+  try testing.expectEqual(
+    err(.NOENT),
+    skep_set_reading(ctx, &setting, "power", 1, never, &request),
+  );
+  try testing.expectEqual(
+    err(.OPNOTSUPP),
+    skep_set_reading(ctx, &setting, "color_x", 0.5, never, &request),
+  );
+  try testing.expectEqual(err(.INVAL), skep_set_color(ctx, &setting, 0x000000, never, &request));
+  setting.transition = -1;
+  try testing.expectEqual(
+    err(.INVAL),
+    skep_set_reading(ctx, &setting, "level", 50, never, &request),
+  );
+  setting.transition = 0;
+  setting.endpoint = 2;
+  try testing.expectEqual(
+    err(.NOENT),
+    skep_set_reading(ctx, &setting, "level", 50, never, &request),
+  );
+  setting.endpoint = 1;
+  setting.reserved[0] = 1;
+  try testing.expectEqual(
+    err(.INVAL),
+    skep_set_reading(ctx, &setting, "level", 50, never, &request),
+  );
+  setting.reserved[0] = 0;
+  setting.device = 1;
+  try testing.expectEqual(err(.NODEV), skep_set_color(ctx, &setting, 0xff0000, never, &request));
 }
 
 test "a device that joins is interviewed, set up, and reports" {

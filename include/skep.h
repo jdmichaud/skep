@@ -787,6 +787,7 @@ struct skep_reading_source {
   uint8_t endpoint;
   uint16_t cluster;
   uint16_t attribute;
+  uint8_t settable; /* 1 if skep_set_reading() can set it */
   const char *name;
   const char *unit;
   uint64_t reserved[2]; /* for later versions */
@@ -926,6 +927,46 @@ int skep_unbind(skep_ctx *ctx, const struct skep_target *target, uint64_t deadli
 int skep_send_command(skep_ctx *ctx, const struct skep_target *target, uint8_t command,
                       const struct skep_value *arguments, size_t count, uint64_t deadline,
                       uint32_t *request);
+
+/* Where a setting goes, and how fast. */
+struct skep_setting {
+  uint64_t device; /* IEEE address */
+  uint8_t endpoint;
+  /* In seconds, for what changes gradually, such as a light's level or
+   * colour: 0 for at once, 6553.4 at most. */
+  double transition;
+  uint32_t reserved[4]; /* for later versions; must be 0 */
+};
+
+/*
+ * Set a reading of a device's endpoint to a value in its unit, as
+ * skep_device_get_readings() lists it with settable at 1: "on" (1 or 0),
+ * "level" (%, 0 switching the light off), "color_temperature" (K), "hue"
+ * (°) and "saturation" (%). libskep sends the command of the reading's
+ * cluster that sets it, with the value scaled back, such as Move to Level
+ * with On/Off; SKEP_EVENT_REQUEST_DONE carries the status the device
+ * answered with. The device's reports then tell its new state, if it is
+ * set up to report it.
+ *
+ * Errors: -ENOENT (no such reading on the endpoint), -ENOTSUP (a reading
+ * that cannot be set), -EINVAL (a value or transition out of range), and
+ * those of all requests.
+ */
+int skep_set_reading(skep_ctx *ctx, const struct skep_setting *setting, const char *reading,
+                     double value, uint64_t deadline, uint32_t *request);
+
+/*
+ * Set a light's colour, an sRGB colour given as 0xRRGGBB, with the Color
+ * Control cluster of the endpoint: libskep sends the colour's CIE 1931
+ * chromaticity (Move to Color). Its brightness is not part of it: the
+ * level is set apart, and black, which has no colour, is refused.
+ *
+ * Errors: -ENOENT (no Color Control on the endpoint), -EINVAL (black, a
+ * value above 0xFFFFFF, or a transition out of range), and those of all
+ * requests.
+ */
+int skep_set_color(skep_ctx *ctx, const struct skep_setting *setting, uint32_t rgb,
+                   uint64_t deadline, uint32_t *request);
 
 /*
  * Give up a pending request. It ends at once with SKEP_EVENT_REQUEST_DONE

@@ -393,6 +393,20 @@ The API is in [include/skep.h](../include/skep.h).
     first. Values the ZCL reserves for "invalid" have no reading.
   - Not chosen: scaling in skep, which would put Zigbee logic in a client
     and leave other clients to do it again.
+  - Some readings can be set (`skep_set_reading()`): `on`, `level`,
+    `color_temperature`, `hue` and `saturation`. libskep sends the
+    command of the reading's cluster that sets it, with the value scaled
+    back: level 50 % is Move to Level with On/Off, to 127. Setting
+    readings, rather than one function per command, gives applications
+    one way to control any device that has the reading, the plug's `on`
+    as much as a bulb's.
+  - Colours are set from sRGB (`skep_set_color()`), as their CIE 1931
+    chromaticity (Move to Color); their brightness is the level's. The
+    conversion is colour science rather than Zigbee, but lights need it,
+    and every application would otherwise do it again. Bulbs keep a
+    colour outside their gamut within it themselves; clamping it in
+    libskep, from a gamut in the device's entry, waits for a device that
+    needs it.
 - No global state: everything libskep knows is in a context, which the
   application holds as an opaque handle. The application decides when a
   context is created and freed; only libskep reads or changes what is

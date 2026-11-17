@@ -34,4 +34,5 @@ test "the structs of skep.h are laid out as libskep's" {
   try expectSameLayout(CAllocator, c.struct_skep_allocator);
   try expectSameLayout(Event.CReading, c.struct_skep_reading);
   try expectSameLayout(readings.CSource, c.struct_skep_reading_source);
+  try expectSameLayout(readings.CSetting, c.struct_skep_setting);
 }
