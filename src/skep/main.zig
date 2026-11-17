@@ -17,12 +17,39 @@ const Command = struct {
   help: []const u8,
 };
 
+/// The readings, which get and read take, in their help.
+const readings_help =
+  \\
+  \\
+  \\Readings, as devices have them:
+  \\
+  \\  on                 yes or no
+  \\  level              a light's brightness, in %
+  \\  color_temperature  a light's white, in K
+  \\  hue                a light's hue, in degrees
+  \\  saturation         a light's saturation, in %
+  \\  color_x, color_y   a light's colour, as CIE 1931 coordinates
+  \\  temperature        in °C
+  \\  humidity           in %
+  \\  pressure           in hPa
+  \\  battery            in %
+  \\  battery_voltage    in V
+  \\  power              in W
+  \\  energy             in kWh
+  \\  voltage            in V
+  \\  current            in A
+  \\  power_factor       from 0 to 1
+  \\  frequency          in Hz
+;
+
 const commands = [_]Command{
   .{
     .names = &.{ "version" },
     .forms = &.{ "version" },
     .summary = "the versions of skepd and of its protocol",
-    .help = "Prints the versions of skepd and of skep-protocol(7), which it speaks.",
+    .help =
+    \\Prints the versions of skepd and of skep-protocol(7), which it speaks.
+    ,
   },
   .{
     .names = &.{ "network" },
@@ -37,7 +64,11 @@ const commands = [_]Command{
     .names = &.{ "permit" },
     .forms = &.{ "permit [<seconds>]" },
     .summary = "let new devices join, 60 s by default, 0 to stop",
-    .help = "Lets new devices join for <seconds>, 60 by default, 254 at most; 0 stops letting them.",
+    .help =
+    \\Lets new devices join the network for a while.
+    \\
+    \\  <seconds>  how long, 60 by default, 254 at most; 0 stops letting them
+    ,
   },
   .{
     .names = &.{ "devices" },
@@ -55,6 +86,8 @@ const commands = [_]Command{
     .help =
     \\Prints what the device's interview found: its address, type, manufacturer and model, its
     \\endpoints and clusters, and its readings, as get gives them.
+    \\
+    \\  <device>  its IEEE address, such as f44250000d350000, or its name
     ,
   },
   .{
@@ -62,10 +95,12 @@ const commands = [_]Command{
     .forms = &.{ "get <device> [<reading>...]" },
     .summary = "what a device last reported, or was read for",
     .help =
-    \\Prints the device's readings, or those named, such as temperature: the last value it
-    \\reported or was read for, and how long ago. It answers at once, even for a device that
-    \\sleeps.
-    ,
+    \\Prints the device's readings, or those named: the last value it reported or was read for,
+    \\and how long ago. It answers at once, even for a device that sleeps.
+    \\
+    \\  <device>   its IEEE address, such as f44250000d350000, or its name
+    \\  <reading>  one of the device's readings, which get without one lists
+    ++ readings_help,
   },
   .{
     .names = &.{ "read" },
@@ -75,17 +110,27 @@ const commands = [_]Command{
     },
     .summary = "ask a device for readings, such as temperature",
     .help =
-    \\Asks the device for the readings named, such as temperature, or for attributes of a cluster
-    \\of an endpoint, by number. A device that sleeps answers when it wakes up, which can take
-    \\minutes: --timeout gives up earlier.
-    ,
+    \\Asks the device for readings, or for attributes by number. A device that sleeps answers
+    \\when it wakes up, which can take minutes: --timeout gives up earlier.
+    \\
+    \\  <device>     its IEEE address, such as f44250000d350000, or its name
+    \\  <reading>    one of the device's readings, which get lists
+    \\  <endpoint>   the number of one of its endpoints, such as 1
+    \\  <cluster>    the id of a cluster of the endpoint, such as 0x0402
+    \\  <attribute>  the id of an attribute of the cluster, such as 0x0000
+    ++ readings_help,
   },
   .{
     .names = &.{ "set" },
     .forms = &.{ "set <device> <reading> <value> [--transition <seconds>]" },
     .summary = "set a reading, such as level 50%, or a colour: color #ff8000",
     .help =
-    \\Sets a reading of the device, or a light's colour:
+    \\Sets a reading of the device, or a light's colour.
+    \\
+    \\  <device>                its IEEE address, such as f44250000d350000, or its name
+    \\  --transition <seconds>  how long a light takes to get there, 0 by default
+    \\
+    \\Readings and their values:
     \\
     \\  on yes|no                    a light or a plug, on or off
     \\  level <percent>              a light's brightness, such as 50%; 0 switches it off
@@ -94,8 +139,6 @@ const commands = [_]Command{
     \\  saturation <percent>         a light's saturation, such as 80%
     \\  color <#rrggbb>              a light's colour, in sRGB, such as #ff8000; its brightness
     \\                               is the level's
-    \\
-    \\  --transition <seconds>       how long a light takes to get there, 0 by default
     ,
   },
   .{
@@ -105,6 +148,10 @@ const commands = [_]Command{
     .help =
     \\Gives the device a name, which commands then take instead of its address, or forgets its
     \\name without one.
+    \\
+    \\  <device>  its IEEE address, such as f44250000d350000, or its name
+    \\  <name>    up to 64 bytes of text, without control characters, other than an
+    \\            IEEE address; quoted if it has spaces, such as "living room"
     ,
   },
   .{
@@ -114,6 +161,8 @@ const commands = [_]Command{
     .help =
     \\Interviews the device and sets it up again from the start: after a failed setup, or when it
     \\lost its configuration.
+    \\
+    \\  <device>  its IEEE address, such as f44250000d350000, or its name
     ,
   },
   .{
@@ -123,6 +172,8 @@ const commands = [_]Command{
     .help =
     \\Asks the device to leave the network, and forgets it. It gives up waiting for an answer
     \\after 60 seconds, or --timeout: the device is forgotten either way.
+    \\
+    \\  <device>  its IEEE address, such as f44250000d350000, or its name
     ,
   },
   .{
@@ -130,8 +181,15 @@ const commands = [_]Command{
     .forms = &.{ "write <device> <endpoint> <cluster> <attribute> <type> <value>" },
     .summary = "write an attribute",
     .help =
-    \\Writes an attribute, with its ZCL type named as skep-protocol(7) names them, such as uint8
-    \\or char_string.
+    \\Writes an attribute of a cluster of the device.
+    \\
+    \\  <device>     its IEEE address, such as f44250000d350000, or its name
+    \\  <endpoint>   the number of one of its endpoints, such as 1
+    \\  <cluster>    the id of a cluster of the endpoint, such as 0x0006
+    \\  <attribute>  the id of an attribute of the cluster, such as 0x4003
+    \\  <type>       the attribute's ZCL type, such as bool, uint8, int16, enum8 or
+    \\               char_string; skep-protocol(7) names them all
+    \\  <value>      a number, true or false, or text
     ,
   },
   .{
@@ -139,35 +197,68 @@ const commands = [_]Command{
     .forms = &.{ "report <device> <endpoint> <cluster> <attribute> <type> <min> <max> [<change>]" },
     .summary = "configure how a device reports an attribute",
     .help =
-    \\Configures how the device reports an attribute: at least <min> and at most <max> seconds
-    \\apart, and when it changes by <change>, for analog types.
+    \\Configures how the device reports an attribute: when it changes enough, but at most every
+    \\<min> seconds, and at least every <max> seconds.
+    \\
+    \\  <device>     its IEEE address, such as f44250000d350000, or its name
+    \\  <endpoint>   the number of one of its endpoints, such as 1
+    \\  <cluster>    the id of a cluster of the endpoint, such as 0x0402
+    \\  <attribute>  the id of an attribute of the cluster, such as 0x0000
+    \\  <type>       the attribute's ZCL type, such as int16
+    \\  <min>        the fewest seconds between two reports
+    \\  <max>        the most seconds between two reports: 0 for reports on change only,
+    \\               65535 for no reports
+    \\  <change>     how much it must change to be reported, for numbers, in its own units:
+    \\               100 for 1 °C of a temperature in hundredths of a degree
     ,
   },
   .{
     .names = &.{ "bind" },
     .forms = &.{ "bind <device> <endpoint> <cluster>" },
     .summary = "bind a cluster to the coordinator",
-    .help = "Binds the cluster to the coordinator, so that the device sends it reports and commands.",
+    .help =
+    \\Binds the cluster to the coordinator, so that the device sends it reports and commands.
+    \\
+    \\  <device>    its IEEE address, such as f44250000d350000, or its name
+    \\  <endpoint>  the number of one of its endpoints, such as 1
+    \\  <cluster>   the id of a cluster of the endpoint, such as 0x0402
+    ,
   },
   .{
     .names = &.{ "unbind" },
     .forms = &.{ "unbind <device> <endpoint> <cluster>" },
     .summary = "remove a binding",
-    .help = "Removes the binding of the cluster to the coordinator.",
+    .help =
+    \\Removes the binding of the cluster to the coordinator.
+    \\
+    \\  <device>    its IEEE address, such as f44250000d350000, or its name
+    \\  <endpoint>  the number of one of its endpoints, such as 1
+    \\  <cluster>   the id of a cluster of the endpoint, such as 0x0402
+    ,
   },
   .{
     .names = &.{ "command" },
     .forms = &.{ "command <device> <endpoint> <cluster> <command> [<type>:<value>...]" },
     .summary = "send a cluster command",
-    .help = "Sends a cluster command, with its arguments in order, such as uint8:128 uint16:10.",
+    .help =
+    \\Sends a cluster command, with its arguments in order.
+    \\
+    \\  <device>        its IEEE address, such as f44250000d350000, or its name
+    \\  <endpoint>      the number of one of its endpoints, such as 1
+    \\  <cluster>       the id of a cluster of the endpoint, such as 0x0008
+    \\  <command>       the command's id in the cluster, such as 0x04
+    \\  <type>:<value>  an argument, with its ZCL type, such as uint8:128 then uint16:10
+    ,
   },
   .{
     .names = &.{ "on", "off", "toggle" },
     .forms = &.{ "on|off|toggle <device> [<endpoint>]" },
     .summary = "switch a device on, off, or the other way",
     .help =
-    \\Switches the device on, off, or the other way, with the On/Off cluster of <endpoint>, 1 by
-    \\default.
+    \\Switches the device on, off, or the other way, with its On/Off cluster.
+    \\
+    \\  <device>    its IEEE address, such as f44250000d350000, or its name
+    \\  <endpoint>  the number of the endpoint, 1 by default
     ,
   },
   .{
