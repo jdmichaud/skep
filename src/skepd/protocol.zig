@@ -9,6 +9,7 @@ const libskep = @import("libskep.zig");
 const time = @import("time.zig");
 const Readings = @import("Readings.zig");
 const Server = @import("Server.zig");
+const methods = @import("methods.zig");
 const values = @import("values.zig");
 
 const Io = std.Io;
@@ -22,7 +23,7 @@ pub const version = 1;
 /// Most requests of one client pending at once, so that one client cannot take all of libskep's.
 pub const max_pending_per_client = 16;
 /// Most attributes in a request, as libskep takes.
-const max_attributes = c.SKEP_MAX_ATTRIBUTES;
+pub const max_attributes = c.SKEP_MAX_ATTRIBUTES;
 
 gpa: std.mem.Allocator,
 io: Io,
@@ -64,7 +65,7 @@ pub const Method = enum {
   cancel,
 };
 
-const Pending = struct {
+pub const Pending = struct {
   client: u32,
   id: i64,
   method: Method,
@@ -75,7 +76,7 @@ const Pending = struct {
 };
 
 /// Why the request being handled fails.
-const Failure = struct {
+pub const Failure = struct {
   code: [24]u8 = undefined,
   code_len: usize = 0,
   message: [200]u8 = undefined,
@@ -88,7 +89,7 @@ const Failure = struct {
 };
 
 /// WriteFailed is what writing JSON into memory fails with: out of memory too.
-const Error = error{ Fail, OutOfMemory, WriteFailed };
+pub const Error = error{ Fail, OutOfMemory, WriteFailed };
 
 pub fn deinit(p: *Protocol) void {
   p.readings.deinit();
@@ -98,7 +99,7 @@ pub fn deinit(p: *Protocol) void {
 }
 
 /// Fails the request being handled with an errno name and a message.
-fn fail(p: *Protocol, code: []const u8, comptime format: []const u8, args: anytype) Error {
+pub fn fail(p: *Protocol, code: []const u8, comptime format: []const u8, args: anytype) Error {
   p.failure.data_name = "";
   const n = @min(code.len, p.failure.code.len);
   @memcpy(p.failure.code[0..n], code[0..n]);
@@ -109,7 +110,7 @@ fn fail(p: *Protocol, code: []const u8, comptime format: []const u8, args: anyty
 }
 
 /// Fails, with a member for clients besides the message: its name and its value as JSON.
-fn failWith(
+pub fn failWith(
   p: *Protocol,
   code: []const u8,
   name: []const u8,
@@ -127,13 +128,13 @@ fn failWith(
 }
 
 /// Fails with the error a function of skep.h returned.
-fn failErrno(p: *Protocol, r: c_int) Error {
+pub fn failErrno(p: *Protocol, r: c_int) Error {
   var buffer: [24]u8 = undefined;
   return p.fail(errnoCode(&buffer, r), "{s}", .{ errnoText(r) });
 }
 
 /// What a negative errno value from libskep means, in words, for error messages.
-fn errnoText(r: c_int) []const u8 {
+pub fn errnoText(r: c_int) []const u8 {
   return switch (libskep.errno(r)) {
     .NODEV => "no such device",
     .NETDOWN => "the network is down",
@@ -152,7 +153,7 @@ fn errnoText(r: c_int) []const u8 {
 }
 
 /// The errno name of a negative errno value: "E" and its name, ENOTSUP for EOPNOTSUPP.
-fn errnoCode(buffer: *[24]u8, r: c_int) []const u8 {
+pub fn errnoCode(buffer: *[24]u8, r: c_int) []const u8 {
   const e = libskep.errno(r);
   if (e == .OPNOTSUPP) return "ENOTSUP";
   return std.fmt.bufPrint(buffer, "E{t}", .{ e }) catch "EIO";
@@ -178,7 +179,7 @@ pub fn serve(p: *Protocol) void {
   }
 }
 
-fn handle(p: *Protocol, client: *Server.Client, line: []const u8) void {
+pub fn handle(p: *Protocol, client: *Server.Client, line: []const u8) void {
   var arena: std.heap.ArenaAllocator = .init(p.gpa);
   defer arena.deinit();
   p.request_id = null;
@@ -195,17 +196,17 @@ fn handle(p: *Protocol, client: *Server.Client, line: []const u8) void {
 }
 
 /// The parameters of a request: what is not taken is refused.
-const Params = struct {
+pub const Params = struct {
   object: ?std.json.ObjectMap,
 
-  fn get(ps: Params, name: []const u8) ?std.json.Value {
+  pub fn get(ps: Params, name: []const u8) ?std.json.Value {
     const o = ps.object orelse return null;
     const v = o.get(name) orelse return null;
     return if (v == .null) null else v;
   }
 };
 
-fn request(
+pub fn request(
   p: *Protocol,
   a: std.mem.Allocator,
   client: *Server.Client,
@@ -245,354 +246,11 @@ fn request(
     }
   }
   switch (method) {
-    .version => {
-      try p.params(ps, &.{});
-      const v = c.skep_version();
-      var out: Message = undefined;
-      out.init(p.gpa);
-      defer out.deinit();
-      try p.result(&out, id);
-      try out.j.objectField("protocol");
-      try out.j.write(version);
-      try out.j.objectField("skepd");
-      try out.j.write(build_options.version);
-      try out.j.objectField("libskep");
-      try out.j.print("\"{d}.{d}.{d}\"", .{ v >> 16, v >> 8 & 0xff, v & 0xff });
-      p.send(client, &out);
-    },
-    .watch => {
-      try p.params(ps, &.{});
-      client.watching = true;
-      p.empty(client, id);
-    },
-    .network => {
-      try p.params(ps, &.{});
-      try p.network(client, id);
-    },
-    .permit_join => {
-      try p.params(ps, &.{ "seconds" });
-      const seconds = values.unsignedOf(
-        u8,
-        ps.get("seconds") orelse return p.fail("EINVAL", "no seconds", .{}),
-      ) orelse
-        return p.fail("EINVAL", "seconds: 0 to {d}", .{ c.SKEP_MAX_PERMIT_JOIN });
-      if (seconds > c.SKEP_MAX_PERMIT_JOIN) {
-        return p.fail("EINVAL", "seconds: 0 to {d}", .{ c.SKEP_MAX_PERMIT_JOIN });
-      }
-      try p.room(client);
-      var req: u32 = 0;
-      const r = c.skep_permit_join(p.ctx, seconds, &req);
-      if (r != 0) return p.failErrno(r);
-      try p.wait(client, req, .{ .client = client.id, .id = id, .method = .permit_join });
-    },
-    .devices => {
-      try p.params(ps, &.{});
-      var count: usize = 0;
-      _ = c.skep_get_devices(p.ctx, null, 0, &count);
-      const devices = try a.alloc(u64, count);
-      _ = c.skep_get_devices(p.ctx, devices.ptr, devices.len, &count);
-      var out: Message = undefined;
-      out.init(p.gpa);
-      defer out.deinit();
-      try p.result(&out, id);
-      try out.j.objectField("devices");
-      try out.j.beginArray();
-      for (devices[0..@min(count, devices.len)]) |device| {
-        try out.j.beginObject();
-        try p.describe(&out.j, a, device);
-        try out.j.endObject();
-      }
-      try out.j.endArray();
-      p.send(client, &out);
-    },
-    .device => {
-      try p.params(ps, &.{ "device" });
-      const device = try p.deviceOf(ps.get("device"));
-      var setup: c.enum_skep_setup = undefined;
-      if (c.skep_device_get_setup(p.ctx, device, &setup) != 0) {
-        return p.fail("ENODEV", "no such device", .{});
-      }
-      var out: Message = undefined;
-      out.init(p.gpa);
-      defer out.deinit();
-      try p.result(&out, id);
-      try p.describe(&out.j, a, device);
-      p.send(client, &out);
-    },
-    .rename => {
-      try p.params(ps, &.{ "device", "name" });
-      const device = try p.deviceOf(ps.get("device"));
-      var setup: c.enum_skep_setup = undefined;
-      if (c.skep_device_get_setup(p.ctx, device, &setup) != 0) {
-        return p.fail("ENODEV", "no such device", .{});
-      }
-      const new_name: ?[]const u8 = if (ps.get("name")) |n| switch (n) {
-        .string => |s| s,
-        else => return p.fail("EINVAL", "name: a string or null", .{}),
-      } else null;
-      if (new_name) |n| {
-        if (!Names.valid(n)) {
-          return p.fail(
-            "EINVAL",
-            "name: 1 to 64 bytes of UTF-8, no control characters, not an address",
-            .{},
-          );
-        }
-        if (p.names.find(n)) |other| {
-          if (other != device) return p.fail("EEXIST", "name taken", .{});
-        }
-      }
-      const old = try p.names.set(device, new_name);
-      defer if (old) |o| p.gpa.free(o);
-      if (p.names.save(p.names_path)) |failure| {
-        return p.fail("EIO", "{s}: {s}: {t}", .{ p.names_path, failure.step, failure.errno });
-      }
-      p.empty(client, id);
-      p.renamed(device, old);
-    },
-    .setup => {
-      try p.params(ps, &.{ "device" });
-      const device = try p.deviceOf(ps.get("device"));
-      const r = c.skep_setup_device(p.ctx, device);
-      if (r != 0) return p.failErrno(r);
-      p.empty(client, id);
-    },
-    .remove => {
-      try p.params(ps, &.{ "device", "timeout" });
-      const device = try p.deviceOf(ps.get("device"));
-      const deadline = try p.deadlineOf(ps.get("timeout"));
-      try p.room(client);
-      var req: u32 = 0;
-      const r = c.skep_remove_device(p.ctx, device, deadline, &req);
-      if (r != 0) return p.failErrno(r);
-      try p.wait(client, req, .{
-        .client = client.id,
-        .id = id,
-        .method = .remove,
-        .device = device,
-      });
-    },
-    .read => {
-      try p.params(ps, &(target_members ++ [_][]const u8{ "attributes" }));
-      const target = try p.targetOf(ps);
-      const list = try p.arrayOf(ps.get("attributes"), "attributes");
-      const ids = try a.alloc(u16, list.len);
-      for (list, ids) |item, *attribute| {
-        attribute.* = values.unsignedOf(u16, item) orelse
-          return p.fail("EINVAL", "attributes: ids", .{});
-      }
-      try p.room(client);
-      var req: u32 = 0;
-      const r = c.skep_read_attributes(
-        p.ctx,
-        &target.target,
-        ids.ptr,
-        ids.len,
-        target.deadline,
-        &req,
-      );
-      if (r != 0) return p.failErrno(r);
-      try p.wait(client, req, .{
-        .client = client.id,
-        .id = id,
-        .method = .read,
-        .device = target.target.device,
-        .endpoint = target.target.endpoint,
-        .cluster = target.target.cluster,
-      });
-    },
-    .write => {
-      try p.params(ps, &(target_members ++ [_][]const u8{ "attributes" }));
-      const target = try p.targetOf(ps);
-      const list = try p.arrayOf(ps.get("attributes"), "attributes");
-      const attributes = try a.alloc(c.struct_skep_attribute, list.len);
-      for (list, attributes) |item, *attribute| {
-        const o = try p.objectOf(item, &.{ "id", "type", "value" }, "attributes");
-        attribute.* = std.mem.zeroes(c.struct_skep_attribute);
-        attribute.id = values.unsignedOf(u16, o.get("id") orelse .null) orelse
-          return p.fail("EINVAL", "attributes: id", .{});
-        attribute.value = try p.valueOf(a, o.get("type"), o.get("value"), "attributes");
-      }
-      try p.room(client);
-      var req: u32 = 0;
-      const r = c.skep_write_attributes(
-        p.ctx,
-        &target.target,
-        attributes.ptr,
-        attributes.len,
-        target.deadline,
-        &req,
-      );
-      if (r != 0) return p.failErrno(r);
-      try p.wait(client, req, .{ .client = client.id, .id = id, .method = .write });
-    },
-    .configure_reporting => {
-      try p.params(ps, &(target_members ++ [_][]const u8{ "reporting" }));
-      const target = try p.targetOf(ps);
-      const list = try p.arrayOf(ps.get("reporting"), "reporting");
-      const reporting = try a.alloc(c.struct_skep_reporting, list.len);
-      for (list, reporting) |item, *r| {
-        const o = try p.objectOf(
-          item,
-          &.{ "id", "type", "min_interval", "max_interval", "change" },
-          "reporting",
-        );
-        r.* = std.mem.zeroes(c.struct_skep_reporting);
-        r.attribute = values.unsignedOf(u16, o.get("id") orelse .null) orelse
-          return p.fail("EINVAL", "reporting: id", .{});
-        const t = values.typeOf(o.get("type") orelse .null) orelse
-          return p.fail("EINVAL", "reporting: type", .{});
-        r.type = t.id;
-        r.min_interval = values.unsignedOf(u16, o.get("min_interval") orelse .null) orelse
-          return p.fail("EINVAL", "reporting: min_interval", .{});
-        r.max_interval = values.unsignedOf(u16, o.get("max_interval") orelse .null) orelse
-          return p.fail("EINVAL", "reporting: max_interval", .{});
-        r.change = .{ .type = t.id, .v = .{ .u = 0 } };
-        if (o.get("change")) |change| {
-          r.change = values.valueOf(a, t, change) catch |e| switch (e) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return p.fail("EINVAL", "reporting: change", .{}),
-          };
-        }
-      }
-      try p.room(client);
-      var req: u32 = 0;
-      const r = c.skep_configure_reporting(
-        p.ctx,
-        &target.target,
-        reporting.ptr,
-        reporting.len,
-        target.deadline,
-        &req,
-      );
-      if (r != 0) return p.failErrno(r);
-      try p.wait(client, req, .{ .client = client.id, .id = id, .method = .configure_reporting });
-    },
-    .bind, .unbind => {
-      try p.params(ps, &target_members);
-      const target = try p.targetOf(ps);
-      try p.room(client);
-      var req: u32 = 0;
-      const r = if (method == .bind)
-        c.skep_bind(p.ctx, &target.target, target.deadline, &req)
-      else
-        c.skep_unbind(p.ctx, &target.target, target.deadline, &req);
-      if (r != 0) return p.failErrno(r);
-      try p.wait(client, req, .{ .client = client.id, .id = id, .method = method });
-    },
-    .command => {
-      try p.params(ps, &(target_members ++ [_][]const u8{ "command", "arguments" }));
-      const target = try p.targetOf(ps);
-      const command = values.unsignedOf(u8, ps.get("command") orelse .null) orelse
-        return p.fail("EINVAL", "command: an id", .{});
-      const list: []const std.json.Value = if (ps.get("arguments")) |list|
-        try p.arrayOf(list, "arguments")
-      else
-        &.{};
-      const arguments = try a.alloc(c.struct_skep_value, list.len);
-      for (list, arguments) |item, *argument| {
-        const o = try p.objectOf(item, &.{ "type", "value" }, "arguments");
-        argument.* = try p.valueOf(a, o.get("type"), o.get("value"), "arguments");
-      }
-      try p.room(client);
-      var req: u32 = 0;
-      const r = c.skep_send_command(
-        p.ctx,
-        &target.target,
-        command,
-        arguments.ptr,
-        arguments.len,
-        target.deadline,
-        &req,
-      );
-      if (r != 0) return p.failErrno(r);
-      try p.wait(client, req, .{ .client = client.id, .id = id, .method = .command });
-    },
-    .set => {
-      try p.params(ps, &.{ "device", "endpoint", "reading", "value", "transition", "timeout" });
-      var setting = std.mem.zeroes(c.struct_skep_setting);
-      setting.device = try p.deviceOf(ps.get("device"));
-      const reading = switch (ps.get("reading") orelse .null) {
-        .string => |s| s,
-        else => return p.fail("EINVAL", "reading: a name", .{}),
-      };
-      // A colour is set on Color Control, whose endpoints have a color_x.
-      const color = std.mem.eql(u8, reading, "color");
-      setting.endpoint = if (ps.get("endpoint")) |e|
-        values.unsignedOf(u8, e) orelse return p.fail("EINVAL", "endpoint: 0 to 255", .{})
-      else
-        try p.endpointWith(a, setting.device, if (color) "color_x" else reading, reading);
-      if (ps.get("transition")) |t| {
-        setting.transition = switch (t) {
-          .integer => |i| @floatFromInt(i),
-          .float => |f| f,
-          else => return p.fail("EINVAL", "transition: seconds", .{}),
-        };
-        if (!(setting.transition >= 0 and setting.transition <= c.SKEP_MAX_TRANSITION)) {
-          return p.fail("EINVAL", "transition: from 0 to {d} seconds", .{ c.SKEP_MAX_TRANSITION });
-        }
-      }
-      const deadline = try p.deadlineOf(ps.get("timeout"));
-      const given = ps.get("value") orelse return p.fail("EINVAL", "no value", .{});
-      try p.room(client);
-      var req: u32 = 0;
-      const r = if (color) set: {
-        const rgb = colorOf(given) orelse
-          return p.fail("EINVAL", "value: a colour, as #rrggbb", .{});
-        break :set c.skep_set_color(p.ctx, &setting, rgb, deadline, &req);
-      } else set: {
-        const number: f64 = switch (given) {
-          .integer => |i| @floatFromInt(i),
-          .float => |f| f,
-          .bool => |b| if (b) 1 else 0,
-          else => return p.fail("EINVAL", "value: a number", .{}),
-        };
-        break :set c.skep_set_reading(
-          p.ctx,
-          &setting,
-          try a.dupeSentinel(u8, reading, 0),
-          number,
-          deadline,
-          &req,
-        );
-      };
-      if (libskep.is(r, .NOENT)) {
-        return p.fail("ENOENT", "no {s} on endpoint {d}", .{ reading, setting.endpoint });
-      }
-      if (libskep.is(r, .OPNOTSUPP)) {
-        const json = try p.settable(a, setting.device);
-        return p.failWith("ENOTSUP", "settable", json, "{s} cannot be set", .{ reading });
-      }
-      if (libskep.is(r, .RANGE)) {
-        const json = try p.rangeOf(a, setting.device, setting.endpoint, reading);
-        return p.failWith("ERANGE", "range", json, "{s} out of range", .{ reading });
-      }
-      if (color and libskep.is(r, .INVAL)) {
-        return p.fail("EINVAL", "black is no colour", .{});
-      }
-      if (r != 0) return p.failErrno(r);
-      try p.wait(client, req, .{ .client = client.id, .id = id, .method = .set });
-    },
-    .cancel => {
-      try p.params(ps, &.{ "id" });
-      const canceled = switch (ps.get("id") orelse return p.fail("EINVAL", "no id", .{})) {
-        .integer => |i| i,
-        else => return p.fail("EINVAL", "id: not an integer", .{}),
-      };
-      var it = p.pending.iterator();
-      while (it.next()) |entry| {
-        if (entry.value_ptr.client != client.id or entry.value_ptr.id != canceled) continue;
-        // Its response, ECANCELED, comes with libskep's REQUEST_DONE.
-        const r = c.skep_cancel(p.ctx, entry.key_ptr.*);
-        if (r != 0) return p.failErrno(r);
-        return p.empty(client, id);
-      }
-      return p.fail("ENOENT", "no request {d} pending", .{ canceled });
-    },
+    inline else => |m| try @field(methods, @tagName(m))(p, a, client, id, ps),
   }
 }
 
-const target_members = [_][]const u8{
+pub const target_members = [_][]const u8{
   "device",
   "endpoint",
   "cluster",
@@ -601,7 +259,7 @@ const target_members = [_][]const u8{
 };
 
 /// Refuses members other than `allowed`.
-fn only(
+pub fn only(
   p: *Protocol,
   object: std.json.ObjectMap,
   allowed: []const []const u8,
@@ -615,13 +273,13 @@ fn only(
   }
 }
 
-fn params(p: *Protocol, ps: Params, allowed: []const []const u8) Error!void {
+pub fn params(p: *Protocol, ps: Params, allowed: []const []const u8) Error!void {
   if (ps.object) |o| {
     try p.only(o, allowed, "params.");
   }
 }
 
-fn arrayOf(
+pub fn arrayOf(
   p: *Protocol,
   value: ?std.json.Value,
   comptime name: []const u8,
@@ -634,7 +292,7 @@ fn arrayOf(
   return list;
 }
 
-fn objectOf(
+pub fn objectOf(
   p: *Protocol,
   value: std.json.Value,
   allowed: []const []const u8,
@@ -649,7 +307,7 @@ fn objectOf(
 }
 
 /// A value given as its type and its value.
-fn valueOf(
+pub fn valueOf(
   p: *Protocol,
   a: std.mem.Allocator,
   type_value: ?std.json.Value,
@@ -670,7 +328,7 @@ fn valueOf(
 }
 
 /// A device given by its IEEE address or its name.
-fn deviceOf(p: *Protocol, value: ?std.json.Value) Error!u64 {
+pub fn deviceOf(p: *Protocol, value: ?std.json.Value) Error!u64 {
   const text = switch (value orelse return p.fail("EINVAL", "no device", .{})) {
     .string => |s| s,
     else => return p.fail("EINVAL", "device: an address or a name", .{}),
@@ -679,107 +337,12 @@ fn deviceOf(p: *Protocol, value: ?std.json.Value) Error!u64 {
   return p.names.find(text) orelse p.fail("ENODEV", "no device named {s}", .{ text });
 }
 
-/// The first endpoint of a device with a reading, `name`, for a setting of `what`.
-fn endpointWith(
-  p: *Protocol,
-  a: std.mem.Allocator,
-  device: u64,
-  name: []const u8,
-  what: []const u8,
-) Error!u8 {
-  const sources = libskep.readings(p.ctx, a, device) catch |e| return switch (e) {
-    error.OutOfMemory => error.OutOfMemory,
-    error.NotInterviewed => p.fail("EAGAIN", "not interviewed yet", .{}),
-    error.NoDevice => p.fail("ENODEV", "no such device", .{}),
-  };
-  for (sources) |source| {
-    if (std.mem.eql(u8, std.mem.span(source.name), name)) return source.endpoint;
-  }
-  return p.failWith("ENOENT", "settable", try p.settable(a, device), "no reading {s}", .{ what });
-}
-
-/// The values a settable reading takes, as the "range" of an error: {"reading", "min", "max",
-/// "unit"}.
-fn rangeOf(
-  p: *Protocol,
-  a: std.mem.Allocator,
-  device: u64,
-  endpoint: u8,
-  name: []const u8,
-) Error![]const u8 {
-  var w: std.Io.Writer.Allocating = .init(a);
-  var j: Stringify = .{ .writer = &w.writer };
-  try j.beginObject();
-  try j.objectField("reading");
-  try j.write(name);
-  for (try p.sourcesOf(a, device)) |source| {
-    if (source.endpoint != endpoint or !std.mem.eql(u8, std.mem.span(source.name), name)) continue;
-    try j.objectField("min");
-    try j.write(source.min);
-    try j.objectField("max");
-    try j.write(source.max);
-    try j.objectField("unit");
-    try j.write(std.mem.span(source.unit));
-    break;
-  }
-  try j.endObject();
-  return w.written();
-}
-
-/// What can be set on a device, as the "settable" of an error: the names of its settable
-/// readings, and "color" for a light with Color Control.
-fn settable(p: *Protocol, a: std.mem.Allocator, device: u64) Error![]const u8 {
-  var names: std.ArrayList([]const u8) = .empty;
-  var color = false;
-  for (try p.sourcesOf(a, device)) |source| {
-    const name = std.mem.span(source.name);
-    if (std.mem.eql(u8, name, "color_x")) {
-      color = true;
-    }
-    if (source.settable == 0) continue;
-    for (names.items) |known| {
-      if (std.mem.eql(u8, known, name)) break;
-    } else {
-      try names.append(a, name);
-    }
-  }
-  if (color) {
-    try names.append(a, "color");
-  }
-  var w: std.Io.Writer.Allocating = .init(a);
-  var j: Stringify = .{ .writer = &w.writer };
-  try j.write(names.items);
-  return w.written();
-}
-
-/// A device's readings, none if it is not interviewed.
-fn sourcesOf(
-  p: *Protocol,
-  a: std.mem.Allocator,
-  device: u64,
-) Error![]const c.struct_skep_reading_source {
-  return libskep.readings(p.ctx, a, device) catch |e| switch (e) {
-    error.OutOfMemory => error.OutOfMemory,
-    error.NoDevice, error.NotInterviewed => &.{},
-  };
-}
-
-/// An sRGB colour, "#rrggbb", as 0xrrggbb.
-fn colorOf(value: std.json.Value) ?u32 {
-  const text = switch (value) {
-    .string => |s| s,
-    else => return null,
-  };
-  if (text.len != 7 or text[0] != '#') return null;
-  return std.fmt.parseInt(u32, text[1..], 16) catch null;
-}
-
-const Target = struct {
+pub const Target = struct {
   target: c.struct_skep_target,
   deadline: u64,
 };
 
-fn targetOf(p: *Protocol, ps: Params) Error!Target {
+pub fn targetOf(p: *Protocol, ps: Params) Error!Target {
   var t = std.mem.zeroes(c.struct_skep_target);
   t.device = try p.deviceOf(ps.get("device"));
   t.endpoint = values.unsignedOf(u8, ps.get("endpoint") orelse .null) orelse
@@ -794,7 +357,7 @@ fn targetOf(p: *Protocol, ps: Params) Error!Target {
 }
 
 /// The deadline of a timeout in seconds, on libskep's clock; none without one.
-fn deadlineOf(p: *Protocol, value: ?std.json.Value) Error!u64 {
+pub fn deadlineOf(p: *Protocol, value: ?std.json.Value) Error!u64 {
   const seconds: f64 = switch (value orelse return std.math.maxInt(u64)) {
     .integer => |i| @floatFromInt(i),
     .float => |f| f,
@@ -805,14 +368,14 @@ fn deadlineOf(p: *Protocol, value: ?std.json.Value) Error!u64 {
 }
 
 /// Whether the client may have one more request pending.
-fn room(p: *Protocol, client: *const Server.Client) Error!void {
+pub fn room(p: *Protocol, client: *const Server.Client) Error!void {
   if (client.pending >= max_pending_per_client) {
     return p.fail("ENOBUFS", "16 requests pending", .{});
   }
 }
 
 /// Waits for libskep's request `req`, which answers a client's.
-fn wait(p: *Protocol, client: *Server.Client, req: u32, pending: Pending) Error!void {
+pub fn wait(p: *Protocol, client: *Server.Client, req: u32, pending: Pending) Error!void {
   try p.pending.put(p.gpa, req, pending);
   client.pending += 1;
 }
@@ -820,29 +383,29 @@ fn wait(p: *Protocol, client: *Server.Client, req: u32, pending: Pending) Error!
 // Responses.
 
 /// A message being written, in place: its writer points into it.
-const Message = struct {
+pub const Message = struct {
   out: Io.Writer.Allocating,
   j: Stringify,
   /// Objects open, which `finish` closes.
   depth: u8,
 
-  fn init(m: *Message, gpa: std.mem.Allocator) void {
+  pub fn init(m: *Message, gpa: std.mem.Allocator) void {
     m.out = .init(gpa);
     m.j = .{ .writer = &m.out.writer };
     m.depth = 0;
   }
 
-  fn deinit(m: *Message) void {
+  pub fn deinit(m: *Message) void {
     m.out.deinit();
   }
 
-  fn open(m: *Message) !void {
+  pub fn open(m: *Message) !void {
     try m.j.beginObject();
     m.depth += 1;
   }
 
   /// Closes what is open, and returns the line.
-  fn finish(m: *Message) ![]const u8 {
+  pub fn finish(m: *Message) ![]const u8 {
     while (m.depth > 0) : (m.depth -= 1) {
       try m.j.endObject();
     }
@@ -851,7 +414,7 @@ const Message = struct {
 };
 
 /// Starts a response with a result, whose members follow; `send` ends it.
-fn result(_: *Protocol, m: *Message, id: i64) !void {
+pub fn result(_: *Protocol, m: *Message, id: i64) !void {
   try m.open();
   try m.j.objectField("id");
   try m.j.write(id);
@@ -860,12 +423,12 @@ fn result(_: *Protocol, m: *Message, id: i64) !void {
 }
 
 /// Ends a message, and queues it for a client.
-fn send(p: *Protocol, client: *Server.Client, m: *Message) void {
+pub fn send(p: *Protocol, client: *Server.Client, m: *Message) void {
   const line = m.finish() catch return;
   p.server.send(client, line);
 }
 
-fn empty(p: *Protocol, client: *Server.Client, id: i64) void {
+pub fn empty(p: *Protocol, client: *Server.Client, id: i64) void {
   var m: Message = undefined;
   m.init(p.gpa);
   defer m.deinit();
@@ -873,12 +436,12 @@ fn empty(p: *Protocol, client: *Server.Client, id: i64) void {
   p.send(client, &m);
 }
 
-fn sendError(p: *Protocol, client: *Server.Client, code: []const u8, message: []const u8) void {
+pub fn sendError(p: *Protocol, client: *Server.Client, code: []const u8, message: []const u8) void {
   p.sendErrorWith(client, code, message, "", "");
 }
 
 /// An error with a member besides its code and message, its value already JSON.
-fn sendErrorWith(
+pub fn sendErrorWith(
   p: *Protocol,
   client: *Server.Client,
   code: []const u8,
@@ -907,7 +470,7 @@ fn sendErrorWith(
   p.server.send(client, out.written());
 }
 
-fn network(p: *Protocol, client: *Server.Client, id: i64) Error!void {
+pub fn network(p: *Protocol, client: *Server.Client, id: i64) Error!void {
   var m: Message = undefined;
   m.init(p.gpa);
   defer m.deinit();
@@ -940,7 +503,7 @@ fn network(p: *Protocol, client: *Server.Client, id: i64) Error!void {
 }
 
 /// The members of a device object: what is known of it so far.
-fn describe(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u64) Error!void {
+pub fn describe(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u64) Error!void {
   try j.objectField("device");
   try j.print("\"{x:0>16}\"", .{ device });
   if (p.names.get(device)) |name| {
@@ -1049,7 +612,7 @@ pub fn event(p: *Protocol, e: *const c.skep_event) bool {
   return handled;
 }
 
-fn handleEvent(p: *Protocol, e: *const c.skep_event) bool {
+pub fn handleEvent(p: *Protocol, e: *const c.skep_event) bool {
   const t = c.skep_event_get_type(e);
   if (t == c.SKEP_EVENT_REQUEST_DONE) return p.readings.done(e, p.wallTime()) or p.requestDone(e);
   switch (t) {
@@ -1165,7 +728,7 @@ fn handleEvent(p: *Protocol, e: *const c.skep_event) bool {
 }
 
 /// Starts an event, whose members follow.
-fn eventMessage(p: *Protocol, m: *Message, name: []const u8) !void {
+pub fn eventMessage(p: *Protocol, m: *Message, name: []const u8) !void {
   try m.open();
   try m.j.objectField("event");
   try m.j.write(name);
@@ -1174,7 +737,7 @@ fn eventMessage(p: *Protocol, m: *Message, name: []const u8) !void {
   try m.j.write(p.timestamp(&buffer));
 }
 
-fn deviceEvent(p: *Protocol, m: *Message, name: []const u8, device: u64) !void {
+pub fn deviceEvent(p: *Protocol, m: *Message, name: []const u8, device: u64) !void {
   try p.eventMessage(m, name);
   try m.j.objectField("device");
   try m.j.print("\"{x:0>16}\"", .{ device });
@@ -1185,7 +748,7 @@ fn deviceEvent(p: *Protocol, m: *Message, name: []const u8, device: u64) !void {
 }
 
 /// device_renamed, for the clients that watch.
-fn renamed(p: *Protocol, device: u64, old: ?[]const u8) void {
+pub fn renamed(p: *Protocol, device: u64, old: ?[]const u8) void {
   var m: Message = undefined;
   m.init(p.gpa);
   defer m.deinit();
@@ -1197,7 +760,7 @@ fn renamed(p: *Protocol, device: u64, old: ?[]const u8) void {
   p.broadcast(&m);
 }
 
-fn networkMembers(p: *Protocol, j: *Stringify, origin: c.enum_skep_network_origin) !void {
+pub fn networkMembers(p: *Protocol, j: *Stringify, origin: c.enum_skep_network_origin) !void {
   try j.objectField("origin");
   try j.write(
     switch (origin) {
@@ -1218,7 +781,7 @@ fn networkMembers(p: *Protocol, j: *Stringify, origin: c.enum_skep_network_origi
   try j.print("\"{x:0>16}\"", .{ extended_pan_id });
 }
 
-fn frameMembers(_: *Protocol, j: *Stringify, e: *const c.skep_event) !void {
+pub fn frameMembers(_: *Protocol, j: *Stringify, e: *const c.skep_event) !void {
   try j.objectField("endpoint");
   try j.write(c.skep_event_get_endpoint(e));
   try j.objectField("cluster");
@@ -1231,7 +794,7 @@ fn frameMembers(_: *Protocol, j: *Stringify, e: *const c.skep_event) !void {
 }
 
 /// The members of an attribute's reading: its name, its value in its unit, and its unit.
-fn readingMembers(
+pub fn readingMembers(
   j: *Stringify,
   name: [*c]const u8,
   unit: [*c]const u8,
@@ -1250,18 +813,24 @@ fn readingMembers(
 }
 
 /// Remembers the readings of an event's attributes, from a device's endpoint and cluster.
-fn remember(p: *Protocol, device: u64, endpoint: u8, cluster: u16, e: *const c.skep_event) void {
+pub fn remember(
+  p: *Protocol,
+  device: u64,
+  endpoint: u8,
+  cluster: u16,
+  e: *const c.skep_event,
+) void {
   p.readings.remember(device, endpoint, cluster, e, p.wallTime());
 }
 
 /// The time in milliseconds since the epoch.
-fn wallTime(p: *Protocol) i64 {
+pub fn wallTime(p: *Protocol) i64 {
   return time.now(p.io);
 }
 
 /// "readings": what the device can be read for, with what it last reported or was read, and
 /// when.
-fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u64) !void {
+pub fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u64) !void {
   const sources = libskep.readings(p.ctx, a, device) catch |e| switch (e) {
     error.OutOfMemory => return error.OutOfMemory,
     error.NoDevice, error.NotInterviewed => return,
@@ -1309,7 +878,12 @@ fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u
 
 /// "attributes": those of the event, with their statuses in results, and values where they have
 /// them.
-fn writeAttributes(p: *Protocol, j: *Stringify, e: *const c.skep_event, with_status: bool) !void {
+pub fn writeAttributes(
+  p: *Protocol,
+  j: *Stringify,
+  e: *const c.skep_event,
+  with_status: bool,
+) !void {
   try j.objectField("attributes");
   try j.beginArray();
   for (0..c.skep_event_get_attribute_count(e)) |i| {
@@ -1334,7 +908,7 @@ fn writeAttributes(p: *Protocol, j: *Stringify, e: *const c.skep_event, with_sta
   try j.endArray();
 }
 
-fn commandMembers(p: *Protocol, j: *Stringify, e: *const c.skep_event) !void {
+pub fn commandMembers(p: *Protocol, j: *Stringify, e: *const c.skep_event) !void {
   try p.frameMembers(j, e);
   try j.objectField("command");
   try j.write(c.skep_event_get_command(e));
@@ -1358,7 +932,7 @@ fn commandMembers(p: *Protocol, j: *Stringify, e: *const c.skep_event) !void {
 }
 
 /// The end of a client's request: its response.
-fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
+pub fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   const entry = p.pending.fetchRemove(c.skep_event_get_request(e)) orelse return false;
   const pending = entry.value;
   // A client that went away.
@@ -1413,14 +987,14 @@ fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   return true;
 }
 
-fn clientOf(p: *Protocol, id: u32) ?*Server.Client {
+pub fn clientOf(p: *Protocol, id: u32) ?*Server.Client {
   for (p.server.clients.items) |client| {
     if (client.id == id) return client;
   }
   return null;
 }
 
-fn broadcast(p: *Protocol, m: *Message) void {
+pub fn broadcast(p: *Protocol, m: *Message) void {
   const line = m.finish() catch return;
   for (p.server.clients.items) |client| {
     if (client.watching) {
@@ -1449,7 +1023,7 @@ pub fn dropFinished(p: *Protocol) void {
 }
 
 /// The current time in UTC, as ISO 8601 with milliseconds.
-fn timestamp(p: *Protocol, buffer: *[32]u8) []const u8 {
+pub fn timestamp(p: *Protocol, buffer: *[32]u8) []const u8 {
   return time.format(buffer, time.now(p.io));
 }
 
@@ -1554,7 +1128,7 @@ const TestBench = struct {
   }
 };
 
-fn connect(path: []const u8) !linux.fd_t {
+pub fn connect(path: []const u8) !linux.fd_t {
   var address: linux.sockaddr.un = .{ .path = @splat(0) };
   @memcpy(address.path[0..path.len], path);
   const fd: linux.fd_t = @intCast(
@@ -1566,7 +1140,7 @@ fn connect(path: []const u8) !linux.fd_t {
   return fd;
 }
 
-fn expectContains(haystack: []const u8, needle: []const u8) !void {
+pub fn expectContains(haystack: []const u8, needle: []const u8) !void {
   if (std.mem.indexOf(u8, haystack, needle) == null) {
     std.debug.print("expected to find:\n{s}\nin:\n{s}\n", .{ needle, haystack });
     return error.TestExpectedContains;
@@ -1665,7 +1239,7 @@ test "fuzz: whatever a client sends, skepd answers in JSON" {
   });
 }
 
-fn fuzzRequest(bench: *TestBench, smith: *testing.Smith) !void {
+pub fn fuzzRequest(bench: *TestBench, smith: *testing.Smith) !void {
   var line: [512]u8 = undefined;
   const len = smith.slice(&line);
   if (std.mem.indexOfScalar(u8, line[0..len], '\n') != null) return;
