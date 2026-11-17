@@ -1115,10 +1115,15 @@ fn handleEvent(p: *Protocol, e: *const c.skep_event) bool {
       p.deviceEvent(&m, "device_left", device) catch return false;
       m.j.objectField("removed") catch return false;
       m.j.write(removed) catch return false;
+      p.broadcast(&m);
+      // Forgotten by libskep: by skepd too, its name after the event that gives it.
       if (removed) {
         p.readings.forget(device);
+        if (p.names.set(device, null) catch null) |old| {
+          p.gpa.free(old);
+          _ = p.names.save(p.names_path);
+        }
       }
-      p.broadcast(&m);
     },
     c.SKEP_EVENT_DEVICE_SETUP_FAILED => {
       var m: Message = undefined;
@@ -1364,13 +1369,9 @@ fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   const error_code = c.skep_event_get_error(e);
   const status = c.skep_event_get_status(e);
   if (pending.method == .remove) {
-    // Forgotten unless canceled: answered, or not.
+    // Forgotten unless canceled, answered or not: done, which SKEP_EVENT_DEVICE_LEFT follows.
     if (error_code == 0 or error_code == -@as(c_int, @backingInt(E.TIMEDOUT)) or
       error_code == -@as(c_int, @backingInt(E.HOSTUNREACH))) {
-      if (p.names.set(pending.device, null) catch null) |old| {
-        p.gpa.free(old);
-        _ = p.names.save(p.names_path);
-      }
       var m: Message = undefined;
       m.init(p.gpa);
       defer m.deinit();
