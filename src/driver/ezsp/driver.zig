@@ -202,6 +202,10 @@ pub const Callback = struct {
   }
 };
 
+/// The most events one frame from the NCP makes the driver report: a callback's copy for the debug
+/// log, and what it means.
+const events_per_frame = 4;
+
 pub const Driver = struct {
   startup: startup_layer.Startup,
   step: Step = .idle,
@@ -345,6 +349,10 @@ pub const Driver = struct {
   }
 
   pub fn nextEvent(d: *Driver) ?Event {
+    // Room again: the frames the link holds back come in.
+    if (d.step != .starting) {
+      d.process(d.now);
+    }
     if (d.events_len == 0) return null;
     const event = d.events[0];
     std.mem.copyForwards(Event, d.events[0..d.events_len - 1], d.events[1..d.events_len]);
@@ -516,7 +524,10 @@ pub const Driver = struct {
   }
 
   fn process(d: *Driver, now: u64) void {
-    while (d.startup.link.nextEvent()) |event| {
+    // A frame at a time while there is room for what it reports. The rest waits in the link,
+    // which holds the NCP back once full, until the application takes events.
+    while (d.events.len - d.events_len >= events_per_frame) {
+      const event = d.startup.link.nextEvent() orelse return;
       if (d.step == .failed) continue;
       switch (event) {
         .frame => |bytes| d.receive(bytes, now),
@@ -1603,6 +1614,47 @@ test "a command asked for after a quiet spell gets its full time" {
   driver.advance(ncp.now + 1);
   try testing.expectEqual(null, skipCallbacks(&driver));
   try testing.expectEqual(ncp.now, driver.sent_at);
+}
+
+test "a burst of frames from the NCP loses no event" {
+  var driver: Driver = undefined;
+  var ncp = try readyNcp(&driver, true);
+  while (driver.nextEvent()) |_| {}
+  // A message for the coordinator, which the driver reports with a copy for the debug log.
+  const callback = hex(
+    "0090014500" ++ "00" ++ "04010600010140010000d9" ++ "ff" ++ "ee" ++ "7371" ++ "ffff" ++
+      "05" ++ "1800" ++ "0b0000",
+  );
+  // Three reads of 8 frames each, before libskep takes any event.
+  for (0..3) |_| {
+    var bytes: [8 * ash.max_encoded_len]u8 = undefined;
+    var len: usize = 0;
+    for (0..8) |_| {
+      const encoded = try ash.encode(
+        .{
+          .data = .{
+            .frame_number = ncp.frm_tx,
+            .ack_number = ncp.frm_rx,
+            .retransmitted = false,
+            .payload = &callback,
+          },
+        },
+        bytes[len..][0..ash.max_encoded_len],
+      );
+      len += encoded.len;
+      ncp.frm_tx +%= 1;
+    }
+    driver.input(bytes[0..len], 0);
+  }
+  var messages: usize = 0;
+  while (driver.nextEvent()) |event| {
+    if (event == .message) {
+      messages += 1;
+    }
+  }
+  // What the link had no room for, it asks the NCP for again; what it took is all reported.
+  try testing.expectEqual(0, driver.takeDropped());
+  try testing.expect(messages >= 16);
 }
 
 test "messages go out, and come in" {
