@@ -77,7 +77,7 @@ pub fn main(init: std.process.Init) !u8 {
     return failed;
   };
   if (field(response, "error")) |e| {
-    try err.print("skep {s}: {s}\n", .{ call.name, text(field(e, "message")) });
+    try writeError(err, call.name, e);
     return failed;
   }
   const result = field(response, "result") orelse {
@@ -204,7 +204,7 @@ fn watch(client: *Client, out: *Io.Writer, err: *Io.Writer, json: bool) !u8 {
       const message = std.json.parseFromSliceLeaky(std.json.Value, client.arena, line, .{}) catch
         continue;
       if (field(message, "error")) |e| {
-        try err.print("skep watch: {s}\n", .{ text(field(e, "message")) });
+        try writeError(err, "watch", e);
         return failed;
       }
       if (field(message, "event") != null) {
@@ -295,7 +295,7 @@ fn readReadings(
     const k: usize = @intCast(id - 2);
     left -= 1;
     if (field(response, "error")) |e| {
-      try err.print("skep {s}: {s}\n", .{ call.name, text(field(e, "message")) });
+      try writeError(err, call.name, e);
       status = failed;
     } else if (field(response, "result")) |result| {
       answers[k] = result;
@@ -533,6 +533,36 @@ fn width(s: []const u8) usize {
 }
 
 // Printing.
+
+/// An error from skepd, in words: what its members say, a setting's range or what a device can
+/// set, and otherwise its message.
+fn writeError(w: *Io.Writer, command: []const u8, e: std.json.Value) !void {
+  if (field(e, "range")) |range| {
+    if (float(field(range, "min"))) |min| {
+      try w.print("skep {s}: {s}: from ", .{ command, text(field(range, "reading")) });
+      try writeNumber(w, min);
+      try w.writeAll(" to ");
+      try writeNumber(w, float(field(range, "max")) orelse 0);
+      const unit = text(field(range, "unit"));
+      if (unit.len > 0) {
+        try w.print(" {s}", .{ unit });
+      }
+      return w.writeByte('\n');
+    }
+  }
+  try w.print("skep {s}: {s}", .{ command, text(field(e, "message")) });
+  if (field(e, "settable") != null) {
+    const names = items(field(e, "settable"));
+    if (names.len == 0) {
+      try w.writeAll("; it can set nothing");
+    }
+    for (names, 0..) |name, i| {
+      const separator = if (i == 0) "; it can set " else if (i + 1 == names.len) " and " else ", ";
+      try w.print("{s}{s}", .{ separator, text(name) });
+    }
+  }
+  try w.writeByte('\n');
+}
 
 fn field(v: std.json.Value, name: []const u8) ?std.json.Value {
   return switch (v) {
@@ -959,6 +989,34 @@ test "readings are written short, in their units" {
     const s = try ago(a, case[0]);
     defer a.free(s);
     try testing.expectEqualStrings(case[1], s);
+  }
+}
+
+test "skepd's errors are worded from their data" {
+  var buffer: [256]u8 = undefined;
+  for ([_]struct { []const u8, []const u8 }{
+    .{
+      "{\"code\": \"EINVAL\", \"message\": \"color_temperature out of range\", \"range\": {\"reading\": \"color_temperature\", \"min\": 2202.643, \"max\": 7042.25, \"unit\": \"K\"}}",
+      "skep set: color_temperature: from 2203 to 7042 K\n",
+    },
+    .{
+      "{\"code\": \"ENOENT\", \"message\": \"no reading levl\", \"settable\": [\"on\", \"level\", \"color\"]}",
+      "skep set: no reading levl; it can set on, level and color\n",
+    },
+    .{
+      "{\"code\": \"ENOENT\", \"message\": \"no reading on\", \"settable\": []}",
+      "skep set: no reading on; it can set nothing\n",
+    },
+    .{
+      "{\"code\": \"ENODEV\", \"message\": \"no device named lamp\"}",
+      "skep set: no device named lamp\n",
+    },
+  }) |case| {
+    const e = try std.json.parseFromSlice(std.json.Value, testing.allocator, case[0], .{});
+    defer e.deinit();
+    var w: Io.Writer = .fixed(&buffer);
+    try writeError(&w, "set", e.value);
+    try testing.expectEqualStrings(case[1], w.buffered());
   }
 }
 

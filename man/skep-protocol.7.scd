@@ -56,6 +56,15 @@ or an error, whose "code" is the name of a POSIX errno value, and whose
 {"id": 1, "error": {"code": "EINVAL", "message": "seconds: at most 254"}}
 ```
 
+Some errors carry more, for clients to tell their users: a "range", the
+values a setting takes, {"reading", "min", "max", "unit"}; or "settable",
+the readings a device can set, as *set* takes them. The message says less:
+
+```
+{"id": 1, "error": {"code": "EINVAL", "message": "level out of range",
+ "range": {"reading": "level", "min": 0, "max": 100, "unit": "%"}}}
+```
+
 A request that cannot be read as one, not JSON or without an id, gets an
 error whose "id" is null. Empty lines are ignored.
 
@@ -240,9 +249,9 @@ value the hexadecimal digits of its encoding.
 	"level"'s. "endpoint" is the first one with the reading when left out.
 	"transition" is how long, in seconds, a light takes to get there: 0 by
 	default, 6553.4 at most. A value outside the reading's "min" and "max" is
-	*EINVAL*, its message saying the range. A reading that cannot be set is
-	*ENOTSUP*, one the endpoint does not have *ENOENT*, both saying what the
-	device can set, and a device whose interview is not done *EAGAIN*.
+	*EINVAL*, with the "range". A reading that cannot be set is *ENOTSUP*,
+	one the endpoint does not have *ENOENT*, both with what the device has
+	"settable", and a device whose interview is not done *EAGAIN*.
 	Result: {"status": _ZCL status_}, the status of the device's Default
 	Response, 0 if it sent none.
 

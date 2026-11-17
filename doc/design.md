@@ -564,7 +564,12 @@ The API is in [include/skep.h](../include/skep.h).
   show that command's usage only. Too few arguments are told before bad
   ones, with how those given were taken, since the missing one is often
   not the last. skepd's refusals are shown as its messages, after the
-  command's name; `--json` keeps their codes.
+  command's name, or worded from the data their errors carry, such as a
+  setting's range; `--json` keeps their codes.
+- skepd gives data, not sentences: an error's "message" is short, and
+  what a client tells its user, such as "from 2203 to 7042 K" or "it can
+  set on and level", it words from the error's members. The wording is
+  the client's.
 - Options go before or after the command. `--help` and `--version`;
   data on stdout, diagnostics on stderr. Human readable output by
   default, `--json` for scripts. Exit status 0 on success, 1 on failure,

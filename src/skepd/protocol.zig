@@ -77,6 +77,11 @@ const Failure = struct {
   code_len: usize = 0,
   message: [200]u8 = undefined,
   message_len: usize = 0,
+  /// A member the error has besides its code and message, for clients to word, its value as
+  /// JSON: "range" or "settable"; none if the name is empty.
+  data_name: []const u8 = "",
+  data: [1024]u8 = undefined,
+  data_len: usize = 0,
 };
 
 /// WriteFailed is what writing JSON into memory fails with: out of memory too.
@@ -91,12 +96,31 @@ pub fn deinit(p: *Protocol) void {
 
 /// Fails the request being handled with an errno name and a message.
 fn fail(p: *Protocol, code: []const u8, comptime format: []const u8, args: anytype) Error {
+  p.failure.data_name = "";
   const n = @min(code.len, p.failure.code.len);
   @memcpy(p.failure.code[0..n], code[0..n]);
   p.failure.code_len = n;
   const message = std.fmt.bufPrint(&p.failure.message, format, args) catch &p.failure.message;
   p.failure.message_len = message.len;
   return error.Fail;
+}
+
+/// Fails, with a member for clients besides the message: its name and its value as JSON.
+fn failWith(
+  p: *Protocol,
+  code: []const u8,
+  name: []const u8,
+  json: []const u8,
+  comptime format: []const u8,
+  args: anytype,
+) Error {
+  const failure = p.fail(code, format, args);
+  if (json.len <= p.failure.data.len) {
+    @memcpy(p.failure.data[0..json.len], json);
+    p.failure.data_len = json.len;
+    p.failure.data_name = name;
+  }
+  return failure;
 }
 
 /// Fails with the error a function of skep.h returned.
@@ -160,10 +184,12 @@ fn handle(p: *Protocol, client: *Server.Client, line: []const u8) void {
   defer arena.deinit();
   p.request_id = null;
   p.request(arena.allocator(), client, line) catch |e| switch (e) {
-    error.Fail => p.sendError(
+    error.Fail => p.sendErrorWith(
       client,
       p.failure.code[0..p.failure.code_len],
       p.failure.message[0..p.failure.message_len],
+      p.failure.data_name,
+      p.failure.data[0..p.failure.data_len],
     ),
     error.OutOfMemory, error.WriteFailed => p.sendError(client, "ENOMEM", "out of memory"),
   };
@@ -531,17 +557,13 @@ fn request(
         return p.fail("ENOENT", "no {s} on endpoint {d}", .{ reading, setting.endpoint });
       }
       if (r == -@as(c_int, @backingInt(E.OPNOTSUPP))) {
-        return p.fail("ENOTSUP", "{s} cannot be set; {s}", .{
-          reading,
-          try p.settable(a, setting.device),
-        });
+        const json = try p.settable(a, setting.device);
+        return p.failWith("ENOTSUP", "settable", json, "{s} cannot be set", .{ reading });
       }
       if (r == -@as(c_int, @backingInt(E.INVAL))) {
-        if (color) return p.fail("EINVAL", "black has no colour: set level 0, or on no", .{});
-        return p.fail("EINVAL", "{s}: {s}", .{
-          reading,
-          try p.rangeOf(a, setting.device, setting.endpoint, reading),
-        });
+        if (color) return p.fail("EINVAL", "black is no colour", .{});
+        const json = try p.rangeOf(a, setting.device, setting.endpoint, reading);
+        return p.failWith("EINVAL", "range", json, "{s} out of range", .{ reading });
       }
       if (r != 0) return p.failErrno(r);
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .set });
@@ -669,10 +691,11 @@ fn endpointWith(
   for (sources[0..@min(count, sources.len)]) |source| {
     if (std.mem.eql(u8, std.mem.span(source.name), name)) return source.endpoint;
   }
-  return p.fail("ENOENT", "no reading {s}; {s}", .{ what, try p.settable(a, device) });
+  return p.failWith("ENOENT", "settable", try p.settable(a, device), "no reading {s}", .{ what });
 }
 
-/// The values a settable reading takes, in words: "from 2203 to 7042 K".
+/// The values a settable reading takes, as the "range" of an error: {"reading", "min", "max",
+/// "unit"}.
 fn rangeOf(
   p: *Protocol,
   a: std.mem.Allocator,
@@ -680,50 +703,31 @@ fn rangeOf(
   endpoint: u8,
   name: []const u8,
 ) Error![]const u8 {
-  var count: usize = 0;
-  if (c.skep_device_get_readings(p.ctx, device, null, 0, &count) != 0) return "out of range";
-  const sources = try a.alloc(c.struct_skep_reading_source, count);
-  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
-  for (sources[0..@min(count, sources.len)]) |source| {
+  var w: std.Io.Writer.Allocating = .init(a);
+  var j: Stringify = .{ .writer = &w.writer };
+  try j.beginObject();
+  try j.objectField("reading");
+  try j.write(name);
+  for (try p.sourcesOf(a, device)) |source| {
     if (source.endpoint != endpoint or !std.mem.eql(u8, std.mem.span(source.name), name)) continue;
-    if (std.mem.eql(u8, name, "on")) return "yes or no, 1 or 0";
-    var w: std.Io.Writer.Allocating = .init(a);
-    try w.writer.writeAll("from ");
-    try writeShort(&w.writer, source.min);
-    try w.writer.writeAll(" to ");
-    try writeShort(&w.writer, source.max);
-    const unit = std.mem.span(source.unit);
-    if (unit.len > 0) {
-      try w.writer.print(" {s}", .{ unit });
-    }
-    return w.written();
+    try j.objectField("min");
+    try j.write(source.min);
+    try j.objectField("max");
+    try j.write(source.max);
+    try j.objectField("unit");
+    try j.write(std.mem.span(source.unit));
+    break;
   }
-  return "out of range";
+  try j.endObject();
+  return w.written();
 }
 
-/// A number with four significant digits at most, without trailing zeros: 2203, 0.5.
-fn writeShort(w: *std.Io.Writer, x: f64) std.Io.Writer.Error!void {
-  if (x == 0 or !std.math.isFinite(x)) return w.print("{d}", .{ x });
-  const magnitude: i64 = @intFromFloat(@floor(std.math.log10(@abs(x))));
-  const decimals: usize = @intCast(std.math.clamp(3 - magnitude, 0, 6));
-  var buffer: [64]u8 = undefined;
-  var s: []const u8 = std.fmt.bufPrint(&buffer, "{d:.[1]}", .{ x, decimals }) catch
-    return w.print("{d}", .{ x });
-  if (std.mem.indexOfScalar(u8, s, '.') != null) {
-    s = std.mem.trimEnd(u8, std.mem.trimEnd(u8, s, "0"), ".");
-  }
-  try w.writeAll(s);
-}
-
-/// What can be set on a device, in words: "it can set on and level".
+/// What can be set on a device, as the "settable" of an error: the names of its settable
+/// readings, and "color" for a light with Color Control.
 fn settable(p: *Protocol, a: std.mem.Allocator, device: u64) Error![]const u8 {
-  var count: usize = 0;
-  if (c.skep_device_get_readings(p.ctx, device, null, 0, &count) != 0) return "";
-  const sources = try a.alloc(c.struct_skep_reading_source, count);
-  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
   var names: std.ArrayList([]const u8) = .empty;
   var color = false;
-  for (sources[0..@min(count, sources.len)]) |source| {
+  for (try p.sourcesOf(a, device)) |source| {
     const name = std.mem.span(source.name);
     if (std.mem.eql(u8, name, "color_x")) {
       color = true;
@@ -738,14 +742,23 @@ fn settable(p: *Protocol, a: std.mem.Allocator, device: u64) Error![]const u8 {
   if (color) {
     try names.append(a, "color");
   }
-  if (names.items.len == 0) return "it can set nothing";
   var w: std.Io.Writer.Allocating = .init(a);
-  try w.writer.writeAll("it can set ");
-  for (names.items, 0..) |name, i| {
-    const separator = if (i == 0) "" else if (i + 1 == names.items.len) " and " else ", ";
-    try w.writer.print("{s}{s}", .{ separator, name });
-  }
+  var j: Stringify = .{ .writer = &w.writer };
+  try j.write(names.items);
   return w.written();
+}
+
+/// A device's readings, none if it is not interviewed.
+fn sourcesOf(
+  p: *Protocol,
+  a: std.mem.Allocator,
+  device: u64,
+) Error![]const c.struct_skep_reading_source {
+  var count: usize = 0;
+  if (c.skep_device_get_readings(p.ctx, device, null, 0, &count) != 0) return &.{};
+  const sources = try a.alloc(c.struct_skep_reading_source, count);
+  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
+  return sources[0..@min(count, sources.len)];
 }
 
 /// An sRGB colour, "#rrggbb", as 0xrrggbb.
@@ -858,6 +871,18 @@ fn empty(p: *Protocol, client: *Server.Client, id: i64) void {
 }
 
 fn sendError(p: *Protocol, client: *Server.Client, code: []const u8, message: []const u8) void {
+  p.sendErrorWith(client, code, message, "", "");
+}
+
+/// An error with a member besides its code and message, its value already JSON.
+fn sendErrorWith(
+  p: *Protocol,
+  client: *Server.Client,
+  code: []const u8,
+  message: []const u8,
+  data_name: []const u8,
+  data: []const u8,
+) void {
   var out: Io.Writer.Allocating = .init(p.gpa);
   defer out.deinit();
   var j: Stringify = .{ .writer = &out.writer };
@@ -870,6 +895,10 @@ fn sendError(p: *Protocol, client: *Server.Client, code: []const u8, message: []
   j.write(code) catch return;
   j.objectField("message") catch return;
   j.write(message) catch return;
+  if (data_name.len > 0) {
+    j.objectField(data_name) catch return;
+    j.print("{s}", .{ data }) catch return;
+  }
   j.endObject() catch return;
   j.endObject() catch return;
   p.server.send(client, out.written());
