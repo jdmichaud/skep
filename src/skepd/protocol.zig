@@ -57,6 +57,7 @@ pub const Method = enum {
   bind,
   unbind,
   command,
+  set,
   cancel,
 };
 
@@ -459,6 +460,60 @@ fn request(
       if (r != 0) return p.failErrno(r, "command");
       try p.wait(client, req, .{ .client = client.id, .id = id, .method = .command });
     },
+    .set => {
+      try p.params(ps, &.{ "device", "endpoint", "reading", "value", "transition", "timeout" });
+      var setting = std.mem.zeroes(c.struct_skep_setting);
+      setting.device = try p.deviceOf(ps.get("device"));
+      const reading = switch (ps.get("reading") orelse .null) {
+        .string => |s| s,
+        else => return p.fail("EINVAL", "reading: a name", .{}),
+      };
+      // A colour is set on Color Control, whose endpoints have a color_x.
+      const color = std.mem.eql(u8, reading, "color");
+      setting.endpoint = if (ps.get("endpoint")) |e|
+        values.unsignedOf(u8, e) orelse return p.fail("EINVAL", "endpoint: 0 to 255", .{})
+      else
+        try p.endpointWith(a, setting.device, if (color) "color_x" else reading, reading);
+      if (ps.get("transition")) |t| {
+        setting.transition = switch (t) {
+          .integer => |i| @floatFromInt(i),
+          .float => |f| f,
+          else => return p.fail("EINVAL", "transition: seconds", .{}),
+        };
+      }
+      const deadline = try p.deadlineOf(ps.get("timeout"));
+      const given = ps.get("value") orelse return p.fail("EINVAL", "no value", .{});
+      try p.room(client);
+      var req: u32 = 0;
+      const r = if (color) set: {
+        const rgb = colorOf(given) orelse
+          return p.fail("EINVAL", "value: a colour, as #rrggbb", .{});
+        break :set c.skep_set_color(p.ctx, &setting, rgb, deadline, &req);
+      } else set: {
+        const number: f64 = switch (given) {
+          .integer => |i| @floatFromInt(i),
+          .float => |f| f,
+          .bool => |b| if (b) 1 else 0,
+          else => return p.fail("EINVAL", "value: a number", .{}),
+        };
+        break :set c.skep_set_reading(
+          p.ctx,
+          &setting,
+          try a.dupeSentinel(u8, reading, 0),
+          number,
+          deadline,
+          &req,
+        );
+      };
+      if (r == -@as(c_int, @backingInt(E.NOENT))) {
+        return p.fail("ENOENT", "no {s} on endpoint {d}", .{ reading, setting.endpoint });
+      }
+      if (r == -@as(c_int, @backingInt(E.OPNOTSUPP))) {
+        return p.fail("ENOTSUP", "{s} cannot be set", .{ reading });
+      }
+      if (r != 0) return p.failErrno(r, "set");
+      try p.wait(client, req, .{ .client = client.id, .id = id, .method = .set });
+    },
     .cancel => {
       try p.params(ps, &.{ "id" });
       const canceled = switch (ps.get("id") orelse return p.fail("EINVAL", "no id", .{})) {
@@ -563,6 +618,36 @@ fn deviceOf(p: *Protocol, value: ?std.json.Value) Error!u64 {
   };
   if (values.parseIeee(text)) |ieee| return ieee;
   return p.names.find(text) orelse p.fail("ENODEV", "no device named {s}", .{ text });
+}
+
+/// The first endpoint of a device with a reading, `name`, for a setting of `what`.
+fn endpointWith(
+  p: *Protocol,
+  a: std.mem.Allocator,
+  device: u64,
+  name: []const u8,
+  what: []const u8,
+) Error!u8 {
+  var count: usize = 0;
+  const r = c.skep_device_get_readings(p.ctx, device, null, 0, &count);
+  if (r == -@as(c_int, @backingInt(E.AGAIN))) return p.fail("EAGAIN", "not interviewed yet", .{});
+  if (r != 0) return p.failErrno(r, "set");
+  const sources = try a.alloc(c.struct_skep_reading_source, count);
+  _ = c.skep_device_get_readings(p.ctx, device, sources.ptr, sources.len, &count);
+  for (sources[0..@min(count, sources.len)]) |source| {
+    if (std.mem.eql(u8, std.mem.span(source.name), name)) return source.endpoint;
+  }
+  return p.fail("ENOENT", "no {s}", .{ what });
+}
+
+/// An sRGB colour, "#rrggbb", as 0xrrggbb.
+fn colorOf(value: std.json.Value) ?u32 {
+  const text = switch (value) {
+    .string => |s| s,
+    else => return null,
+  };
+  if (text.len != 7 or text[0] != '#') return null;
+  return std.fmt.parseInt(u32, text[1..], 16) catch null;
 }
 
 const Target = struct {
@@ -1048,6 +1133,10 @@ fn describeReadings(p: *Protocol, j: *Stringify, a: std.mem.Allocator, device: u
     try j.write(source.cluster);
     try j.objectField("id");
     try j.write(source.attribute);
+    if (source.settable != 0) {
+      try j.objectField("settable");
+      try j.write(true);
+    }
     const key: Readings.Source = .{
       .device = device,
       .endpoint = source.endpoint,
@@ -1406,6 +1495,25 @@ test "clients ask skepd, and watch the network" {
   try expectContains(got, "{\"id\":10,\"result\":{}}");
   bench.ask("{\"id\": 11, \"method\": \"network\"}\n");
   try expectContains(bench.received(&buffer), "\"permit_join\":60}}");
+}
+
+test "settings skepd cannot make are refused" {
+  var bench: TestBench = undefined;
+  try bench.init();
+  defer bench.deinit();
+  var buffer: [4096]u8 = undefined;
+  bench.ask(
+    "{\"id\": 1, \"method\": \"set\", \"params\": {\"device\": \"0011223344556677\", \"reading\": \"level\", \"value\": 50}}\n" ++
+      "{\"id\": 2, \"method\": \"set\", \"params\": {\"device\": \"0011223344556677\", \"endpoint\": 1, \"reading\": \"level\"}}\n" ++
+      "{\"id\": 3, \"method\": \"set\", \"params\": {\"device\": \"0011223344556677\", \"endpoint\": 1, \"reading\": \"color\", \"value\": \"red\"}}\n" ++
+      "{\"id\": 4, \"method\": \"set\", \"params\": {\"device\": \"0011223344556677\", \"endpoint\": 1, \"reading\": \"level\", \"value\": 50, \"speed\": 1}}\n",
+  );
+  const got = bench.received(&buffer);
+  // No such device, no value, no colour, a member set does not take.
+  try expectContains(got, "{\"id\":1,\"error\":{\"code\":\"ENODEV\"");
+  try expectContains(got, "{\"id\":2,\"error\":{\"code\":\"EINVAL\"");
+  try expectContains(got, "{\"id\":3,\"error\":{\"code\":\"EINVAL\"");
+  try expectContains(got, "{\"id\":4,\"error\":{\"code\":\"ENOTSUP\"");
 }
 
 test "a client done sending still gets its answers" {

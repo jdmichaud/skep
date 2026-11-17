@@ -233,6 +233,18 @@ value the hexadecimal digits of its encoding.
 	Result: {"status": _ZCL status_}, the status of the device's Default
 	Response, 0 if it sent none.
 
+*set* {"device", "reading": _name_, "value": ..., "endpoint", "transition"}
+	Set a reading of the device (see *READINGS*) to a value in its unit: a
+	number, or true or false for "on". Or set a light's colour, with the
+	reading "color" and an sRGB colour as "#rrggbb"; its brightness is the
+	"level"'s. "endpoint" is the first one with the reading when left out.
+	"transition" is how long, in seconds, a light takes to get there: 0 by
+	default, 6553.4 at most. A reading that cannot be set is *ENOTSUP*, one
+	the endpoint does not have *ENOENT*, a device whose interview is not done
+	*EAGAIN*.
+	Result: {"status": _ZCL status_}, the status of the device's Default
+	Response, 0 if it sent none.
+
 *cancel* {"id": _id_}
 	Give up a pending request of this client, which ends with *ECANCELED*. A
 	request already sent may still take effect. An id that is not pending is
@@ -244,7 +256,7 @@ A _target_ is the members "device", "endpoint" and "cluster", and
 commands.
 
 Requests to devices (*remove*, *read*, *write*, *configure_reporting*,
-*bind*, *unbind*, *command*) take a "timeout" too: how long, in seconds,
+*bind*, *unbind*, *command*, *set*) take a "timeout" too: how long, in seconds,
 fractions allowed, the request may wait, for a sleepy device to wake up
 among others. Without one, it waits as long as it takes.
 
@@ -317,9 +329,9 @@ reserves for "invalid", such as 0x8000 for a temperature, has no reading.
 
 A device's "readings" are those it can be read for, what matters most
 first, once its interview found its clusters. Each has the "endpoint",
-"cluster" and "id" to *read* it, its "reading" and "unit", and the "type",
-"value", "scaled" and "time" of the last value the device reported or was
-read for, if any:
+"cluster" and "id" to *read* it, its "reading" and "unit", "settable":
+true if *set* can set it, and the "type", "value", "scaled" and "time" of
+the last value the device reported or was read for, if any:
 
 ```
 "readings": [
@@ -327,6 +339,17 @@ read for, if any:
    "reading": "temperature", "scaled": 21.54, "unit": "°C",
    "time": "2026-11-16T21:39:12.250Z"},
   {"endpoint": 1, "cluster": 1, "id": 33, "reading": "battery", "unit": "%"}
+]
+```
+
+A light's "on", "level", "color_temperature", "hue" and "saturation" can be
+set, and so can a plug's "on":
+
+```
+"readings": [
+  {"endpoint": 1, "cluster": 8, "id": 0, "settable": true, "type": "uint8",
+   "value": 127, "reading": "level", "scaled": 50, "unit": "%", "time": ...},
+  ...
 ]
 ```
 
