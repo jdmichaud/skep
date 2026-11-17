@@ -49,13 +49,7 @@ pub const Reporting = extern struct {
 
 /// How many of the application's requests are pending.
 pub fn pending(ctx: *const Context) usize {
-  var n: usize = 0;
-  for (ctx.exchanges.items) |e| {
-    if (e.purpose == .request) {
-      n += 1;
-    }
-  }
-  return n;
+  return ctx.exchanges.count(.request);
 }
 
 /// Checks a request and finds its device. Returns 0 and the device, or a negative errno value.
@@ -291,27 +285,29 @@ pub fn remove(ctx: *Context, ieee: u64, deadline: u64, id: *u32) c_int {
 /// A write or reporting configuration still waiting for its device is replaced by a newer one for
 /// the same attributes of the same target: it ends with -ECANCELED.
 fn replaceWaiting(ctx: *Context, ieee: u64, newer: Request, frame: *const driver_layer.Frame) void {
-  var i: usize = 0;
-  while (i < ctx.exchanges.items.len) {
-    const e = ctx.exchanges.items[i];
-    const same = e.device == ieee and
-      e.phase == .waiting and
-      e.purpose == .request and
-      e.purpose.request.kind == newer.kind and
-      e.frame.destination_endpoint == frame.destination_endpoint and
-      e.frame.cluster == frame.cluster and
-      manufacturerOf(&e.frame) == manufacturerOf(frame) and
-      std.mem.eql(
-        u16,
-        e.purpose.request.attributes[0..e.purpose.request.count],
-        newer.attributes[0..newer.count],
-      );
-    if (same) {
-      _ = ctx.exchanges.orderedRemove(i);
-      ctx.cancelRequest(e.purpose.request.id);
-    } else {
-      i += 1;
+  const Newer = struct {
+    ieee: u64,
+    request: Request,
+    frame: *const driver_layer.Frame,
+
+    fn replaces(n: @This(), e: *const exchange.Exchange) bool {
+      return e.device == n.ieee and
+        e.phase == .waiting and
+        e.purpose == .request and
+        e.purpose.request.kind == n.request.kind and
+        e.frame.destination_endpoint == n.frame.destination_endpoint and
+        e.frame.cluster == n.frame.cluster and
+        manufacturerOf(&e.frame) == manufacturerOf(n.frame) and
+        std.mem.eql(
+          u16,
+          e.purpose.request.attributes[0..e.purpose.request.count],
+          n.request.attributes[0..n.request.count],
+        );
     }
+  };
+  const n: Newer = .{ .ieee = ieee, .request = newer, .frame = frame };
+  while (ctx.exchanges.take(n, Newer.replaces)) |e| {
+    ctx.cancelRequest(e.purpose.request.id);
   }
 }
 
@@ -323,13 +319,13 @@ fn manufacturerOf(frame: *const driver_layer.Frame) ?u16 {
 
 /// Ends a pending request with -ECANCELED. Returns -ENOENT if there is none of that id.
 pub fn cancel(ctx: *Context, id: u32) c_int {
-  for (ctx.exchanges.items, 0..) |e, i| {
-    if (e.purpose != .request or e.purpose.request.id != id) continue;
-    _ = ctx.exchanges.orderedRemove(i);
-    ctx.cancelRequest(id);
-    return 0;
-  }
-  return Context.err(.NOENT);
+  _ = ctx.exchanges.take(id, requestOf) orelse return Context.err(.NOENT);
+  ctx.cancelRequest(id);
+  return 0;
+}
+
+fn requestOf(id: u32, e: *const exchange.Exchange) bool {
+  return e.purpose == .request and e.purpose.request.id == id;
 }
 
 /// An exchange for a request ended: SKEP_EVENT_REQUEST_DONE tells how.

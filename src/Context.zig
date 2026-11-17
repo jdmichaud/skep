@@ -52,13 +52,8 @@ ops_len: usize = 0,
 busy: Busy = .idle,
 /// The time last given, on the application's clock.
 now: u64 = 0,
-/// What is asked of devices, and waits for their answers.
-exchanges: std.ArrayList(exchange.Exchange) = .empty,
-next_exchange: u32 = 0,
-/// Sequence numbers of ZDO and ZCL frames, and tags of the frames given to the driver.
-zdo_sequence: u8 = 0,
-zcl_sequence: u8 = 0,
-next_tag: u8 = 0,
+/// What is asked of devices, and waits for their answers, with the numbers of their frames.
+exchanges: exchange.Queue = .{},
 /// `stop` was called: once the driver is idle, the state is refreshed, then the context stops.
 stopping: bool = false,
 /// The join window last asked for, in seconds, reported when the dongle opens it.
@@ -505,19 +500,25 @@ pub fn setupFailed(
   ctx.events.push(event);
 }
 
+fn waitingFor(ieee: u64, e: *const exchange.Exchange) bool {
+  return e.device == ieee and e.phase == .waiting;
+}
+
+/// An exchange ended: what it was for learns how.
+pub fn exchangeEnded(ctx: *Context, e: *const exchange.Exchange, outcome: exchange.Outcome) void {
+  switch (e.purpose) {
+    .setup => setup.ended(ctx, e, outcome),
+    .request => |r| requests.ended(ctx, e, r, outcome),
+    .reply => {},
+  }
+}
+
 /// Forgets a device that left on request: its exchanges go, and so does it.
 pub fn forgetDevice(ctx: *Context, ieee: u64) void {
-  var i: usize = 0;
-  while (i < ctx.exchanges.items.len) {
-    const e = ctx.exchanges.items[i];
-    // Its requests are ended as canceled; it has no other exchange left.
-    if (e.device == ieee and e.phase == .waiting) {
-      _ = ctx.exchanges.orderedRemove(i);
-      if (e.purpose == .request) {
-        ctx.cancelRequest(e.purpose.request.id);
-      }
-    } else {
-      i += 1;
+  // Its requests are ended as canceled; it has no other exchange left.
+  while (ctx.exchanges.take(ieee, waitingFor)) |e| {
+    if (e.purpose == .request) {
+      ctx.cancelRequest(e.purpose.request.id);
     }
   }
   const s = &ctx.state.?;
@@ -729,8 +730,7 @@ fn tellRouters(ctx: *Context, seconds: u8) void {
   var frame = built.frame;
   frame.address = 0xfffc;
   frame.broadcast = true;
-  ctx.next_tag +%= 1;
-  frame.tag = ctx.next_tag;
+  frame.tag = ctx.exchanges.nextTag();
   ctx.busy = .{ .routers = frame.tag };
   ctx.driver.?.send(&frame);
 }

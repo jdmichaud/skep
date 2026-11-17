@@ -13,7 +13,6 @@ const std = @import("std");
 const Context = @import("Context.zig");
 const State = @import("State.zig");
 const driver_layer = @import("driver/driver.zig");
-const setup = @import("setup.zig");
 const requests = @import("requests.zig");
 const zcl = @import("zcl.zig");
 const zdo = @import("zdo.zig");
@@ -88,7 +87,7 @@ pub const Built = struct {
 /// A ZDO request for a device, encoded by one of zdo.zig's functions: its sequence number, the
 /// first byte, is replaced with a new one.
 pub fn zdoFrame(ctx: *Context, cluster: u16, encoded: []const u8) Built {
-  ctx.zdo_sequence +%= 1;
+  ctx.exchanges.zdo_sequence +%= 1;
   var frame: driver_layer.Frame = .{
     .address = 0,
     .profile = zdo.profile,
@@ -97,8 +96,8 @@ pub fn zdoFrame(ctx: *Context, cluster: u16, encoded: []const u8) Built {
     .destination_endpoint = zdo.endpoint,
   };
   frame.setPayload(encoded);
-  frame.payload[0] = ctx.zdo_sequence;
-  return .{ .frame = frame, .sequence = ctx.zdo_sequence };
+  frame.payload[0] = ctx.exchanges.zdo_sequence;
+  return .{ .frame = frame, .sequence = ctx.exchanges.zdo_sequence };
 }
 
 /// A ZCL frame for a device's endpoint, from the client side, with a new sequence number. It holds
@@ -110,7 +109,7 @@ pub fn zclFrame(
   cluster: u16,
   header: zcl.Header,
 ) Built {
-  ctx.zcl_sequence +%= 1;
+  ctx.exchanges.zcl_sequence +%= 1;
   var frame: driver_layer.Frame = .{
     .address = 0,
     .profile = profileOf(d, endpoint),
@@ -119,11 +118,11 @@ pub fn zclFrame(
     .destination_endpoint = endpoint,
   };
   var h = header;
-  h.sequence = ctx.zcl_sequence;
+  h.sequence = ctx.exchanges.zcl_sequence;
   var w: std.Io.Writer = .fixed(&frame.payload);
   h.write(&w) catch unreachable;
   frame.len = @intCast(w.end);
-  return .{ .frame = frame, .sequence = ctx.zcl_sequence };
+  return .{ .frame = frame, .sequence = ctx.exchanges.zcl_sequence };
 }
 
 /// A writer for what follows the header of a frame.
@@ -144,12 +143,63 @@ fn profileOf(d: *const State.Device, endpoint: u8) u16 {
   return 0x0104;
 }
 
+/// The exchanges under way and waiting, in the order they were added, and the numbers that tell
+/// them and their frames apart. Other modules change them through its functions only.
+pub const Queue = struct {
+  list: std.ArrayList(Exchange) = .empty,
+  next_id: u32 = 0,
+  zdo_sequence: u8 = 0,
+  zcl_sequence: u8 = 0,
+  next_tag: u8 = 0,
+
+  pub fn deinit(q: *Queue, gpa: std.mem.Allocator) void {
+    q.list.deinit(gpa);
+  }
+
+  /// The tag of a frame to send, which the driver gives back when it is done with it.
+  pub fn nextTag(q: *Queue) u8 {
+    q.next_tag +%= 1;
+    return q.next_tag;
+  }
+
+  /// Whether one of the device's exchanges is for that purpose.
+  pub fn has(q: *const Queue, device: u64, purpose: std.meta.Tag(Purpose)) bool {
+    for (q.list.items) |e| {
+      if (e.device == device and e.purpose == purpose) return true;
+    }
+    return false;
+  }
+
+  /// How many exchanges are for that purpose.
+  pub fn count(q: *const Queue, purpose: std.meta.Tag(Purpose)) usize {
+    var n: usize = 0;
+    for (q.list.items) |e| {
+      if (e.purpose == purpose) {
+        n += 1;
+      }
+    }
+    return n;
+  }
+
+  /// Takes out the first exchange `picks` takes, with `data`, if any: whoever takes it ends it.
+  pub fn take(
+    q: *Queue,
+    data: anytype,
+    comptime picks: fn (@TypeOf(data), *const Exchange) bool,
+  ) ?Exchange {
+    for (q.list.items, 0..) |*e, i| {
+      if (picks(data, e)) return q.list.orderedRemove(i);
+    }
+    return null;
+  }
+};
+
 /// Queues an exchange for a device.
 pub fn add(ctx: *Context, exchange: Exchange) error{ OutOfMemory }!void {
   var e = exchange;
-  ctx.next_exchange +%= 1;
-  e.id = ctx.next_exchange;
-  try ctx.exchanges.append(ctx.gpa, e);
+  ctx.exchanges.next_id +%= 1;
+  e.id = ctx.exchanges.next_id;
+  try ctx.exchanges.list.append(ctx.gpa, e);
 }
 
 /// Whether a device can be sent something now.
@@ -163,14 +213,13 @@ fn canHear(ctx: *const Context, d: *const State.Device) bool {
 /// Hands the driver the next frame a device can hear. Returns its tag, or null if there is none.
 pub fn sendNext(ctx: *Context) ?u8 {
   const s = if (ctx.state) |*s| s else return null;
-  for (ctx.exchanges.items, 0..) |*e, i| {
+  for (ctx.exchanges.list.items, 0..) |*e, i| {
     if (e.phase != .waiting) continue;
     // One at a time for each device.
     if (busy(ctx, e.device, i)) continue;
     const d = s.device(e.device) orelse continue;
     if (!canHear(ctx, d)) continue;
-    ctx.next_tag +%= 1;
-    e.tag = ctx.next_tag;
+    e.tag = ctx.exchanges.nextTag();
     e.phase = .sending;
     e.frame.address = d.nwk.?;
     e.frame.tag = e.tag;
@@ -182,14 +231,14 @@ pub fn sendNext(ctx: *Context) ?u8 {
 
 /// Whether an exchange before `before` for the device is under way.
 fn busy(ctx: *const Context, device: u64, before: usize) bool {
-  for (ctx.exchanges.items[0..before]) |e| {
+  for (ctx.exchanges.list.items[0..before]) |e| {
     if (e.device == device and e.phase != .waiting) return true;
   }
   return false;
 }
 
 fn find(ctx: *Context, tag: u8) ?usize {
-  for (ctx.exchanges.items, 0..) |e, i| {
+  for (ctx.exchanges.list.items, 0..) |e, i| {
     if (e.phase != .waiting and e.tag == tag) return i;
   }
   return null;
@@ -198,7 +247,7 @@ fn find(ctx: *Context, tag: u8) ?usize {
 /// The driver took the frame, or refused it.
 pub fn sendDone(ctx: *Context, tag: u8, refused: bool) void {
   const i = find(ctx, tag) orelse return;
-  const e = &ctx.exchanges.items[i];
+  const e = &ctx.exchanges.list.items[i];
   if (refused) return miss(ctx, i, err(.IO));
   e.phase = .sent;
   e.due = ctx.now + delivery_time;
@@ -207,9 +256,9 @@ pub fn sendDone(ctx: *Context, tag: u8, refused: bool) void {
 /// The frame was delivered, or given up on.
 pub fn delivered(ctx: *Context, tag: u8, ok: bool) void {
   const i = find(ctx, tag) orelse return;
-  const e = &ctx.exchanges.items[i];
+  const e = &ctx.exchanges.list.items[i];
   if (e.purpose == .reply) {
-    _ = ctx.exchanges.orderedRemove(i);
+    _ = ctx.exchanges.list.orderedRemove(i);
     return;
   }
   if (!ok) return miss(ctx, i, err(.HOSTUNREACH));
@@ -222,7 +271,7 @@ pub fn delivered(ctx: *Context, tag: u8, ok: bool) void {
 
 /// A frame from a device: the answer to its exchange, if it is one. Returns whether it was.
 pub fn answer(ctx: *Context, d: *const State.Device, frame: *const driver_layer.Frame) bool {
-  for (ctx.exchanges.items, 0..) |e, i| {
+  for (ctx.exchanges.list.items, 0..) |e, i| {
     if (e.device != d.ieee or e.phase == .waiting or e.phase == .sending or e.purpose == .reply) {
       continue;
     }
@@ -272,9 +321,9 @@ fn answers(request: zcl.Header, frame: zcl.Frame) bool {
 /// A sleepy device's exchanges and setups wait until it is heard from; a request to a device
 /// that does not sleep fails.
 fn miss(ctx: *Context, i: usize, error_code: c_int) void {
-  const e = &ctx.exchanges.items[i];
+  const e = &ctx.exchanges.list.items[i];
   if (e.purpose == .reply) {
-    _ = ctx.exchanges.orderedRemove(i);
+    _ = ctx.exchanges.list.orderedRemove(i);
     return;
   }
   const d = ctx.state.?.device(e.device) orelse return end(ctx, i, .{ .failed = error_code });
@@ -284,20 +333,16 @@ fn miss(ctx: *Context, i: usize, error_code: c_int) void {
   e.due = never;
 }
 
-/// Removes an exchange, then tells what it was for how it ended.
+/// Removes an exchange, then gives the context how it ended, to tell what it was for.
 fn end(ctx: *Context, i: usize, outcome: Outcome) void {
-  const e = ctx.exchanges.orderedRemove(i);
-  switch (e.purpose) {
-    .setup => setup.ended(ctx, &e, outcome),
-    .request => |r| requests.ended(ctx, &e, r, outcome),
-    .reply => {},
-  }
+  const e = ctx.exchanges.list.orderedRemove(i);
+  ctx.exchangeEnded(&e, outcome);
 }
 
 /// Gives up what is overdue. Ends one exchange at most, so that the caller can find the spare
 /// events its end needs; returns whether there may be more.
 pub fn checkTimes(ctx: *Context) bool {
-  for (ctx.exchanges.items, 0..) |e, i| {
+  for (ctx.exchanges.list.items, 0..) |e, i| {
     if (e.phase != .sending and ctx.now >= e.deadline) {
       end(ctx, i, .{ .failed = err(.TIMEDOUT) });
       return true;
@@ -313,7 +358,7 @@ pub fn checkTimes(ctx: *Context) bool {
 /// The next time an exchange is overdue.
 pub fn nextDeadline(ctx: *const Context) ?u64 {
   var next: u64 = never;
-  for (ctx.exchanges.items) |e| {
+  for (ctx.exchanges.list.items) |e| {
     if (e.phase != .sending) {
       next = @min(next, e.deadline);
     }
@@ -364,8 +409,8 @@ pub fn heard(ctx: *Context, d: *State.Device) void {
 
 /// Ends every exchange: requests with -ECANCELED, setups to be taken up again later.
 pub fn cancelAll(ctx: *Context) void {
-  while (ctx.exchanges.items.len > 0) {
-    end(ctx, ctx.exchanges.items.len - 1, .{ .failed = err(.CANCELED) });
+  while (ctx.exchanges.list.items.len > 0) {
+    end(ctx, ctx.exchanges.list.items.len - 1, .{ .failed = err(.CANCELED) });
   }
 }
 

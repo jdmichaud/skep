@@ -19,24 +19,18 @@ const zdo = @import("zdo.zig");
 /// Queues the next step of a device's interview or setup, unless one is queued, or it is done.
 pub fn next(ctx: *Context, d: *State.Device) void {
   if (d.progress.stage == .ready or d.progress.stage == .failed) return;
-  for (ctx.exchanges.items) |e| {
-    if (e.device == d.ieee and e.purpose == .setup) return;
-  }
+  if (ctx.exchanges.has(d.ieee, .setup)) return;
   // Out of memory: taken up again when the device is next heard from.
   queue(ctx, d) catch {};
 }
 
+fn setupOf(ieee: u64, e: *const exchange.Exchange) bool {
+  return e.device == ieee and e.purpose == .setup;
+}
+
 /// Starts a device's interview and setup again from the start, forgetting what it learnt.
 pub fn restart(ctx: *Context, d: *State.Device) void {
-  var i: usize = 0;
-  while (i < ctx.exchanges.items.len) {
-    const e = ctx.exchanges.items[i];
-    if (e.device == d.ieee and e.purpose == .setup) {
-      _ = ctx.exchanges.orderedRemove(i);
-    } else {
-      i += 1;
-    }
-  }
+  while (ctx.exchanges.take(d.ieee, setupOf)) |_| {}
   d.deinit(ctx.gpa);
   ctx.stateChanged();
   next(ctx, d);
