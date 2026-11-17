@@ -110,9 +110,29 @@ pub fn fail(p: *Protocol, code: []const u8, comptime format: []const u8, args: a
   const n = @min(code.len, p.failure.code.len);
   @memcpy(p.failure.code[0..n], code[0..n]);
   p.failure.code_len = n;
-  const message = std.fmt.bufPrint(&p.failure.message, format, args) catch &p.failure.message;
-  p.failure.message_len = message.len;
+  var w: Io.Writer = .fixed(&p.failure.message);
+  w.print(format, args) catch {};
+  p.failure.message_len = utf8Prefix(w.buffered()).len;
   return error.Fail;
+}
+
+/// `text`, without a UTF-8 sequence cut short at its end: a message cut to fit its buffer would
+/// not be a JSON string.
+fn utf8Prefix(text: []const u8) []const u8 {
+  var len = text.len;
+  // Back to the start of the last sequence, if it is a continuation byte's.
+  var i = len;
+  while (i > 0 and len - i < 4) {
+    i -= 1;
+    if (text[i] & 0xc0 != 0x80) {
+      const want = std.unicode.utf8ByteSequenceLength(text[i]) catch return text[0..len];
+      if (i + want > len) {
+        len = i;
+      }
+      break;
+    }
+  }
+  return text[0..len];
 }
 
 /// Fails, with a member for clients besides the message: its name and its value as JSON.
@@ -895,6 +915,14 @@ test "skepd takes so many clients at once, and no more" {
     _ = linux.close(fd);
   };
   try testing.expectEqual(Server.max_clients, bench.protocol.server.clients.items.len);
+}
+
+test "a message cut to fit stays UTF-8" {
+  try testing.expectEqualStrings("salon ", utf8Prefix("salon \xc3"));
+  try testing.expectEqualStrings("salon é", utf8Prefix("salon é"));
+  try testing.expectEqualStrings("a", utf8Prefix("a\xe2\x82"));
+  try testing.expectEqualStrings("a€", utf8Prefix("a€"));
+  try testing.expectEqualStrings("", utf8Prefix(""));
 }
 
 test "fuzz: whatever a client sends, skepd answers in JSON" {

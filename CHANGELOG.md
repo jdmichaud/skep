@@ -182,3 +182,5 @@ publishes the section of each released version as its release notes.
 - Two skepd could drive one dongle: skepd now has its serial port to
   itself, with a lock and the port's exclusive mode.
 - `skep watch` kept every event it printed in memory.
+- skepd could cut an error message inside a UTF-8 character, which then
+  reached clients as an array of numbers.
