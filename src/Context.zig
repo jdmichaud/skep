@@ -867,13 +867,12 @@ fn process(ctx: *Context) c_int {
         }
       },
       .key_switched => |failure| {
+        // What the dongle holds decides, rather than its answer: EmberZNet 6.10.3 answered that
+        // it refused the switch, and had switched.
         if (failure) |f| {
-          ctx.logMessage(.err, f.message.text());
-          ctx.rekeyDone(err(errnoOf(f.kind)));
-        } else {
-          // What the dongle holds now: the new key, it must be.
-          ctx.driver.?.refresh();
+          ctx.logMessage(.warning, f.message.text());
         }
+        ctx.driver.?.refresh();
       },
       .device => |device| switch (device.kind) {
         .joined, .rejoined => ctx.onAdmitted(device),

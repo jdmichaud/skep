@@ -15,6 +15,8 @@ publishes the section of each released version as its release notes.
   current key, or, with `SKEP_KEY_PER_DEVICE` and `skep rekey --evict`,
   sent to each device under its own link key, which a removed device that
   still listens cannot read, nor a device without a link key of its own.
+  Whether the network switched is judged by the key the dongle holds:
+  EmberZNet 6.10.3 answered that it refused the switch, and had switched.
 - The ThirdReality Smart Color Bulb ZL4 (3RCB02070Z): bound and configured
   to report its on/off state, level and colour once it joins.
 - The libskep C API, `skep.h` and `skep/zcl.h`, which says what is

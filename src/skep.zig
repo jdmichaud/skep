@@ -1712,6 +1712,37 @@ test "broadcast, the network key goes to every device at once, then is switched 
   try testing.expect(!std.mem.eql(u8, &old, &ctx.state.?.network_key));
 }
 
+test "a key switch is judged by the key the dongle holds, not by its answer" {
+  const ctx = try testContext(&testing.allocator);
+  defer skep_free(ctx);
+  try testing.expectEqual(0, skep_set_option(ctx, "driver", "sim"));
+  _ = try startedOrigin(ctx);
+  while (skep_next_event(ctx)) |event| {
+    skep_event_free(event);
+  }
+  const sim_driver = &ctx.driver.?.sim;
+  // Says it refused, and switched, as EmberZNet 6.10.3 did.
+  sim_driver.refuse_switch = true;
+  var request: u32 = 0;
+  try testing.expectEqual(0, skep_rotate_network_key(ctx, 0, &request));
+  try testing.expectEqual(0, skep_advance(ctx, 0));
+  try testing.expectEqual(0, skep_advance(ctx, Context.key_switch_delay));
+  skep_event_free((try nextOfType(ctx, .state_changed)).?);
+  const done = skep_next_event(ctx).?;
+  skep_event_free(done);
+  try testing.expectEqual(sim_driver.network.?.security.network_key, ctx.state.?.network_key);
+  // Says it refused, and did not switch: the rotation failed, and the state keeps its key.
+  const key = ctx.state.?.network_key;
+  try testing.expectEqual(0, skep_rotate_network_key(ctx, 0, &request));
+  try testing.expectEqual(0, skep_advance(ctx, Context.key_switch_delay));
+  sim_driver.next_key = null;
+  try testing.expectEqual(0, skep_advance(ctx, 2 * Context.key_switch_delay));
+  const failed = (try nextOfType(ctx, .request_done)).?;
+  defer skep_event_free(failed);
+  try testing.expectEqual(err(.IO), skep_event_get_error(failed));
+  try testing.expectEqual(key, ctx.state.?.network_key);
+}
+
 test "per device, the network key is sent to each device, then switched to" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce }};
   const ctx = try simContext(&testing.allocator, &devices);

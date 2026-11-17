@@ -66,6 +66,8 @@ pub const Driver = struct {
   next_key: ?[16]u8 = null,
   keys_sent: usize = 0,
   keys_broadcast: usize = 0,
+  /// Answer a key switch with a refusal, whether it switches or not.
+  refuse_switch: bool = false,
 
   pub fn start(d: *Driver) void {
     d.pending_len = 0;
@@ -112,7 +114,12 @@ pub const Driver = struct {
       security.network_frame_counter = 0;
       d.next_key = null;
     }
-    d.post(.{ .key_switched = null });
+    d.post(.{
+      .key_switched = if (d.refuse_switch)
+        .{ .kind = .refused, .message = .init("sim: switch refused", .{}) }
+      else
+        null,
+    });
   }
 
   pub fn refresh(d: *Driver) void {
