@@ -837,6 +837,28 @@ fn simContext(allocator: *const std.mem.Allocator, devices: []sim.Device) !*Cont
 
 const sensor_ieee = 0xf44250000d350000;
 
+const bulb_ieee = 0xc4d7fdba7b600000;
+
+/// A ThirdReality ZL4 bulb, as it answers its interview.
+fn simBulb() sim.Device {
+  return .{
+    .ieee = bulb_ieee,
+    .nwk = 0x6442,
+    .model = "3RCB02070Z",
+    .input_clusters = &.{ 0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300, 0xff04 },
+  };
+}
+
+test "a bulb is bound and configured to report its state" {
+  var devices = [_]sim.Device{ simBulb() };
+  const ctx = try simContext(&testing.allocator, &devices);
+  defer skep_free(ctx);
+  ctx.driver.?.sim.device(.{ .ieee = bulb_ieee, .nwk = 0x6442, .kind = .joined });
+  skep_event_free((try nextOfType(ctx, .device_ready)) orelse return error.TestExpectedReady);
+  try testing.expectEqual(3, devices[0].binds);
+  try testing.expectEqual(7, devices[0].configurations);
+}
+
 test "a device that joins is interviewed, set up, and reports" {
   var devices = [_]sim.Device{.{ .ieee = sensor_ieee, .nwk = 0x1bce, .rx_on_when_idle = false }};
   const ctx = try simContext(&testing.allocator, &devices);

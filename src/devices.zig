@@ -6,7 +6,7 @@
 //! and configure it.
 //!
 //! The entries are ported from zigbee-herdsman-converters (src/devices/third_reality.ts, and the
-//! reporting defaults of src/lib/modernExtend.ts and src/lib/reporting.ts):
+//! reporting defaults of src/lib/modernExtend.ts, its light() among them, and src/lib/reporting.ts):
 //!
 //!   MIT License
 //!
@@ -51,6 +51,8 @@ pub const Cluster = struct {
   pub const basic: u16 = 0x0000;
   pub const power_configuration: u16 = 0x0001;
   pub const on_off: u16 = 0x0006;
+  pub const level_control: u16 = 0x0008;
+  pub const color_control: u16 = 0x0300;
   pub const temperature: u16 = 0x0402;
   pub const humidity: u16 = 0x0405;
   pub const metering: u16 = 0x0702;
@@ -91,6 +93,29 @@ pub const entries = [_]Entry{
       .{ .bind = .{ .endpoint = 1, .cluster = Cluster.power_configuration } },
       // BatteryPercentageRemaining, in halves of a percent: on a change of 5 %.
       report(1, Cluster.power_configuration, 0x0021, zcl.Type.uint8, hour, max_interval, 10),
+    },
+  },
+  // ThirdReality Smart Color Bulb ZL4, which zigbee-herdsman-converters handles as the ZL1 and
+  // ZL2. It reports nothing by itself once its first state after joining is sent: its state is
+  // bound and reported as light() does when asked to configure reporting, which the ZL1's
+  // definition does not ask, so that changes made by other means are known too.
+  .{
+    .model = "3RCB02070Z",
+    .steps = &.{
+      .{ .bind = .{ .endpoint = 1, .cluster = Cluster.on_off } },
+      .{ .bind = .{ .endpoint = 1, .cluster = Cluster.level_control } },
+      .{ .bind = .{ .endpoint = 1, .cluster = Cluster.color_control } },
+      // OnOff, whenever it changes.
+      report(1, Cluster.on_off, 0x0000, zcl.Type.boolean, 0, max_interval, 0),
+      // CurrentLevel: at most every 5 s.
+      report(1, Cluster.level_control, 0x0000, zcl.Type.uint8, 5, max_interval, 1),
+      // ColorTemperatureMireds, CurrentX, CurrentY, CurrentHue and CurrentSaturation: at most
+      // every 10 s.
+      report(1, Cluster.color_control, 0x0007, zcl.Type.uint16, 10, max_interval, 1),
+      report(1, Cluster.color_control, 0x0003, zcl.Type.uint16, 10, max_interval, 1),
+      report(1, Cluster.color_control, 0x0004, zcl.Type.uint16, 10, max_interval, 1),
+      report(1, Cluster.color_control, 0x0000, zcl.Type.uint8, 10, max_interval, 1),
+      report(1, Cluster.color_control, 0x0001, zcl.Type.uint8, 10, max_interval, 1),
     },
   },
   // ThirdReality Smart Plug E2.

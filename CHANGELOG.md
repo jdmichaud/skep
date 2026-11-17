@@ -9,6 +9,8 @@ publishes the section of each released version as its release notes.
 
 ### Added
 
+- The ThirdReality Smart Color Bulb ZL4 (3RCB02070Z): bound and configured
+  to report its on/off state, level and colour once it joins.
 - A draft of the libskep C API, `skep.h` and `skep/zcl.h`, for review.
   Nothing in it is implemented yet.
 - The frame codec of ASH, the serial link protocol of Silicon Labs

@@ -154,7 +154,7 @@ attribute details come from the Zigbee2MQTT device definitions
   the hardware; if it does not, its state has to be read back after each
   command, and changes made by another controller go unnoticed.
 
-## ThirdReality Smart Color Bulb ZL4, E27 (3RCB02070Z), candidate
+## ThirdReality Smart Color Bulb ZL4, E27 (3RCB02070Z)
 
 - Mains powered Zigbee router. Zigbee only.
 - Same firmware family as the ZL1 (3RCB01057Z) and ZL2 (3RCB1095Z);
@@ -168,6 +168,25 @@ attribute details come from the Zigbee2MQTT device definitions
     light to a controller.
 - Known issue, single report: ZL1 bulbs used with Zigbee2MQTT and an EZSP
   dongle collected hidden Touchlink group bindings over a few weeks.
+- Two paired with skep (2026-11-17), c4d7fdba7b600000 and
+  c4d7fdba6c650000. Pairing mode, from the ZL1's manual: on for at least
+  20 s, then off and on 5 times in a row; the bulb cycles through warm
+  white, cool white, red, green and blue, then stays warm white, and
+  waits 3 minutes to join. Both joined within a minute of being reset.
+- Interviewed by skep: a router, manufacturer code 0x1407, Basic cluster
+  "Third Reality, Inc" and "3RCB02070Z"; one endpoint, 1, Home Automation
+  device 0x0102 (color dimmable light), input clusters Basic, Identify,
+  Groups, Scenes, On/Off, Level Control, Color Control and 0xFF04, output
+  cluster OTA Upgrade. Out of the box: on, level 254, 454 mireds.
+- Right after joining, it sends its On/Off, Level Control and Color
+  Control state by itself a few times, at growing intervals (about 1, 2,
+  4 and 8 s apart); then nothing, even when commanded, until its clusters
+  are bound and their reporting configured, which it accepts. A change of
+  colour then comes as one report of CurrentHue, CurrentSaturation,
+  CurrentX, CurrentY and ColorTemperatureMireds together.
+- Obeys On, Off, Move to Level with On/Off, Move to Color Temperature and
+  Move to Hue and Saturation, each answered with a Default Response of
+  status 0.
 
 ## ThirdReality Smart Plug E2, Type F (3RSPE01044BZ)
 
