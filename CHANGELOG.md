@@ -17,6 +17,11 @@ publishes the section of each released version as its release notes.
   installs the policy that allows it as root. Without a bus, skepd runs
   as before.
 
+### Fixed
+
+- skepd left its socket behind when it could not read `names.json`, and
+  would have freed it twice had its loop failed.
+
 ## [0.1.1] - 2026-11-18
 
 ### Added

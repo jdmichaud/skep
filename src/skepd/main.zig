@@ -160,6 +160,8 @@ const Daemon = struct {
   /// A signal asked to stop: exit once libskep has.
   stopping: bool = false,
   exit_code: ?u8 = null,
+  /// Where SIGTERM, SIGINT and SIGHUP arrive.
+  signals: posix.fd_t,
   /// systemd, when it runs skepd as a Type=notify service.
   notifier: Notifier,
   /// When to tell systemd's watchdog that the loop runs, if it watches.
@@ -168,6 +170,19 @@ const Daemon = struct {
   published: Published,
   /// Which bus they are on, for the log: "session" or "system".
   bus_kind: []const u8,
+
+  /// Frees all the daemon owns: what `openDaemon` opened, and the dongle found.
+  fn deinit(d: *Daemon) void {
+    d.published.deinit();
+    d.protocol.deinit();
+    d.notifier.deinit();
+    _ = linux.close(d.signals);
+    if (d.find_dongle) {
+      if (d.device) |path| {
+        d.gpa.free(path);
+      }
+    }
+  }
 
   fn now(d: *const Daemon) u64 {
     const timestamp = Io.Clock.awake.now(d.io);
@@ -562,7 +577,7 @@ const Daemon = struct {
     }
   }
 
-  fn run(d: *Daemon, signals: posix.fd_t) !u8 {
+  fn run(d: *Daemon) !u8 {
     var fds: std.ArrayList(posix.pollfd) = .empty;
     defer fds.deinit(d.gpa);
     d.open();
@@ -627,7 +642,7 @@ const Daemon = struct {
       try fds.appendSlice(
         d.gpa,
         &.{
-          .{ .fd = signals, .events = posix.POLL.IN, .revents = 0 },
+          .{ .fd = d.signals, .events = posix.POLL.IN, .revents = 0 },
           .{
             .fd = d.fd orelse -1,
             .events = if (writing) posix.POLL.IN | posix.POLL.OUT else posix.POLL.IN,
@@ -641,7 +656,7 @@ const Daemon = struct {
 
       if (fds.items[0].revents & posix.POLL.IN != 0) {
         var info: linux.signalfd_siginfo = undefined;
-        _ = linux.read(signals, @ptrCast(&info), @sizeOf(linux.signalfd_siginfo));
+        _ = linux.read(d.signals, @ptrCast(&info), @sizeOf(linux.signalfd_siginfo));
         d.stop();
       }
       if (fds.items[1].revents & posix.POLL.IN != 0) {
@@ -792,29 +807,71 @@ pub fn main(init: std.process.Init) !u8 {
     );
     return 2;
   };
+  var daemon = openDaemon(init, log, ctx.?, options, .{
+    .state = state_path,
+    .socket = socket_path,
+    .serial_port = serial_port,
+    .baudrate = options.baudrate orelse baudrate,
+    .rtscts = rtscts,
+  }) catch |e| switch (e) {
+    error.Reported => return 1,
+    else => |other| return other,
+  };
+  defer daemon.deinit();
+  daemon.print("listening on {s}", .{ socket_path });
+  if (daemon.loadState()) |code| return code;
+  // Ready once clients can connect: the network comes up when the dongle answers, which may
+  // take a while, or wait for it to be plugged in.
+  daemon.notifier.send("READY=1\nSTATUS=opening the dongle");
+  return daemon.run();
+}
+
+/// What the daemon is opened with, besides its options.
+const Settings = struct {
+  state: [:0]const u8,
+  socket: [:0]const u8,
+  /// Whether the driver talks to a serial device.
+  serial_port: bool,
+  baudrate: u32,
+  rtscts: bool,
+};
+
+/// Opens what the daemon owns: its socket, the devices' names, the signals' file descriptor, and
+/// D-Bus. Each is freed here if a later one fails, and by the daemon's `deinit` once it has them
+/// all. A failure told in the log already is error.Reported.
+fn openDaemon(
+  init: std.process.Init,
+  log: *Io.Writer,
+  ctx: *c.skep_ctx,
+  options: Options,
+  settings: Settings,
+) !Daemon {
   var errno: linux.E = .SUCCESS;
-  var server = Server.open(init.gpa, socket_path, &errno) catch |e| {
+  var server = Server.open(init.gpa, settings.socket, &errno) catch |e| {
     switch (e) {
-      error.InUse => try log.print("skepd: {s}: another skepd answers on it\n", .{ socket_path }),
-      error.NotSocket => try log.print("skepd: {s}: exists, and is not a socket\n", .{
-        socket_path,
+      error.InUse => try log.print("skepd: {s}: another skepd answers on it\n", .{
+        settings.socket,
       }),
-      error.System => try log.print("skepd: {s}: {t}\n", .{ socket_path, errno }),
-      else => try log.print("skepd: {s}: {t}\n", .{ socket_path, e }),
+      error.NotSocket => try log.print("skepd: {s}: exists, and is not a socket\n", .{
+        settings.socket,
+      }),
+      error.System => try log.print("skepd: {s}: {t}\n", .{ settings.socket, errno }),
+      else => try log.print("skepd: {s}: {t}\n", .{ settings.socket, e }),
     }
-    return 1;
+    return error.Reported;
   };
   errdefer server.deinit();
   const names_path = try std.fmt.allocPrintSentinel(
     init.arena.allocator(),
     "{s}/names.json",
-    .{ std.fs.path.dirname(state_path) orelse "." },
+    .{ std.fs.path.dirname(settings.state) orelse "." },
     0,
   );
-  const names = Names.load(init.gpa, names_path) catch |e| {
+  var names = Names.load(init.gpa, names_path) catch |e| {
     try log.print("skepd: {s}: {t}\n", .{ names_path, e });
-    return 1;
+    return error.Reported;
   };
+  errdefer names.deinit();
 
   // Signals arrive through a file descriptor, polled with the dongle.
   var mask = posix.sigemptyset();
@@ -824,6 +881,7 @@ pub fn main(init: std.process.Init) !u8 {
   posix.sigaddset(&mask, .HUP);
   posix.sigprocmask(linux.SIG.BLOCK, &mask, null);
   const signals = try posix.signalfd(-1, &mask, linux.SFD.CLOEXEC);
+  errdefer _ = linux.close(signals);
 
   // The devices go on the user's session bus, if there is one, as for skepd started by hand or
   // by the user unit; on the system bus otherwise, as for the system unit.
@@ -832,46 +890,31 @@ pub fn main(init: std.process.Init) !u8 {
     init.gpa,
     session_bus orelse dbus.Bus.systemAddress(init.environ_map),
   );
-  // Nothing fails from here until the daemon frees it.
-  var daemon: Daemon = .{
-    .io = io,
+  return .{
+    .io = init.io,
     .log = log,
     .timestamps = !toJournald(init.environ_map),
     .gpa = init.gpa,
-    .ctx = ctx.?,
+    .ctx = ctx,
     .device = options.device,
-    .find_dongle = serial_port and options.device == null,
-    .state_path = state_path,
+    .find_dongle = settings.serial_port and options.device == null,
+    .state_path = settings.state,
     .protocol = .{
       .gpa = init.gpa,
-      .io = io,
-      .ctx = ctx.?,
+      .io = init.io,
+      .ctx = ctx,
       .server = server,
       .names = names,
       .names_path = names_path,
       .readings = .{ .gpa = init.gpa },
     },
-    .baudrate = options.baudrate orelse baudrate,
-    .rtscts = rtscts,
+    .baudrate = settings.baudrate,
+    .rtscts = settings.rtscts,
+    .signals = signals,
     .notifier = .init(init.environ_map),
     .published = published,
     .bus_kind = if (session_bus != null) "session" else "system",
   };
-  defer daemon.published.deinit();
-  defer daemon.protocol.deinit();
-  defer daemon.notifier.deinit();
-  // The dongle found, if any.
-  defer if (daemon.find_dongle) {
-    if (daemon.device) |path| {
-      init.gpa.free(path);
-    }
-  };
-  daemon.print("listening on {s}", .{ socket_path });
-  if (daemon.loadState()) |code| return code;
-  // Ready once clients can connect: the network comes up when the dongle answers, which may
-  // take a while, or wait for it to be plugged in.
-  daemon.notifier.send("READY=1\nSTATUS=opening the dongle");
-  return daemon.run(signals);
 }
 
 /// Where the socket goes by default: the runtime directory systemd gives the service, or the
