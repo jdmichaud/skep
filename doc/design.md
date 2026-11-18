@@ -431,7 +431,13 @@ The API is in [include/skep.h](../include/skep.h).
     its unit. A light's colour temperatures are its own: its interview
     reads them (ColorTempPhysicalMinMireds and MaxMireds), and the state
     keeps them. Lights answer an out-of-range temperature with success
-    and ignore it, so without that, a user would never learn why.
+    and ignore it, so without that, a user would never learn why. Such
+    limits are data: a reading's definition names the attributes that
+    bound it, the interview reads them for each endpoint that has the
+    reading, and the state keeps them in a small cache of attribute
+    values, so that another bounded reading takes a line in
+    `readings.zig` rather than an interview stage, a field and a special
+    case.
   - Colours are set from sRGB (`skep_set_color()`), as their CIE 1931
     chromaticity (Move to Color); their brightness is the level's. The
     conversion is colour science rather than Zigbee, but lights need it,

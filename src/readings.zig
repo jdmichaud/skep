@@ -32,8 +32,41 @@ pub const Set = union(enum) {
   /// A command whose arguments are the attribute's value, of its type and at most `max`, then a
   /// transition time in tenths of a second: Move to Level with On/Off and the like. Move to Hue
   /// has a direction between them, 0 for the shortest way round.
-  move: struct { command: u8, type: u8, max: u64, direction: bool = false },
+  move: struct {
+    command: u8,
+    type: u8,
+    max: u64,
+    direction: bool = false,
+    /// The attributes of the same cluster that hold the least and the greatest value the device
+    /// itself takes, if it says: a light's own colour temperatures. Its interview reads them.
+    bounds: ?[2]u16 = null,
+  },
 };
+
+/// The attributes that bound a reading's values on a device, if any.
+pub fn boundsOf(definition: *const Definition) ?[2]u16 {
+  const set = definition.set orelse return null;
+  return switch (set) {
+    .move => |m| m.bounds,
+    .on_off => null,
+  };
+}
+
+/// The device's own limits of a reading's attribute, from the values of its bounds' attributes:
+/// none unless both are known and make a range the reading can take.
+pub fn deviceLimits(definition: *const Definition, least: ?u64, greatest: ?u64) ?[2]u64 {
+  const set = definition.set orelse return null;
+  const max = switch (set) {
+    .move => |m| m.max,
+    .on_off => return null,
+  };
+  const l = least orelse return null;
+  const g = greatest orelse return null;
+  if (l > g or g > max) return null;
+  // A reading that is a divisor divided by the attribute has no value for 0.
+  if (definition.inverse and l == 0) return null;
+  return .{ l, g };
+}
 
 /// A command that sets a reading, and its arguments.
 pub const Command = struct {
@@ -111,12 +144,16 @@ pub const standard = [_]Definition{
     .unit = "K",
     .divisor = 1_000_000,
     .inverse = true,
-    // Move to Color Temperature.
+    // Move to Color Temperature, within ColorTempPhysicalMinMireds and MaxMireds.
     .set = .{
       .move = .{
         .command = zcl.ClusterCommand.color_control.move_to_color_temperature,
         .type = zcl.Type.uint16,
         .max = 0xfeff,
+        .bounds = .{
+          zcl.AttributeId.color_control.physical_min_mireds,
+          zcl.AttributeId.color_control.physical_max_mireds,
+        },
       },
     },
   },
@@ -425,4 +462,27 @@ test "colours are set by their chromaticity" {
   try expectArguments(try colorSetting(0xff8000, 0), 0x07, &.{ 0x8b03, 0x6833, 0 });
   try testing.expectError(error.Invalid, colorSetting(0x000000, 0));
   try testing.expectError(error.Invalid, colorSetting(0x1000000, 0));
+}
+
+test "a reading's limits are a device's bounds when they make a range" {
+  const temperature = find(
+    &.{},
+    zcl.Cluster.color_control,
+    zcl.AttributeId.color_control.color_temperature_mireds,
+  ).?;
+  try testing.expectEqual(
+    [2]u16{
+      zcl.AttributeId.color_control.physical_min_mireds,
+      zcl.AttributeId.color_control.physical_max_mireds,
+    },
+    boundsOf(temperature).?,
+  );
+  try testing.expectEqual([2]u64{ 142, 454 }, deviceLimits(temperature, 142, 454).?);
+  try testing.expectEqual(null, deviceLimits(temperature, 142, null));
+  try testing.expectEqual(null, deviceLimits(temperature, 454, 142));
+  // 0 mireds is no temperature; above the attribute's greatest is none either.
+  try testing.expectEqual(null, deviceLimits(temperature, 0, 454));
+  try testing.expectEqual(null, deviceLimits(temperature, 142, 0xffff));
+  const level = find(&.{}, zcl.Cluster.level_control, 0x0000).?;
+  try testing.expectEqual(null, boundsOf(level));
 }

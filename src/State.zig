@@ -7,6 +7,7 @@
 //! Addresses and IDs are written most significant byte first, as zigpy writes them.
 
 const std = @import("std");
+const zcl = @import("zcl.zig");
 const build_options = @import("build_options");
 const driver = @import("driver/driver.zig");
 
@@ -49,12 +50,13 @@ pub const Device = struct {
   /// From its Basic cluster: printable ASCII only, since it comes from the radio.
   manufacturer: ?[]u8 = null,
   model: ?[]u8 = null,
-  /// The colour temperatures a light shows, in mireds, as its Color Control cluster says.
-  color_temperature_range: ?Range = null,
+  /// Attributes its interview read, which bound its readings: a light's own colour temperatures.
+  attributes: []Attribute = &.{},
   progress: Progress = .{},
 
   pub fn deinit(d: *Device, gpa: std.mem.Allocator) void {
     freeEndpoints(gpa, d.endpoints);
+    gpa.free(d.attributes);
     if (d.manufacturer) |m| {
       gpa.free(m);
     }
@@ -69,6 +71,28 @@ pub const Device = struct {
   pub fn sleepy(d: *const Device) bool {
     const node = d.node orelse return false;
     return !node.rx_on_when_idle;
+  }
+
+  /// The value of an attribute its interview read, if it did.
+  pub fn attribute(d: *const Device, endpoint_id: u8, cluster: u16, id: u16) ?u64 {
+    for (d.attributes) |a| {
+      if (a.endpoint == endpoint_id and a.cluster == cluster and a.id == id) return a.value;
+    }
+    return null;
+  }
+
+  /// Keeps the value of an attribute, in place of what it had; dropped beyond `max_attributes`.
+  pub fn setAttribute(d: *Device, gpa: std.mem.Allocator, a: Attribute) error{ OutOfMemory }!void {
+    for (d.attributes) |*old| {
+      if (old.endpoint == a.endpoint and old.cluster == a.cluster and old.id == a.id) {
+        old.value = a.value;
+        return;
+      }
+    }
+    if (d.attributes.len == max_attributes) return;
+    const grown = try gpa.realloc(d.attributes, d.attributes.len + 1);
+    grown[grown.len - 1] = a;
+    d.attributes = grown;
   }
 
   pub fn endpoint(d: *const Device, id: u8) ?*const Endpoint {
@@ -96,6 +120,18 @@ pub const Device = struct {
 };
 
 pub const NodeType = enum { coordinator, router, end_device };
+
+/// An attribute's value, as a device's interview read it.
+pub const Attribute = struct {
+  endpoint: u8,
+  cluster: u16,
+  id: u16,
+  value: u64,
+};
+
+/// The most attributes libskep keeps of a device: two bounds on each of its endpoints, more than
+/// any device needs.
+pub const max_attributes = 2 * max_endpoints;
 
 pub const Node = struct {
   type: NodeType,
@@ -131,12 +167,6 @@ pub const Progress = struct {
   step: u16 = 0,
 };
 
-/// A range of values, both ends included.
-pub const Range = struct {
-  min: u16,
-  max: u16,
-};
-
 pub const Stage = enum {
   /// The interview: its node descriptor, its endpoints, their descriptors, then its manufacturer
   /// and model.
@@ -144,8 +174,9 @@ pub const Stage = enum {
   endpoints,
   descriptors,
   basic,
-  /// A light's range of colour temperatures, if it has Color Control.
-  light,
+  /// The attributes that bound its readings, such as a light's range of colour temperatures.
+  /// Named "light" in the state before.
+  bounds,
   /// The steps its device entry asks for: bindings and reporting.
   setup,
   ready,
@@ -393,14 +424,13 @@ fn writeDevice(j: *std.json.Stringify, d: *const Device) std.Io.Writer.Error!voi
     try j.objectField("model");
     try j.write(m);
   }
-  if (d.color_temperature_range) |r| {
-    try j.objectField("color_temperature_range");
-    try j.beginObject();
-    try j.objectField("min");
-    try j.write(r.min);
-    try j.objectField("max");
-    try j.write(r.max);
-    try j.endObject();
+  if (d.attributes.len > 0) {
+    try j.objectField("attributes");
+    try j.beginArray();
+    for (d.attributes) |a| {
+      try j.print("{f}", .{ AttributeLine{ .a = a } });
+    }
+    try j.endArray();
   }
   if (d.endpoints.len > 0) {
     try j.objectField("endpoints");
@@ -430,6 +460,18 @@ fn writeDevice(j: *std.json.Stringify, d: *const Device) std.Io.Writer.Error!voi
   try j.endObject();
   try j.endObject();
 }
+
+/// An attribute on one line, as clusters are.
+const AttributeLine = struct {
+  a: Attribute,
+
+  pub fn format(l: AttributeLine, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    try w.print(
+      "{{\"endpoint\": {d}, \"cluster\": \"{x:0>4}\", \"id\": \"{x:0>4}\", \"value\": {d}}}",
+      .{ l.a.endpoint, l.a.cluster, l.a.id, l.a.value },
+    );
+  }
+};
 
 /// Writes clusters on one line: a line each would make up most of the state.
 fn writeClusters(j: *std.json.Stringify, clusters: []const u16) std.Io.Writer.Error!void {
@@ -551,10 +593,7 @@ fn parseDevice(s: *State, gpa: std.mem.Allocator, entry: *const SkepDevice) Pars
   if (entry.model) |m| {
     try Device.setText(gpa, &d.model, m);
   }
-  if (entry.color_temperature_range) |r| {
-    if (r.min > r.max) return error.Invalid;
-    d.color_temperature_range = .{ .min = r.min, .max = r.max };
-  }
+
   // Assigned as soon as allocated, so that `deinit` frees what is there if a later part fails.
   d.endpoints = try gpa.alloc(Endpoint, entry.endpoints.len);
   for (d.endpoints) |*e| {
@@ -567,13 +606,49 @@ fn parseDevice(s: *State, gpa: std.mem.Allocator, entry: *const SkepDevice) Pars
     to.input_clusters = try parseClusters(gpa, from.input_clusters);
     to.output_clusters = try parseClusters(gpa, from.output_clusters);
   }
+  if (entry.attributes.len > max_attributes) return error.Invalid;
+  for (entry.attributes) |a| {
+    try d.setAttribute(gpa, .{
+      .endpoint = a.endpoint,
+      .cluster = parseHex(u16, a.cluster, 1) orelse return error.Invalid,
+      .id = parseHex(u16, a.id, 1) orelse return error.Invalid,
+      .value = a.value,
+    });
+  }
+  // A state written before: the colour temperatures, of the light's first endpoint with Color
+  // Control, which its interview read.
+  if (entry.color_temperature_range) |r| {
+    if (r.min > r.max) return error.Invalid;
+    for (d.endpoints) |e| {
+      if (!e.hasInput(color_control)) continue;
+      try d.setAttribute(gpa, .{
+        .endpoint = e.id,
+        .cluster = color_control,
+        .id = physical_min_mireds,
+        .value = r.min,
+      });
+      try d.setAttribute(gpa, .{
+        .endpoint = e.id,
+        .cluster = color_control,
+        .id = physical_max_mireds,
+        .value = r.max,
+      });
+      break;
+    }
+  }
   if (entry.setup) |setup| {
-    d.progress = .{
-      .stage = std.meta.stringToEnum(Stage, setup.stage) orelse return error.Invalid,
-      .step = setup.step,
-    };
+    // "light" was the stage that read the colour temperatures.
+    const stage: ?Stage = if (std.mem.eql(u8, setup.stage, "light"))
+      .bounds
+    else
+      std.meta.stringToEnum(Stage, setup.stage);
+    d.progress = .{ .stage = stage orelse return error.Invalid, .step = setup.step };
   }
 }
+
+const color_control = zcl.Cluster.color_control;
+const physical_min_mireds = zcl.AttributeId.color_control.physical_min_mireds;
+const physical_max_mireds = zcl.AttributeId.color_control.physical_max_mireds;
 
 fn parseClusters(gpa: std.mem.Allocator, digits: []const []const u8) ParseError![]u16 {
   const clusters = try gpa.alloc(u16, digits.len);
@@ -609,6 +684,13 @@ const SkepDevice = struct {
   node: ?struct { type: []const u8, manufacturer_code: []const u8, rx_on_when_idle: bool } = null,
   manufacturer: ?[]const u8 = null,
   model: ?[]const u8 = null,
+  attributes: []const struct {
+    endpoint: u8,
+    cluster: []const u8,
+    id: []const u8,
+    value: u64,
+  } = &.{},
+  /// Before the attributes: a light's colour temperatures, its Physical Min and Max Mireds.
   color_temperature_range: ?struct { min: u16, max: u16 } = null,
   endpoints: []const struct {
     id: u8,
@@ -785,6 +867,7 @@ fn expectSameDevices(a: *const State, b: *const State) !void {
       try testing.expectEqualSlices(u16, e.input_clusters, f.input_clusters);
       try testing.expectEqualSlices(u16, e.output_clusters, f.output_clusters);
     }
+    try testing.expectEqualSlices(Attribute, x.attributes, y.attributes);
   }
 }
 
@@ -807,7 +890,27 @@ test "what libskep learnt of devices is kept" {
     .output_clusters = try testing.allocator.dupe(u16, &.{ 0x0019 }),
   };
   d.progress = .{ .stage = .setup, .step = 2 };
-  d.color_temperature_range = .{ .min = 142, .max = 454 };
+  try d.setAttribute(testing.allocator, .{
+    .endpoint = 1,
+    .cluster = 0x0300,
+    .id = 0x400b,
+    .value = 142,
+  });
+  try d.setAttribute(testing.allocator, .{
+    .endpoint = 1,
+    .cluster = 0x0300,
+    .id = 0x400c,
+    .value = 454,
+  });
+  // Kept once, with its last value.
+  try d.setAttribute(testing.allocator, .{
+    .endpoint = 1,
+    .cluster = 0x0300,
+    .id = 0x400c,
+    .value = 370,
+  });
+  try testing.expectEqual(2, d.attributes.len);
+  try testing.expectEqual(370, d.attribute(1, 0x0300, 0x400c));
   try testing.expect(d.sleepy());
   try testing.expect(d.endpoint(1).?.hasInput(0x0402));
   // A device known from the "skep" object only.
@@ -820,6 +923,29 @@ test "what libskep learnt of devices is kept" {
   defer read.deinit(testing.allocator);
   try expectSameDevices(&s, &read);
   try testing.expectEqual(0x1bce, read.deviceAt(0x1bce).?.nwk);
+}
+
+test "a state written before the attributes keeps a light's colour temperatures" {
+  // The device's entry as it was written before.
+  const before = try std.mem.replaceOwned(
+    u8,
+    testing.allocator,
+    test_document,
+    "\"ieee_address\": \"f44250000d350000\",\n        \"setup\": {\n          \"stage\": \"node\",",
+    "\"ieee_address\": \"f44250000d350000\", \"color_temperature_range\": {\"min\": 142, \"max\": 454}, " ++
+      "\"endpoints\": [{\"id\": 1, \"profile\": \"0104\", \"device\": \"010d\", " ++
+      "\"input_clusters\": [\"0000\", \"0300\"], \"output_clusters\": []}],\n" ++
+      "        \"setup\": {\n          \"stage\": \"light\",",
+  );
+  defer testing.allocator.free(before);
+  try testing.expect(std.mem.indexOf(u8, before, "\"light\"") != null);
+  var s = try parse(testing.allocator, before);
+  defer s.deinit(testing.allocator);
+  const d = s.device(0xf44250000d350000).?;
+  try testing.expectEqual(142, d.attribute(1, 0x0300, 0x400b));
+  try testing.expectEqual(454, d.attribute(1, 0x0300, 0x400c));
+  // An interview stopped at the stage that read them goes on at the one that does now.
+  try testing.expectEqual(Stage.bounds, d.progress.stage);
 }
 
 test "reading a state with devices survives running out of memory" {
@@ -968,6 +1094,12 @@ test "no state libskep writes is longer than max_written_len" {
   }
   var manufacturer = text;
   var model = text;
+  var attributes: [max_attributes]Attribute = @splat(.{
+    .endpoint = 0xff,
+    .cluster = 0xffff,
+    .id = 0xffff,
+    .value = std.math.maxInt(u64),
+  });
   try s.devices.ensureTotalCapacity(gpa, max_devices);
   for (0..max_devices) |i| {
     s.devices.appendAssumeCapacity(.{
@@ -977,7 +1109,7 @@ test "no state libskep writes is longer than max_written_len" {
       .endpoints = &endpoints,
       .manufacturer = &manufacturer,
       .model = &model,
-      .color_temperature_range = .{ .min = 0xffff, .max = 0xffff },
+      .attributes = &attributes,
       .progress = .{ .stage = .setup, .step = std.math.maxInt(@FieldType(Progress, "step")) },
     });
   }

@@ -11,6 +11,7 @@
 const std = @import("std");
 const Context = @import("Context.zig");
 const State = @import("State.zig");
+const readings = @import("readings.zig");
 const driver_layer = @import("driver/driver.zig");
 const devices = @import("devices.zig");
 const exchange = @import("exchange.zig");
@@ -86,19 +87,19 @@ fn queue(ctx: *Context, d: *State.Device) error{ OutOfMemory }!void {
       exchange.payloadWritten(&built.frame, &w);
       break :blk .{ built, false };
     },
-    .light => blk: {
-      const e = colorEndpoint(d) orelse {
+    .bounds => blk: {
+      const r = boundsRead(d, step) orelse {
         moveTo(ctx, d, .{ .stage = .setup });
         return queue(ctx, d);
       };
-      var built = exchange.zclFrame(ctx, d, e, devices.Cluster.color_control, .{
+      var built = exchange.zclFrame(ctx, d, r.endpoint, r.cluster, .{
         .cluster_specific = false,
         .from_server = false,
         .sequence = 0,
         .command = zcl.Command.read_attributes,
       });
       var w = exchange.payloadWriter(&built.frame);
-      for ([_]u16{ attribute_physical_min_mireds, attribute_physical_max_mireds }) |id| {
+      for (r.ids) |id| {
         w.writeInt(u16, id, .little) catch unreachable;
       }
       exchange.payloadWritten(&built.frame, &w);
@@ -149,13 +150,41 @@ fn queue(ctx: *Context, d: *State.Device) error{ OutOfMemory }!void {
 
 const attribute_manufacturer = zcl.AttributeId.basic.manufacturer_name;
 const attribute_model = zcl.AttributeId.basic.model_identifier;
-const attribute_physical_min_mireds = zcl.AttributeId.color_control.physical_min_mireds;
-const attribute_physical_max_mireds = zcl.AttributeId.color_control.physical_max_mireds;
+/// An attribute's value as an unsigned number: none for another type, or for all ones, the value
+/// the ZCL reserves for "invalid".
+fn unsignedOf(v: zcl.Value) ?u64 {
+  const size = switch (zcl.kindOf(v.type) orelse return null) {
+    .unsigned => |size| size,
+    else => return null,
+  };
+  if (size < 8 and v.v.u == (@as(u64, 1) << @intCast(@as(u7, size) * 8)) - 1) return null;
+  return v.v.u;
+}
 
-/// The first endpoint with Color Control, a light's.
-fn colorEndpoint(d: *const State.Device) ?u8 {
+/// A read of the attributes that bound one of the device's readings on an endpoint.
+const BoundsRead = struct {
+  endpoint: u8,
+  cluster: u16,
+  ids: [2]u16,
+};
+
+/// The `index`th read of the attributes that bound the device's readings: for each endpoint, each
+/// of its readings that has bounds, in the tables' order, as `skep_device_get_readings()` lists
+/// them; null after the last.
+fn boundsRead(d: *const State.Device, index: usize) ?BoundsRead {
+  const own = entryOf(d).readings;
+  var n: usize = 0;
   for (d.endpoints) |e| {
-    if (e.hasInput(devices.Cluster.color_control)) return e.id;
+    for ([_][]const readings.Definition{ &readings.standard, own }, 0..) |table, pass| {
+      for (table) |*listed| {
+        if (pass == 1 and readings.find(&.{}, listed.cluster, listed.attribute) != null) continue;
+        const definition = readings.find(own, listed.cluster, listed.attribute).?;
+        const bounds = readings.boundsOf(definition) orelse continue;
+        if (!e.hasInput(definition.cluster)) continue;
+        if (n == index) return .{ .endpoint = e.id, .cluster = definition.cluster, .ids = bounds };
+        n += 1;
+      }
+    }
   }
   return null;
 }
@@ -168,7 +197,6 @@ fn basicEndpoint(d: *const State.Device) u8 {
   return if (d.endpoints.len > 0) d.endpoints[0].id else 1;
 }
 
-/// The device's entry; one without steps for a model libskep does not know.
 /// The steps of a device's setup: its entry's, unless the application sets devices up itself.
 fn stepsOf(ctx: *const Context, d: *const State.Device) []const devices.Step {
   return switch (ctx.options.setup) {
@@ -177,6 +205,7 @@ fn stepsOf(ctx: *const Context, d: *const State.Device) []const devices.Step {
   };
 }
 
+/// The device's entry; one without steps for a model libskep does not know.
 pub fn entryOf(d: *const State.Device) *const devices.Entry {
   const none: devices.Entry = .{ .model = "", .steps = &.{} };
   return devices.find(d.model orelse return &none) orelse &none;
@@ -285,28 +314,27 @@ fn zclAnswer(ctx: *Context, d: *State.Device, frame: zcl.Frame) void {
           State.Device.setText(ctx.gpa, field, a.value.bytesOf()) catch return;
         }
       }
-      moveTo(ctx, d, .{ .stage = .light });
+      moveTo(ctx, d, .{ .stage = .bounds });
     },
-    .light => {
-      // A light without colour temperatures, or that does not say, has no range.
+    .bounds => {
+      // The attributes it has, whatever their values: which make a range is for the reading to
+      // say. A device that does not say has none.
+      const step = d.progress.step;
       if (command == zcl.Command.read_attributes_response) {
-        var min: ?u16 = null;
-        var max: ?u16 = null;
+        const r = boundsRead(d, step) orelse return;
         var it: zcl.ReadResponseIterator = .{ .bytes = frame.payload };
         while (it.next() catch null) |a| {
-          if (a.status != zcl.Status.success or a.value.type != zcl.Type.uint16) continue;
-          const end = switch (a.id) {
-            attribute_physical_min_mireds => &min,
-            attribute_physical_max_mireds => &max,
-            else => continue,
-          };
-          end.* = @intCast(a.value.v.u);
-        }
-        if (min != null and max != null and min.? > 0 and min.? <= max.? and max.? < 0xffff) {
-          d.color_temperature_range = .{ .min = min.?, .max = max.? };
+          if (a.status != zcl.Status.success) continue;
+          const value = unsignedOf(a.value) orelse continue;
+          d.setAttribute(ctx.gpa, .{
+            .endpoint = r.endpoint,
+            .cluster = r.cluster,
+            .id = a.id,
+            .value = value,
+          }) catch return;
         }
       }
-      moveTo(ctx, d, .{ .stage = .setup });
+      moveTo(ctx, d, .{ .stage = .bounds, .step = step + 1 });
     },
     .setup => {
       const steps = stepsOf(ctx, d);

@@ -229,9 +229,9 @@ export fn skep_device_get_readings(
     for (definitions) |*listed| {
       if (pass == 1 and readings.find(&.{}, listed.cluster, listed.attribute) != null) continue;
       const definition = readings.find(own, listed.cluster, listed.attribute).?;
-      const settable_range = readings.range(definition, limitsOf(d, definition));
       for (d.endpoints) |e| {
         if (!e.hasInput(definition.cluster)) continue;
+        const settable_range = readings.range(definition, limitsOf(d, e.id, definition));
         if (n < capacity) {
           sources.?[n] = .{
             .endpoint = e.id,
@@ -546,7 +546,7 @@ export fn skep_set_reading(
   const definition = definitionOn(e.device, e.endpoint, std.mem.span(reading)) orelse
     return err(.NOENT);
   if (definition.set == null) return err(.OPNOTSUPP);
-  const limits = limitsOf(e.device, definition);
+  const limits = limitsOf(e.device, e.endpoint.id, definition);
   const command = readings.setting(definition, value, setting.transition, limits) catch |why|
     return settingErr(why);
   return sendSetting(ctx, setting, definition.cluster, command, deadline, request);
@@ -578,14 +578,15 @@ fn settingErr(e: readings.SettingError) c_int {
 
 const color_control = zcl.Cluster.color_control;
 
-/// The device's own limits of a reading's attribute: a light's range of colour temperatures.
-fn limitsOf(d: *const State.Device, definition: *const readings.Definition) ?[2]u64 {
-  if (definition.cluster != color_control or
-    definition.attribute != zcl.AttributeId.color_control.color_temperature_mireds) {
-    return null;
-  }
-  const r = d.color_temperature_range orelse return null;
-  return .{ r.min, r.max };
+/// The device's own limits of a reading's attribute on an endpoint, from the bounds its
+/// interview read: a light's range of colour temperatures.
+fn limitsOf(d: *const State.Device, endpoint: u8, definition: *const readings.Definition) ?[2]u64 {
+  const bounds = readings.boundsOf(definition) orelse return null;
+  return readings.deviceLimits(
+    definition,
+    d.attribute(endpoint, definition.cluster, bounds[0]),
+    d.attribute(endpoint, definition.cluster, bounds[1]),
+  );
 }
 
 const SettingEndpoint = struct {
