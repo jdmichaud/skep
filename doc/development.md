@@ -23,6 +23,12 @@
   implementation matches the headers, through the C ABI.
 - `zig build test -Drelease` does the same in ReleaseSafe, the mode of
   release builds. The build offers no other optimize mode.
+- The EZSP driver is tested against a made-up dongle,
+  `src/driver/ezsp/fake_dongle.zig`, that answers as each EZSP version
+  does: the scenarios run at EZSP 8, 12, 13, 14, 16 and 19, both sides of
+  the changes at 13 and 14. Its layouts follow zigbee-herdsman's, not our
+  parser's, which they test. Tests of one exchange in detail script the
+  dongle frame by frame instead (`test_ncp.zig`).
 - `zig build test --fuzz=1M -Drelease` runs the fuzz tests for a million
   iterations; without a limit it runs until stopped. Fuzz in ReleaseSafe:
   with Zig 0.17, fuzzing a debug build fails with "corrupted coverage

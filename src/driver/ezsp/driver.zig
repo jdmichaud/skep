@@ -1296,6 +1296,157 @@ fn configured(ncp: *Ncp, refused: []const usize) !void {
   }
 }
 
+const FakeDongle = @import("fake_dongle.zig").Dongle(Driver);
+
+/// The versions the scenarios run at: both ends, and both sides of the changes at 13 (the
+/// security manager) and 14 (sl_status_t, wider tags, the packet info).
+const versions = [_]u8{ 8, 12, 13, 14, 16, 19 };
+
+/// The next event of kind `tag`, skipping the callbacks logged and the commands refused; an
+/// error if the driver fails, or nothing comes.
+fn nextOf(driver: *Driver, comptime tag: std.meta.Tag(Event)) !@FieldType(Event, @tagName(tag)) {
+  while (driver.nextEvent()) |event| {
+    switch (event) {
+      .callback, .command_refused, .configuration_refused => continue,
+      .failed => |failure| {
+        std.debug.print("the driver failed: {any}\n", .{ failure });
+        return error.TestUnexpectedFailure;
+      },
+      else => {},
+    }
+    if (event == tag) return @field(event, @tagName(tag));
+    std.debug.print("expected {t}, got {t}\n", .{ tag, event });
+    return error.TestUnexpectedEvent;
+  }
+  return error.TestExpectedEvent;
+}
+
+test "every EZSP version: start, form, a device joins and talks, refresh, rotate the key" {
+  for (versions) |version| {
+    errdefer std.debug.print("at EZSP {d}\n", .{ version });
+    var driver: Driver = .init(.{ .software_flow_control = true });
+    var dongle: FakeDongle = .init(testing.allocator, &driver, version);
+    defer dongle.deinit();
+    driver.start();
+    try dongle.serve(64);
+    const ready = try nextOf(&driver, .ready);
+    try testing.expectEqual(version, ready.version.protocol_version);
+    try testing.expectEqual(null, ready.network);
+    try testing.expectEqual(dongle.ieee, ready.ieee);
+
+    driver.form(form_parameters);
+    try dongle.serve(64);
+    const network = try nextOf(&driver, .formed);
+    try testing.expectEqual(form_parameters.extended_pan_id, network.parameters.extended_pan_id);
+    try testing.expectEqual(form_parameters.channel, network.parameters.channel);
+    try testing.expectEqual(form_parameters.network_key, network.security.network_key);
+    try testing.expectEqual(
+      form_parameters.trust_center_link_key,
+      network.security.trust_center_link_key,
+    );
+
+    driver.permitJoin(60);
+    try dongle.serve(64);
+    try testing.expectEqual(null, try nextOf(&driver, .permit_join_done));
+    try testing.expect(try nextOf(&driver, .join_window));
+    try dongle.deviceJoins(0xf44250000d350000, 0x1bce);
+    const joined = try nextOf(&driver, .device);
+    try testing.expectEqual(0xf44250000d350000, joined.eui64);
+    try testing.expectEqual(0x1bce, joined.node_id);
+
+    var message: Message = .{
+      .address = 0x1bce,
+      .aps = .{
+        .profile = 0x0104,
+        .cluster = 0x0006,
+        .source_endpoint = 1,
+        .destination_endpoint = 1,
+        .options = command.ApsFrame.unicast_options,
+      },
+      .tag = 9,
+      .len = 3,
+    };
+    @memcpy(message.payload[0..3], &hex("010000"));
+    driver.sendMessage(&message);
+    try dongle.serve(64);
+    const done = try nextOf(&driver, .send_done);
+    try testing.expectEqual(9, done.tag);
+    try testing.expectEqual(null, done.refused);
+    const delivered = try nextOf(&driver, .delivered);
+    try testing.expectEqual(9, delivered.tag);
+    try testing.expect(delivered.status.is(.ok));
+    // And to the routers.
+    message.broadcast = true;
+    message.address = 0xfffc;
+    message.tag = 10;
+    driver.sendMessage(&message);
+    try dongle.serve(64);
+    try testing.expectEqual(10, (try nextOf(&driver, .send_done)).tag);
+    try testing.expectEqual(10, (try nextOf(&driver, .delivered)).tag);
+
+    try dongle.message(0x1bce, 0x0104, 0x0006, &hex("18000b0000"));
+    const received = try nextOf(&driver, .message);
+    try testing.expectEqual(0x1bce, received.address);
+    try testing.expectEqual(0x0006, received.aps.cluster);
+    try testing.expectEqualSlices(u8, &hex("18000b0000"), received.bytes());
+
+    // The counters, which the frames sent moved.
+    dongle.trust_center_frame_counter = 5150;
+    driver.refresh();
+    try dongle.serve(64);
+    const refreshed = try nextOf(&driver, .refreshed);
+    try testing.expectEqual(dongle.network_frame_counter, refreshed.security.network_frame_counter);
+    try testing.expectEqual(5150, refreshed.security.trust_center_frame_counter.?);
+
+    const key: [16]u8 = @splat(0x5a);
+    driver.broadcastNetworkKey(key);
+    try dongle.serve(64);
+    try testing.expectEqual(null, try nextOf(&driver, .key_sent));
+    driver.switchNetworkKey();
+    try dongle.serve(64);
+    try testing.expectEqual(null, try nextOf(&driver, .key_switched));
+    driver.refresh();
+    try dongle.serve(64);
+    const rotated = try nextOf(&driver, .refreshed);
+    try testing.expectEqual(key, rotated.security.network_key);
+    try testing.expectEqual(1, rotated.security.network_key_sequence_number);
+  }
+}
+
+test "every EZSP version: a network held is resumed, and a saved one put back with its counters" {
+  for (versions) |version| {
+    errdefer std.debug.print("at EZSP {d}\n", .{ version });
+    var driver: Driver = .init(.{ .software_flow_control = true });
+    var dongle: FakeDongle = .init(testing.allocator, &driver, version);
+    defer dongle.deinit();
+    dongle.network = .{ .extended_pan_id = 0x814298be16f0fe69, .pan_id = 0x21e0, .channel = 15 };
+    driver.start();
+    try dongle.serve(64);
+    const held = (try nextOf(&driver, .ready)).network.?;
+    try testing.expectEqual(0x814298be16f0fe69, held.parameters.extended_pan_id);
+    try testing.expectEqual(dongle.network_key, held.security.network_key);
+    try testing.expectEqual(70000, held.security.network_frame_counter);
+    try testing.expectEqual(5000, held.security.trust_center_frame_counter.?);
+
+    // Another network put back: the dongle leaves its own, takes the saved one and its counters,
+    // restarts and brings it up.
+    var parameters = form_parameters;
+    parameters.frame_counters = .{
+      .network = 0x00012345,
+      .trust_center = 0x00000400,
+      .required = true,
+    };
+    driver.form(parameters);
+    try dongle.serve(128);
+    const restored = try nextOf(&driver, .formed);
+    try testing.expectEqual(form_parameters.extended_pan_id, restored.parameters.extended_pan_id);
+    try testing.expectEqual(form_parameters.network_key, restored.security.network_key);
+    // Up to the start of a block of 4096.
+    try testing.expectEqual(0x00013000, restored.security.network_frame_counter);
+    try testing.expectEqual(0x00001000, dongle.trust_center_frame_counter);
+  }
+}
+
 test "a dongle holding a network brings it up" {
   var driver: Driver = undefined;
   var ncp = try started(&driver);
