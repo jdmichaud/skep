@@ -7,6 +7,8 @@ publishes the section of each released version as its release notes.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-18
+
 ### Added
 
 - Releases offer static binaries of `skepd` and `skep`, with their
