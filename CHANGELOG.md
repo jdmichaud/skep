@@ -7,6 +7,12 @@ publishes the section of each released version as its release notes.
 
 ## [Unreleased]
 
+### Changed
+
+- `install.sh` ends with the command that starts skepd for the dongle
+  plugged in, under its stable name, and, for a user, how to keep it
+  running after logout; as root, how to let users talk to it.
+
 ## [0.1.0] - 2026-11-18
 
 ### Added

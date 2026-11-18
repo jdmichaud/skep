@@ -10,9 +10,10 @@
 # as 0.1.0. Run it again to update.
 #
 # The units are installed, not enabled: as root, skepd@ as a system service, with the skep user it
-# runs as, and as a user service for every user; otherwise as the user's service. skepd(8) tells
-# how to start them. Run as a user, it first says what installing as root would give instead, and
-# asks whether to stop, to run it so; it goes on unless told to stop.
+# runs as, and as a user service for every user; otherwise as the user's service. It ends with the
+# command that starts skepd for the dongle plugged in. Run as a user, it first says what
+# installing as root would give instead, and asks whether to stop, to run it so; it goes on unless
+# told to stop.
 set -eu
 
 releases=https://github.com/jdmichaud/skep/releases
@@ -143,3 +144,35 @@ EOF
 } > "$tmp/skep-uninstall"
 install -m 755 "$tmp/skep-uninstall" "$prefix/bin/skep-uninstall"
 echo "installed $prefix/bin/skep-uninstall, which removes all of it"
+
+# What starts skepd, for each serial device plugged in, under its stable name: the dongle's is
+# the one.
+echo
+if [ -n "$root" ]; then sctl=systemctl; when=boot; else sctl="systemctl --user"; when=login; fi
+if [ -d /run/systemd/system ]; then
+    echo "To start skepd for the dongle, and again at each $when:"
+else
+    echo "To start skepd for the dongle:"
+fi
+devices=$(ls /dev/serial/by-id/ 2>/dev/null || true)
+for dev in ${devices:-usb-...}; do
+    if [ -d /run/systemd/system ]; then
+        echo "    $sctl enable --now \"skepd@\$(systemd-escape serial/by-id/$dev)\""
+    else
+        echo "    $prefix/bin/skepd --device /dev/serial/by-id/$dev"
+    fi
+done
+set -- $devices
+if [ $# = 0 ]; then
+    echo "with the dongle's name in /dev/serial/by-id/, once it is plugged in."
+elif [ $# -gt 1 ]; then
+    echo "one line per serial device plugged in: the dongle's is the one."
+fi
+if [ -d /run/systemd/system ] && [ -z "$root" ]; then
+    echo "It stops when you log out, unless you let it run:"
+    echo "    loginctl enable-linger"
+elif [ -d /run/systemd/system ]; then
+    echo "skep's users must be in the skep group, to talk to skepd:"
+    echo "    usermod -aG skep <user>"
+fi
+echo "skepd(8) tells more."
