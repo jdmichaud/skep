@@ -13,6 +13,7 @@ const printable = @import("printable");
 const values = @import("values.zig");
 const Protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
+const find = @import("find.zig");
 const StateFile = @import("StateFile.zig");
 const libskep = @import("libskep.zig");
 const time = @import("time.zig");
@@ -23,12 +24,13 @@ const posix = std.posix;
 const Io = std.Io;
 
 const usage =
-  \\usage: skepd --device <path> [--state <path>] [--socket <path>] [--driver <name>]
+  \\usage: skepd [--device <path>] [--state <path>] [--socket <path>] [--driver <name>]
   \\             [--log-level <level>] [--replace-network] [--baud <rate>] [--rtscts]
   \\
-  \\Runs the Zigbee network of the dongle on <path>. Stops cleanly on SIGTERM or SIGINT.
+  \\Runs the Zigbee network of a dongle. Stops cleanly on SIGTERM or SIGINT.
   \\
-  \\  --device <path>     the dongle's serial device, best under /dev/serial/by-id/
+  \\  --device <path>     the dongle's serial device; by default the one in /dev/serial/by-id/
+  \\                      whose name looks like a Zigbee dongle's
   \\  --state <path>      the file keeping the network, its keys and its devices, which skepd
   \\                      reads at start and replaces on each change; by default state.json in
   \\                      $STATE_DIRECTORY under systemd, in $XDG_DATA_HOME/skep otherwise
@@ -138,6 +140,9 @@ const Daemon = struct {
   ctx: *c.skep_ctx,
   /// The dongle's serial device, or null for a driver that talks to none: sim, for tests.
   device: ?[:0]const u8,
+  /// Not given --device: the dongle is looked for in /dev/serial/by-id/ at each open, and
+  /// `device` is the one found, from `gpa`.
+  find_dongle: bool = false,
   state_path: [:0]const u8,
   /// Clients, and what they asked.
   protocol: Protocol,
@@ -242,6 +247,10 @@ const Daemon = struct {
   /// Opens the dongle and starts libskep, or tries again later.
   fn open(d: *Daemon) void {
     d.reopen_at = null;
+    if (d.find_dongle and !d.findDongle()) {
+      d.reopen_at = d.now() + reopen_delay;
+      return;
+    }
     const device = d.device orelse return d.start();
     const fd = serial.open(device, d.baudrate, d.rtscts) catch |e| {
       const why = switch (e) {
@@ -255,6 +264,47 @@ const Daemon = struct {
     };
     d.fd = fd;
     d.start();
+  }
+
+  /// Looks for the dongle in /dev/serial/by-id/: the one device whose name looks like a Zigbee
+  /// dongle's. Whether it found it; if not, it says why.
+  fn findDongle(d: *Daemon) bool {
+    var found = find.scan(d.gpa, d.io, find.by_id) catch return false;
+    defer found.deinit(d.gpa);
+    const dongles = found.dongles.items;
+    if (dongles.len != 1) {
+      if (dongles.len == 0) {
+        d.print("no Zigbee dongle in {s}/ ({s}), looking again in {d} s; --device names one", .{
+          find.by_id,
+          if (found.others.items.len == 0) "no serial device" else "no name like a dongle's",
+          reopen_delay / 1000,
+        });
+        d.status("no Zigbee dongle in {s}/: plug one in, or use --device", .{ find.by_id });
+      } else {
+        d.print("{d} Zigbee dongles in {s}/, looking again in {d} s; --device names one:", .{
+          dongles.len,
+          find.by_id,
+          reopen_delay / 1000,
+        });
+        for (dongles) |name| {
+          d.print("  {s}", .{ name });
+        }
+        d.status("{d} Zigbee dongles: --device names one", .{ dongles.len });
+      }
+      return false;
+    }
+    const path = std.fmt.allocPrintSentinel(d.gpa, "{s}/{s}", .{ find.by_id, dongles[0] }, 0) catch
+      return false;
+    if (d.device) |old| {
+      if (std.mem.eql(u8, old, path)) {
+        d.gpa.free(path);
+        return true;
+      }
+      d.gpa.free(old);
+    }
+    d.device = path;
+    d.print("found the dongle: {s}", .{ path });
+    return true;
   }
 
   /// What the log calls the dongle: its device, or the driver's name if it has none.
@@ -675,11 +725,6 @@ pub fn main(init: std.process.Init) !u8 {
   var baudrate: c_uint = 0;
   var flow_control: c.enum_skep_flow_control = c.SKEP_FLOW_CONTROL_NONE;
   const serial_port = c.skep_get_serial_defaults(ctx, &baudrate, &flow_control) == 0;
-  if (serial_port and options.device == null) {
-    try log.print("skepd: the {s} driver needs --device\n", .{ options.driver });
-    try log.writeAll(usage);
-    return 2;
-  }
   if (!serial_port and options.device != null) {
     try log.print("skepd: the {s} driver talks to no serial device: no --device\n", .{
       options.driver,
@@ -749,6 +794,7 @@ pub fn main(init: std.process.Init) !u8 {
     .gpa = init.gpa,
     .ctx = ctx.?,
     .device = options.device,
+    .find_dongle = serial_port and options.device == null,
     .state_path = state_path,
     .protocol = .{
       .gpa = init.gpa,
@@ -765,6 +811,12 @@ pub fn main(init: std.process.Init) !u8 {
   };
   defer daemon.protocol.deinit();
   defer daemon.notifier.deinit();
+  // The dongle found, if any.
+  defer if (daemon.find_dongle) {
+    if (daemon.device) |path| {
+      init.gpa.free(path);
+    }
+  };
   daemon.print("listening on {s}", .{ socket_path });
   if (daemon.loadState()) |code| return code;
   // Ready once clients can connect: the network comes up when the dongle answers, which may
@@ -826,6 +878,7 @@ test "values are logged on one line, with what devices say escaped" {
 }
 
 test {
+  _ = @import("find.zig");
   _ = @import("Names.zig");
   _ = @import("Server.zig");
   _ = @import("StateFile.zig");

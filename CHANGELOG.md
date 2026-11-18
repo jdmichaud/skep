@@ -7,6 +7,12 @@ publishes the section of each released version as its release notes.
 
 ## [Unreleased]
 
+### Added
+
+- skepd finds the dongle without `--device`: the one serial device in
+  `/dev/serial/by-id/` whose name looks like a Zigbee dongle's. With
+  none or several, it says so and looks again every 5 seconds.
+
 ### Changed
 
 - `install.sh` ends with the command that starts skepd for the dongle

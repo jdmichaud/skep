@@ -6,7 +6,7 @@ skepd - run a Zigbee network
 
 # SYNOPSIS
 
-*skepd* *--device* _path_ [*--state* _path_] [*--socket* _path_] [*--driver* _name_] [*--log-level* _level_] [*--replace-network*] [*--baud* _rate_] [*--rtscts*]
+*skepd* [*--device* _path_] [*--state* _path_] [*--socket* _path_] [*--driver* _name_] [*--log-level* _level_] [*--replace-network*] [*--baud* _rate_] [*--rtscts*]
 
 *skepd* *--help*
 
@@ -27,8 +27,9 @@ It remembers the last readings of the devices, such as a temperature, which
 it gives clients. Once the network is up, and when a device is set up, it
 reads the devices for those it has none of.
 
-When the dongle goes away, skepd opens it again every 5 seconds until it is
-back. It runs in the foreground, and logs to standard error.
+It finds the dongle itself, unless told with *--device*. When the dongle
+goes away, skepd opens it again every 5 seconds until it is back. It runs in
+the foreground, and logs to standard error.
 
 # OPTIONS
 
@@ -37,6 +38,14 @@ back. It runs in the foreground, and logs to standard error.
 	not change when other devices are plugged in. skepd has it to itself:
 	another skepd waits until it is gone, and other programs cannot open it,
 	unless they run as root.
+
+	Without it, skepd looks for the dongle in _/dev/serial/by-id/_, where udev
+	names serial devices after their product, each time it opens it: the one
+	device whose name looks like a Zigbee dongle's, such as
+	usb-Itead\_Sonoff\_Zigbee\_3.0\_USB\_Dongle\_Plus\_V2\_... With none, or with
+	several, it says so and looks again 5 seconds later. A name tells the
+	product, not its firmware: a dongle that does not speak the driver's
+	protocol fails to start as one given with *--device* would.
 
 *--state* _path_
 	The state file, which skepd reads at start and replaces when it changes,

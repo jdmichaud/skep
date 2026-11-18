@@ -519,6 +519,19 @@ The API is in [include/skep.h](../include/skep.h).
   `--replace-network`, and `--baud` and `--rtscts` to override the
   driver's serial settings. What clients ask, such as opening the join
   window, goes through the socket, not the command line.
+- Without `--device`, skepd finds the dongle: the one device in
+  `/dev/serial/by-id/` whose name, which udev makes of the USB product's
+  strings, looks like a Zigbee dongle's ("Zigbee", or the name of an
+  EmberZNet dongle without it, as zigbee-herdsman lists them). One dongle
+  is the usual case, and two run two networks, which have to be told
+  apart anyway: with several, skepd asks for `--device`. Its driver's
+  start then tells whether it speaks the driver's protocol.
+  - In skepd, not libskep, which does no I/O; and by name, not by USB
+    ids, which are a USB serial chip's and shared with unrelated adapters
+    (see [hardware.md](hardware.md)).
+  - Not chosen: probing every serial port with the driver's protocol,
+    which writes to devices that may be anything, and resets some boards
+    by opening them.
 - Device names, which clients give with skep-protocol's rename, are
   skepd's, not libskep's: they are kept in `names.json` next to the
   state.
@@ -731,10 +744,6 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
 ## Open questions
 
 - Configuration file format.
-- Dongle detection: should libskep offer to find dongles and pick the
-  driver? USB ids are not reliable for this (see
-  [hardware.md](hardware.md)); product strings or probing the protocol
-  may be.
 - Wall-clock time: some devices read the current time from the
   coordinator (Time cluster). libskep only knows a monotonic clock, so the
   application would have to pass the wall-clock time as well. None of the
