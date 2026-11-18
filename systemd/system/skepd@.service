@@ -22,6 +22,12 @@ User=skep
 Group=skep
 # Access to the dongle: dialout on Debian and Fedora, uucp on Arch.
 SupplementaryGroups=dialout
+# Of the devices, USB serial adapters only, the dongles' kind: as a class
+# rather than /dev/%I, which a dongle plugged in again can come back under
+# another number of, while skepd keeps opening it again.
+DevicePolicy=closed
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-ttyACM rw
 # The socket, for the skep group.
 RuntimeDirectory=skep
 RuntimeDirectoryMode=0750

@@ -199,8 +199,8 @@ publishes the section of each released version as its release notes.
 - skepd's systemd units restart it after 5 seconds, so that a crash loop
   no longer stops it for good; bound its file descriptors, memory and
   tasks; and filter its system calls. The system unit also drops every
-  capability and gives it no network: `systemd-analyze security` rates
-  it 1.1, from 5.3.
+  capability, gives it no network, and no device but USB serial
+  adapters: `systemd-analyze security` rates it 1.0, from 5.3.
 - libskep aborted when an application passed `skep_output_done()` more
   bytes than `skep_output()` gave, or a time near the end of its clock:
   the first now counts what was given, and deadlines saturate.
