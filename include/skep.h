@@ -53,7 +53,7 @@ extern "C" {
 
 #define SKEP_VERSION_MAJOR 0
 #define SKEP_VERSION_MINOR 1
-#define SKEP_VERSION_PATCH 2
+#define SKEP_VERSION_PATCH 3
 
 /*
  * Version of the library loaded at run time, encoded as
