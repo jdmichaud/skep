@@ -30,6 +30,9 @@
   a decision changes, update it in the same commit.
 - `doc/hardware.md` holds what we know about the dongle and devices, and
   `doc/development.md` the development setup and the reference sources.
+- `doc/devices.md` lists the dongles and devices skep supports in theory
+  and those tested. Update it in the commit that adds a driver or a
+  device entry, and when a device is tried on the hardware.
 - Record changes that matter to users of skep (new or changed API,
   behaviour, devices, fixes) in `CHANGELOG.md`, under `[Unreleased]`, in
   the commit that makes them. They become the release notes.

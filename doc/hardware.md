@@ -1,8 +1,9 @@
 # Hardware
 
 Notes on the hardware skep is developed and tested with. This is not a
-list of what skep supports: other dongles and devices are added through
-drivers and device tables (see [design.md](design.md)). Cluster and
+list of what skep supports, which [devices.md](devices.md) is: other
+dongles and devices are added through drivers and device tables (see
+[design.md](design.md)). Cluster and
 attribute details come from the Zigbee2MQTT device definitions
 (zigbee-herdsman-converters 26.125.0) unless stated otherwise.
 
