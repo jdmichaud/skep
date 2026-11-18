@@ -32,13 +32,30 @@ if [ "$version" = latest ]; then url=$releases/latest/download; else url=$releas
 archive=skep-$arch-linux.tar.gz
 
 if [ -z "$root" ]; then
+    me=$(id -un)
+    # The group that may open serial devices: that of one plugged in, such as the dongle, or
+    # else the usual one, dialout (Debian, Fedora) or uucp (Arch).
+    group=$(stat -c %G /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -n 1)
+    for g in dialout uucp; do
+        if [ -z "$group" ] && grep -q "^$g:" /etc/group; then group=$g; fi
+    done
+    echo "You are about to install skep as $me: skepd and skep go into $prefix."
+    if [ -d /run/systemd/system ]; then
+        echo "skepd's service will be yours, and run only while you are logged in."
+    fi
+    if [ -z "$group" ]; then
+        echo "To open the dongle, $me must be in the group of its device."
+    elif id -nG | tr ' ' '\n' | grep -qx "$group"; then
+        echo "To open the dongle, $me must be in the $group group, as it is."
+    else
+        echo "To open the dongle, $me must be in the $group group, which it is not yet:"
+        echo "    sudo usermod -aG $group $me"
+        echo "then log in again."
+    fi
     cat <<EOF
-Run as you, install.sh installs skep for you alone: into $prefix, and, where systemd
-runs, skepd as your user service, which runs while you are logged in. To open the dongle,
-you need to be in its group, such as dialout.
 
-Run as root, it installs skep for the whole machine: into /usr/local, and skepd as a system
-service, which starts at boot and runs as its own skep user:
+To install skep for the whole machine instead, with skepd as a system service started at
+boot, run install.sh as root:
 
     curl -fsSL $url/install.sh | sudo ${SKEP_VERSION:+SKEP_VERSION=$SKEP_VERSION }sh
 
