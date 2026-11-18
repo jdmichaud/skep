@@ -1,7 +1,7 @@
 # skepd, running the Zigbee network of the dongle /dev/%I, as the skep user,
 # whose group may use its socket, /run/skep/skepd.sock. For instance:
 #   systemctl enable --now skepd@ttyUSB0
-#   systemctl enable --now "skepd@$(systemd-escape --path serial/by-id/usb-...)"
+#   systemctl enable --now "skepd@$(systemd-escape serial/by-id/usb-...)"
 # skepd(8) tells more.
 
 [Unit]

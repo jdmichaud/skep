@@ -94,7 +94,7 @@ whose instance is the dongle under _/dev_:
 
 ```
 systemctl enable --now skepd@ttyUSB0
-systemctl enable --now "skepd@$(systemd-escape --path serial/by-id/usb-...)"
+systemctl enable --now "skepd@$(systemd-escape serial/by-id/usb-...)"
 ```
 
 The system unit runs skepd as the *skep* user, which systemd-sysusers
