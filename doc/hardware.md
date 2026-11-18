@@ -74,6 +74,14 @@ attribute details come from the Zigbee2MQTT device definitions
   next start can go back below what it sent; a start saves ahead again.
   skep sets a block's start and restarts the dongle once the network is
   formed, as in the last case.
+- Network key rotation (2026-11-17), on EmberZNet 6.10.3:
+  - `unicastNwkKeyUpdate` was refused for the sleepy sensor, status
+    0x18, and taken for the plug and the bulbs.
+  - `broadcastNextNetworkKey` was taken. `broadcastNetworkKeySwitch` was
+    answered 0x70 (INVALID_CALL), and 0xB8 (TOO_SOON_FOR_SWITCH_KEY) when
+    asked again 30 seconds later, yet the dongle was then found holding
+    the new key, and the routers had followed it. Hence skep judges a
+    switch by the key the dongle holds afterwards, not by its answer.
 - Linux pitfall: brltty claims some USB serial ids, including `10c4:ea60`,
   and takes the port away. Remove it if `/dev/ttyUSB0` appears and then
   vanishes.
@@ -112,6 +120,9 @@ attribute details come from the Zigbee2MQTT device definitions
   interview and set it up without pairing it again. It accepted the
   three bindings and the reporting configurations, and reports its
   battery percentage in halves of a percent (200 for 100 %).
+- Network key rotation (2026-11-17): asleep through it, it was silent for
+  the 20 minutes we watched after the switch, and reported on the new
+  key the next morning, half a minute after skepd started.
 
 ## Aqara LED Bulb T2, E27, RGB CCT (LB-L02D)
 
@@ -253,3 +264,9 @@ attribute details come from the Zigbee2MQTT device definitions
   Green Power (profile 0xA1E0, device 0x0061, output cluster 0x0021).
   Its Basic cluster names it "Third Reality, Inc" and "3RSPE01044BZ". It
   accepted the three bindings and the reporting configurations.
+- Network key rotation (2026-11-17): a new key sent to it under its link
+  key (`unicastNwkKeyUpdate`, which the dongle took) did not reach it:
+  after the switch it no longer answered, while the ZL4 bulbs, sent the
+  key the same way, did. It probably has no link key of its own, which
+  the trust center keeps for it. A key broadcast under the current one,
+  it followed.
