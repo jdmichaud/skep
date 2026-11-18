@@ -621,6 +621,55 @@ The API is in [include/skep.h](../include/skep.h).
   default, `--json` for scripts. Exit status 0 on success, 1 on failure,
   2 on usage errors.
 
+## D-Bus
+
+- `src/dbus/` is a D-Bus implementation of our own, for a service that
+  publishes read-only properties: the wire format, the EXTERNAL
+  authentication, a connection, objects with the bus's standard
+  interfaces (Properties, ObjectManager, Introspectable, Peer) and the
+  signals of their changes. Not methods of its own, calls to other
+  services, signals listened to, nor file descriptors passed.
+  - Why our own: skep has no library dependencies, and needs a small part
+    of D-Bus. The Zig libraries there were (November 2026: mdbus,
+    dbus.zig, dbus-zig, plume) were young, mostly one person's work each;
+    one is GPL-3.0, one had no licence yet, and the others lacked an
+    object model or signals. A dependency would tie every Zig upgrade to
+    its pace. libdbus and sd-bus are C, which the static musl builds would
+    have to bundle.
+  - Not chosen: mdbus (MIT), the closest: a client transport, which leaves
+    the object model, most of what a service needs, to its users.
+- So that a more established library can replace it, the module is
+  behind one interface, `Bus` (`src/dbus/Bus.zig`), all that skepd uses:
+  - Its terms are those D-Bus libraries share: objects by path below a
+    root, each with interfaces whose properties are values (`put`, `set`,
+    `remove`), whose reads the library answers and whose changes it
+    signals; and hooks for a poll loop (`pollFd`, `deadline`, `polled`,
+    `advance`), which sd-bus has as get_fd, get_events, get_timeout and
+    process. Over sd-bus, GDBus or zbus, `Bus` would be an adapter: object
+    vtables whose getters read the values, an object manager, and their
+    emit calls.
+  - Values are the bus's own types (`dbus.Value`), and interfaces are
+    declared as data, which another library takes as its vtables or
+    introspection data.
+  - It is a Zig module of its own, which knows nothing of skep: skepd
+    reaches only what its root exports.
+  - `zig build test-dbus` is the contract: `test/dbus-contract.sh` checks,
+    on a session bus of its own, what clients see of a service published
+    through `Bus` (objects, properties, signals, errors) with busctl
+    (sd-bus), gdbus (GLib) and dbus-send (libdbus), and nothing of the
+    module's insides. A replacement must pass it unchanged.
+- Below `Bus`, nothing does I/O: bytes in, bytes out, as for libskep and
+  the dongle. Its tests feed it bytes, among them messages of
+  dbus-daemon, busctl and gdbus captured with dbus-monitor, and it is
+  fuzzed.
+- What comes from the bus is untrusted: any peer on the bus can send the
+  service a message. Lengths, padding, strings and nesting are checked; a
+  message longer than 64 KiB is skipped unread; and a bus that leaves
+  more than 1 MiB of output unread ends the connection.
+- The bus may not be there, go away, or refuse the name: the objects are
+  kept, and the bus is tried again a second later, then less and less
+  often, every 5 minutes at most.
+
 ## Files
 
 | What | User service | System service |
@@ -688,7 +737,10 @@ Power, RCP drivers, and a device database like Zigbee2MQTT's.
   can give the sim its devices; skepd itself knows libskep by skep.h
   only.
 - Fuzz tests for every parser of external input: serial link, Zigbee
-  frames, IPC requests, configuration.
+  frames, IPC requests, D-Bus messages, configuration.
+- What D-Bus clients see is checked on a bus of its own by `zig build
+  test-dbus`, which needs dbus-run-session and busctl, gdbus and
+  dbus-send (see D-Bus).
 - Tests against the real dongle are run by hand, as described in
   [development.md](development.md).
 

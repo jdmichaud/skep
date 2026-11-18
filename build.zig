@@ -56,6 +56,7 @@ pub fn build(b: *std.Build) !void {
     .optimize = optimize,
   });
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = printable })).step);
+  const dbus = addDbus(b, test_step, target, optimize);
   const skepd_tested =
     addSkepd(
       b,
@@ -92,6 +93,14 @@ pub fn build(b: *std.Build) !void {
         .tests = &.{ "fuzz: whatever a client sends, skepd answers in JSON" },
       },
       .{ .module = printable, .tests = &.{ "fuzz: what is escaped prints as it is" } },
+      .{
+        .module = dbus,
+        .tests = &.{
+          "fuzz: decoding survives any message",
+          "fuzz: a connection survives whatever the bus sends",
+          "fuzz: a service survives whatever its clients ask",
+        },
+      },
     },
   );
   if (b.isRoot()) {
@@ -211,6 +220,42 @@ fn addSkepd(
   });
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = tested })).step);
   return tested;
+}
+
+/// D-Bus, for skepd to publish on: a module of its own, which knows nothing of skep, behind one
+/// interface, `Bus`, so that another D-Bus library could replace it. `zig build test-dbus` checks,
+/// on a session bus of its own, what clients see of a service published through that interface,
+/// with busctl: it needs dbus-run-session and busctl, so it is not one of the unit tests.
+fn addDbus(
+  b: *std.Build,
+  test_step: *std.Build.Step,
+  target: std.Build.ResolvedTarget,
+  optimize: std.lang.Optimize,
+) *std.Build.Module {
+  const module = b.createModule(.{
+    .root_source_file = b.path("src/dbus/dbus.zig"),
+    .target = target,
+    .optimize = optimize,
+  });
+  test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = module })).step);
+  const harness = b.addExecutable(.{
+    .name = "dbus-harness",
+    .root_module = b.createModule(.{
+      .root_source_file = b.path("test/dbus_harness.zig"),
+      .target = target,
+      .optimize = optimize,
+      .imports = &.{.{ .name = "dbus", .module = module }},
+    }),
+  });
+  // The unit tests build it too, so that it keeps compiling.
+  test_step.dependOn(&harness.step);
+  const run = b.addSystemCommand(&.{ "dbus-run-session", "--", "sh" });
+  run.addFileArg(b.path("test/dbus-contract.sh"));
+  run.addArtifactArg(harness);
+  run.has_side_effects = true;
+  b.step("test-dbus", "Check what D-Bus clients see of a service (needs dbus-run-session, busctl)")
+    .dependOn(&run.step);
+  return module;
 }
 
 /// The fuzz tests of a module, by name.

@@ -39,12 +39,21 @@
   two processes on one test, so a test gets no more than one core. The
   step lists the fuzz tests by name, in `build.zig`: a new one goes there
   too.
+- `zig build test-dbus` checks what D-Bus clients see of a service
+  published by `src/dbus/` (see "D-Bus" in [design.md](design.md)), on a
+  session bus of its own: it needs dbus-run-session (Debian's
+  `dbus-daemon` package), busctl (systemd), gdbus (`libglib2.0-bin`)
+  and dbus-send (`dbus-bin`). The D-Bus unit tests read
+  `src/dbus/testdata/session.bin`, messages of dbus-daemon, busctl and
+  gdbus that `dbus-monitor --session --binary` wrote on a session bus of
+  its own, from `dbus-run-session`.
 - `zig build fmt` formats the Zig code and `zig build fmt-check` checks
   it, with the version of zigfmt pinned in `build.zig.zon`. The first
   build of skep fetches zigfmt and its own dependency from GitHub, into
   `zig-pkg/`.
 - CI (GitHub Actions, `.github/workflows/ci.yml`) runs the tests in both
-  modes, a million fuzz iterations and the format check on every push
+  modes, the D-Bus checks, a million fuzz iterations and the format
+  check on every push
   and pull request, with the Zig version of `minimum_zig_version`. On a
   tag, it also publishes the release (see below).
 
