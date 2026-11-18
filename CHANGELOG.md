@@ -7,6 +7,8 @@ publishes the section of each released version as its release notes.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-18
+
 ### Added
 
 - skepd publishes the devices on D-Bus, read-only, for desktop widgets,
