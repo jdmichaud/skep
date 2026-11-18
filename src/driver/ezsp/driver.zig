@@ -13,11 +13,12 @@ const std = @import("std");
 const command = @import("command.zig");
 const frame = @import("frame.zig");
 const link_layer = @import("link.zig");
+const channel_layer = @import("channel.zig");
 const startup_layer = @import("startup.zig");
 const test_ncp = @import("test_ncp.zig");
 
 /// How long the NCP has to answer a command, or to bring the network up, in milliseconds.
-pub const response_timeout = startup_layer.response_timeout;
+pub const response_timeout = channel_layer.response_timeout;
 
 /// Configuration values, as zigbee-herdsman sets them.
 const configuration = [_]struct { id: command.ConfigId, value: u16 }{
@@ -216,16 +217,11 @@ const events_per_frame = 4;
 pub const default_radio_power = 5;
 
 pub const Driver = struct {
-  startup: startup_layer.Startup,
+  /// The link and the commands over it, which the startup uses first.
+  channel: channel_layer.Channel,
+  startup: startup_layer.Startup = .{},
   step: Step = .idle,
   configuration_index: usize = 0,
-  /// Sequence number of the last command, and when it was sent.
-  sequence: u8 = 0,
-  sent_at: u64 = 0,
-  /// The last command is not written yet: `sent_at` is the time it was queued, which can be old
-  /// when the caller asked for it after a quiet spell, and is replaced by the time it is written;
-  /// until then, no answer is late.
-  sent_unwritten: bool = false,
   /// The network is up, as `stack_status_handler` last reported.
   network_up: bool = false,
   /// The last time given, for commands sent from `form`.
@@ -300,64 +296,56 @@ pub const Driver = struct {
   };
 
   pub fn init(options: link_layer.Options) Driver {
-    return .{ .startup = .init(options) };
+    return .{ .channel = .init(options) };
   }
 
   pub fn start(d: *Driver) void {
-    const options = d.startup.link.options;
+    const options = d.channel.link.options;
     const radio_power = d.radio_power;
-    d.* = .{ .startup = .init(options), .step = .starting, .radio_power = radio_power };
-    d.startup.start();
+    d.* = .{ .channel = .init(options), .step = .starting, .radio_power = radio_power };
+    d.startup.start(&d.channel);
   }
 
   pub fn input(d: *Driver, bytes: []const u8, now: u64) void {
     d.now = now;
-    if (d.step == .starting) {
-      d.startup.input(bytes, now);
-      d.afterStartup(now);
-    } else {
-      d.startup.link.input(bytes, now);
-      d.process(now);
-    }
+    d.channel.input(bytes, now);
+    d.afterIo(now);
   }
 
   pub fn output(d: *const Driver) []const u8 {
-    return d.startup.link.output();
+    return d.channel.output();
   }
 
   pub fn outputDone(d: *Driver, len: usize, now: u64) void {
     d.now = now;
+    d.channel.outputDone(len, now);
+    d.afterIo(now);
+  }
+
+  /// Takes what the link reports, to the startup while it runs.
+  fn afterIo(d: *Driver, now: u64) void {
     if (d.step == .starting) {
-      d.startup.outputDone(len, now);
+      d.startup.process(&d.channel, now);
       d.afterStartup(now);
     } else {
-      d.startup.link.outputDone(len, now);
-      if (d.sent_unwritten and len > 0) {
-        d.sent_at = now;
-        d.sent_unwritten = false;
-      }
       d.process(now);
     }
   }
 
   pub fn nextDeadline(d: *const Driver) ?u64 {
-    if (d.step == .starting) return d.startup.nextDeadline();
-    const link_deadline = d.startup.link.nextDeadline();
-    const response_deadline: ?u64 = if (d.answerDue()) d.sent_at +| response_timeout else null;
-    if (link_deadline == null) return response_deadline;
-    if (response_deadline == null) return link_deadline;
-    return @min(link_deadline.?, response_deadline.?);
+    if (d.step == .starting) return d.startup.nextDeadline(&d.channel);
+    return d.channel.nextDeadline(d.waiting());
   }
 
   pub fn advance(d: *Driver, now: u64) void {
     d.now = now;
     if (d.step == .starting) {
-      d.startup.advance(now);
+      d.startup.advance(&d.channel, now);
       return d.afterStartup(now);
     }
-    d.startup.link.advance(now);
+    d.channel.advance(now);
     d.process(now);
-    if (d.answerDue() and now >= d.sent_at +| response_timeout) {
+    if (d.channel.late(d.waiting(), now)) {
       d.fail(.response_timeout);
     }
   }
@@ -511,12 +499,7 @@ pub const Driver = struct {
     d.send(.broadcast_network_key_switch, &.{}, d.now);
   }
 
-  /// Whether the NCP owes an answer, by `sent_at` plus the response timeout: not before the
-  /// command is written, which the application may do after calling `advance`.
-  fn answerDue(d: *const Driver) bool {
-    return d.waiting() and !d.sent_unwritten;
-  }
-
+  /// Whether the NCP owes an answer, or a callback such as the network coming up.
   fn waiting(d: *const Driver) bool {
     return switch (d.step) {
       .idle, .starting, .running, .failed => false,
@@ -549,7 +532,6 @@ pub const Driver = struct {
           .ieee = 0,
           .network = null,
         };
-        d.sequence = d.startup.sequence;
         d.step = .configuring;
         d.configure(now);
       },
@@ -567,28 +549,14 @@ pub const Driver = struct {
   }
 
   fn send(d: *Driver, id: frame.FrameId, parameters: []const u8, now: u64) void {
-    var out: [5 + frame.max_parameters_len]u8 = undefined;
-    d.sequence +%= 1;
-    d.sent_at = now;
-    d.sent_unwritten = true;
-    d.startup.link.send(frame.encode(&out, d.sequence, id, parameters)) catch |err| switch (err) {
-      // The link failed after the frame being handled arrived: its event comes next. In case it
-      // does not, the command is due an answer now, which it will not get, so that the
-      // response timeout fails the driver rather than leave it waiting with no deadline.
-      error.NotConnected => d.sent_unwritten = false,
-      // The driver sends a command once the last is answered, which the NCP acknowledges first:
-      // a full queue is an NCP answering commands it was not sent.
-      error.QueueFull => d.fail(.bad_response),
-      // Of the right length.
-      error.InvalidLength => unreachable,
-    };
+    d.channel.send(id, parameters, now) catch d.fail(.bad_response);
   }
 
   fn process(d: *Driver, now: u64) void {
     // A frame at a time while there is room for what it reports. The rest waits in the link,
     // which holds the NCP back once full, until the application takes events.
     while (d.events.len - d.events_len >= events_per_frame) {
-      const event = d.startup.link.nextEvent() orelse return;
+      const event = d.channel.nextEvent() orelse return;
       if (d.step == .failed) continue;
       switch (event) {
         .frame => |bytes| d.receive(bytes, now),
@@ -672,7 +640,7 @@ pub const Driver = struct {
       // Other callbacks are not needed yet.
       return;
     }
-    if (received.sequence != d.sequence) return;
+    if (!d.channel.answers(received)) return;
     // A command the NCP does not know fails the driver, but for those it can do without.
     if (received.id == .invalid_command and d.step != .sending_key and
       d.step != .broadcasting_key and d.step != .switching_key) {
@@ -793,7 +761,7 @@ pub const Driver = struct {
         // The network comes up a moment later, unless it already did.
         if (d.network_up) return d.readNetwork(.ready, now);
         d.step = .waiting_for_network;
-        d.sent_at = now;
+        d.channel.owe(now);
       },
       .reading_network => {
         if (received.id != .get_network_parameters) return d.fail(.bad_response);
@@ -911,7 +879,7 @@ pub const Driver = struct {
         // The network goes down a moment later, unless it already did.
         if (!d.network_up) return d.restoreFrameCounter(now);
         d.step = .waiting_for_leave;
-        d.sent_at = now;
+        d.channel.owe(now);
       },
       .restoring_frame_counter => {
         const status = d.statusOf(received, .set_value) orelse return;
@@ -994,7 +962,7 @@ pub const Driver = struct {
         }
         if (d.network_up) return d.writeTokens(now);
         d.step = .waiting_for_formed;
-        d.sent_at = now;
+        d.channel.owe(now);
       },
       .writing_tokens => {
         const status = d.statusOf(received, .set_value) orelse return;
@@ -1145,13 +1113,12 @@ pub const Driver = struct {
   /// at the value set, using again the counters of the frames sent between forming and the
   /// restart, within a second or so.
   fn restart(d: *Driver) void {
-    d.startup = .init(d.startup.link.options);
     d.step = .starting;
     d.configuration_index = 0;
     d.policy_index = 0;
     d.network_up = false;
     d.restarting = true;
-    d.startup.start();
+    d.startup.start(&d.channel);
   }
 
   /// The start of the first block of 4096 at or above `counter`, from which EmberZNet resumes
@@ -1939,7 +1906,7 @@ test "a command asked for after a quiet spell gets its full time" {
   _ = ncp.take() orelse return error.TestExpectedCommand;
   driver.advance(ncp.now + 1);
   try testing.expectEqual(null, skipCallbacks(&driver));
-  try testing.expectEqual(ncp.now, driver.sent_at);
+  try testing.expectEqual(ncp.now, driver.channel.since);
 }
 
 test "a burst of frames from the NCP loses no event" {

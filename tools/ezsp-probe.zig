@@ -124,7 +124,7 @@ pub fn main(init: std.process.Init) !u8 {
   };
 
   try out.print("device: {s}\n", .{ options.device });
-  try out.print("XON/XOFF received: {d}\n", .{ driver.startup.link.flow_control_bytes });
+  try out.print("XON/XOFF received: {d}\n", .{ driver.channel.link.flow_control_bytes });
   switch (result) {
     .ready => |ready| {
       try printVersion(out, ready.version);

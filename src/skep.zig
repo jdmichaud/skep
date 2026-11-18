@@ -712,7 +712,7 @@ test "the port's flow control reaches the driver" {
     try testing.expectEqual(0, skep_start(ctx));
     try testing.expectEqual(
       case[1],
-      ctx.driver.?.ezsp.driver.startup.link.options.software_flow_control,
+      ctx.driver.?.ezsp.driver.channel.link.options.software_flow_control,
     );
   }
   const ctx = try testContext(&testing.allocator);
