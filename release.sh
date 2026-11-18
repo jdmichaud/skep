@@ -8,8 +8,9 @@
 # 2. Checks that skep.h's SKEP_VERSION_* macros match build.zig.zon, that
 #    the tag does not exist, and that CHANGELOG.md has notes under
 #    [Unreleased].
-# 3. Runs the release gate: the tests in debug and ReleaseSafe and the
-#    format check (--no-test skips it).
+# 3. Runs the release gate: the tests in debug and ReleaseSafe, the
+#    format check, and the build of the archives install.sh installs
+#    (--no-test skips it).
 # 4. Moves the [Unreleased] notes under the version, commits that and
 #    tags the commit with the version.
 # 5. Raises the version in build.zig.zon and skep.h for the next release,
@@ -71,6 +72,10 @@ if [ "$gate" = 1 ]; then
     zig build test -Drelease
     echo "==> zig build fmt-check"
     zig build fmt-check
+    echo "==> tools/dist.sh"
+    dist=$(mktemp -d)
+    tools/dist.sh "$dist"
+    rm -rf "$dist"
 fi
 
 # 4. The release commit and its tag.

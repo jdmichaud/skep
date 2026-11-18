@@ -85,7 +85,12 @@
   next release (`./release.sh minor` or `major` for more) and commits
   that. It pushes nothing, and prints the commands that do.
 - Pushing the tag makes CI publish the release, with the version's
-  section of `CHANGELOG.md` as its notes.
+  section of `CHANGELOG.md` as its notes, and what `tools/dist.sh`
+  builds: for x86_64, aarch64, 32-bit ARM (ARMv6, for the Raspberry Pi 1
+  and Zero, which ARMv7 runs too) and riscv64, an archive of `skepd`,
+  `skep` and their manual pages, as static musl binaries;
+  `SHA256SUMS`; and `install.sh`, which installs them. Asset names carry
+  no version, so that `releases/latest/download/` finds them.
 
 ## Developing in a virtual machine
 
