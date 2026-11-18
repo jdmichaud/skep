@@ -9,7 +9,7 @@ out=$(realpath -m "${1:?usage: tools/dist.sh <dir>}")
 mkdir -p "$out"
 
 files="bin/skepd bin/skep share/man/man1/skep.1 share/man/man7/skep-protocol.7 share/man/man8/skepd.8
-    lib/systemd/system/skepd@.service lib/systemd/user/skepd@.service lib/sysusers.d/skep.conf"
+    lib/systemd/system/skepd.service lib/systemd/user/skepd.service lib/sysusers.d/skep.conf"
 
 # The architecture as install.sh names it, the Zig target, and the CPU if not the target's
 # default: 32-bit ARM for the Raspberry Pi 1 and Zero's ARMv6, which ARMv7 runs too.

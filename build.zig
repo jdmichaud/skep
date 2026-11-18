@@ -388,8 +388,8 @@ fn addSkep(
 /// Only when skep is the project being built.
 fn addSystemdFiles(b: *std.Build) void {
   for ([_][2][]const u8{
-    .{ "systemd/system/skepd@.service", "lib/systemd/system" },
-    .{ "systemd/user/skepd@.service", "lib/systemd/user" },
+    .{ "systemd/system/skepd.service", "lib/systemd/system" },
+    .{ "systemd/user/skepd.service", "lib/systemd/user" },
     .{ "systemd/sysusers.d/skep.conf", "lib/sysusers.d" },
   }) |file| {
     const install = b.addInstallFileWithDir(

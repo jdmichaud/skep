@@ -1,17 +1,17 @@
-# skepd, running the Zigbee network of the dongle /dev/%I, as the user, with
+# skepd, running the Zigbee network of the dongle it finds, as the user, with
 # its socket in $XDG_RUNTIME_DIR/skep and its state in $XDG_DATA_HOME/skep,
-# as when started by hand. For instance:
-#   systemctl --user enable --now skepd@ttyUSB0
-# skepd(8) tells more.
+# as when started by hand:
+#   systemctl --user enable --now skepd
+# skepd(8) tells more, and how to name the dongle.
 
 [Unit]
-Description=Zigbee network of /dev/%I
+Description=Zigbee network
 Documentation=man:skepd(8) man:skep(1)
 
 [Service]
 Type=notify
 # Found in /usr/local/bin or /usr/bin; see skepd(8) for another prefix.
-ExecStart=skepd --device /dev/%I
+ExecStart=skepd
 Restart=on-failure
 # Not at once: restarting a crash loop at once reaches the start limit, and
 # the service would stay down.

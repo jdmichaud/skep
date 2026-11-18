@@ -567,10 +567,12 @@ The API is in [include/skep.h](../include/skep.h).
 - Serves clients on a Unix stream socket with line-delimited JSON
   requests, responses and events, documented in skep-protocol(7).
 - Uses libskep only through `<skep.h>`.
-- Ships a systemd user unit and a system unit, both templates whose
-  instance is the dongle under /dev: `skepd@ttyUSB0`, or the escaped
-  by-id path for a stable name. The device needs no configuration file
-  that way, until skepd.conf exists.
+- Ships a systemd user unit and a system unit, both `skepd.service`,
+  which find the dongle as skepd does without `--device`: one dongle is
+  the usual case. A dongle named, or a second one, takes `systemctl
+  edit` or a copy of the unit. Not chosen any more: templates whose
+  instance was the dongle (`skepd@ttyUSB0`), which needed the device's
+  escaped name, `systemd-escape` and all, for the usual case.
   - The system unit runs skepd as the `skep` user, which a sysusers.d
     file creates, with the `dialout` group for the dongle. Its socket is
     in `/run/skep`, mode 0750, open to the `skep` group: admins in it
@@ -580,7 +582,8 @@ The API is in [include/skep.h](../include/skep.h).
   - `ExecStart` names `skepd` without a path, which systemd finds in
     `/usr/local/bin` and `/usr/bin`: Zig's build only knows the install
     prefix after build.zig has run, too late to write it into a unit.
-    For another prefix, `systemctl edit` sets the path.
+    For another prefix, `systemctl edit` sets the path; `install.sh` sets
+    it in the units it installs.
 
 ## skep
 

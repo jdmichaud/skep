@@ -1,17 +1,16 @@
-# skepd, running the Zigbee network of the dongle /dev/%I, as the skep user,
-# whose group may use its socket, /run/skep/skepd.sock. For instance:
-#   systemctl enable --now skepd@ttyUSB0
-#   systemctl enable --now "skepd@$(systemd-escape serial/by-id/usb-...)"
-# skepd(8) tells more.
+# skepd, running the Zigbee network of the dongle it finds, as the skep user,
+# whose group may use its socket, /run/skep/skepd.sock:
+#   systemctl enable --now skepd
+# skepd(8) tells more, and how to name the dongle.
 
 [Unit]
-Description=Zigbee network of /dev/%I
+Description=Zigbee network
 Documentation=man:skepd(8) man:skep(1)
 
 [Service]
 Type=notify
 # Found in /usr/local/bin or /usr/bin; see skepd(8) for another prefix.
-ExecStart=skepd --device /dev/%I
+ExecStart=skepd
 Restart=on-failure
 # Not at once: restarting a crash loop at once reaches the start limit, and
 # the service would stay down.
@@ -23,7 +22,7 @@ Group=skep
 # Access to the dongle: dialout on Debian and Fedora, uucp on Arch.
 SupplementaryGroups=dialout
 # Of the devices, USB serial adapters only, the dongles' kind: as a class
-# rather than /dev/%I, which a dongle plugged in again can come back under
+# rather than a path, which a dongle plugged in again can come back under
 # another number of, while skepd keeps opening it again.
 DevicePolicy=closed
 DeviceAllow=char-ttyUSB rw

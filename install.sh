@@ -9,9 +9,9 @@
 # ~/.local otherwise, or $PREFIX. $SKEP_VERSION installs a release other than the latest, such
 # as 0.1.0. Run it again to update.
 #
-# The units are installed, not enabled: as root, skepd@ as a system service, with the skep user it
+# The units are installed, not enabled: as root, skepd as a system service, with the skep user it
 # runs as, and as a user service for every user; otherwise as the user's service. It ends with the
-# command that starts skepd for the dongle plugged in. Run as a user, it first says what
+# command that starts it. Run as a user, it first says what
 # installing as root would give instead, and asks whether to stop, to run it so; it goes on unless
 # told to stop.
 set -eu
@@ -88,15 +88,15 @@ put 644 share/man/man8/skepd.8 "$prefix/share/man/man8/skepd.8"
 
 if [ -d /run/systemd/system ]; then
     # The units start skepd where it was installed, rather than look for it.
-    sed -i "s|^ExecStart=skepd |ExecStart=$prefix/bin/skepd |" "$tmp"/lib/systemd/*/skepd@.service
+    sed -i "s|^ExecStart=skepd|ExecStart=$prefix/bin/skepd|" "$tmp"/lib/systemd/*/skepd.service
     if [ -n "$root" ]; then
-        put 644 lib/systemd/system/skepd@.service /etc/systemd/system/skepd@.service
-        put 644 lib/systemd/user/skepd@.service /etc/systemd/user/skepd@.service
+        put 644 lib/systemd/system/skepd.service /etc/systemd/system/skepd.service
+        put 644 lib/systemd/user/skepd.service /etc/systemd/user/skepd.service
         put 644 lib/sysusers.d/skep.conf /etc/sysusers.d/skep.conf
         systemd-sysusers /etc/sysusers.d/skep.conf
         systemctl daemon-reload
     else
-        put 644 lib/systemd/user/skepd@.service "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/skepd@.service"
+        put 644 lib/systemd/user/skepd.service "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/skepd.service"
         systemctl --user daemon-reload || true
     fi
 fi
@@ -111,11 +111,11 @@ fi
 if [ -n "$root" ]; then user=; else user=--user; fi
 if [ -d /run/systemd/system ]; then
     # Stopped, and no longer started at boot or login.
-    systemctl $user stop 'skepd@*.service'
+    systemctl $user stop skepd.service
     if [ -n "$root" ]; then
-        rm -f /etc/systemd/system/*.wants/skepd@*.service /etc/systemd/user/*.wants/skepd@*.service
+        rm -f /etc/systemd/system/*.wants/skepd.service /etc/systemd/user/*.wants/skepd.service
     else
-        rm -f "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/*.wants/skepd@*.service
+        rm -f "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/*.wants/skepd.service
     fi
 fi
 EOF
@@ -145,29 +145,17 @@ EOF
 install -m 755 "$tmp/skep-uninstall" "$prefix/bin/skep-uninstall"
 echo "installed $prefix/bin/skep-uninstall, which removes all of it"
 
-# What starts skepd, for each serial device plugged in, under its stable name: the dongle's is
-# the one.
+# What starts skepd, which finds the dongle in /dev/serial/by-id/.
 echo
 if [ -n "$root" ]; then sctl=systemctl; when=boot; else sctl="systemctl --user"; when=login; fi
 if [ -d /run/systemd/system ]; then
-    echo "To start skepd for the dongle, and again at each $when:"
+    echo "To start skepd, and again at each $when:"
+    echo "    $sctl enable --now skepd"
 else
-    echo "To start skepd for the dongle:"
+    echo "To start skepd:"
+    echo "    $prefix/bin/skepd"
 fi
-devices=$(ls /dev/serial/by-id/ 2>/dev/null || true)
-for dev in ${devices:-usb-...}; do
-    if [ -d /run/systemd/system ]; then
-        echo "    $sctl enable --now \"skepd@\$(systemd-escape serial/by-id/$dev)\""
-    else
-        echo "    $prefix/bin/skepd --device /dev/serial/by-id/$dev"
-    fi
-done
-set -- $devices
-if [ $# = 0 ]; then
-    echo "with the dongle's name in /dev/serial/by-id/, once it is plugged in."
-elif [ $# -gt 1 ]; then
-    echo "one line per serial device plugged in: the dongle's is the one."
-fi
+echo "It finds the dongle by its name in /dev/serial/by-id/; skepd(8) tells how to name it."
 if [ -d /run/systemd/system ] && [ -z "$root" ]; then
     echo "It stops when you log out, unless you let it run:"
     echo "    loginctl enable-linger"
@@ -175,4 +163,3 @@ elif [ -d /run/systemd/system ]; then
     echo "skep's users must be in the skep group, to talk to skepd:"
     echo "    usermod -aG skep <user>"
 fi
-echo "skepd(8) tells more."

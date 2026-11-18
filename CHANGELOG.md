@@ -15,9 +15,16 @@ publishes the section of each released version as its release notes.
 
 ### Changed
 
-- `install.sh` ends with the command that starts skepd for the dongle
-  plugged in, under its stable name, and, for a user, how to keep it
-  running after logout; as root, how to let users talk to it.
+- The systemd units are `skepd.service`, for the system and for users,
+  and find the dongle: `systemctl --user enable --now skepd`. They were
+  templates whose instance was the dongle, `skepd@<device>`. To update
+  from 0.1.0, disable the instance enabled first, such as
+  `systemctl --user disable --now skepd@ttyUSB0` (as root, without
+  `--user`), then remove `skepd@.service` from `/etc/systemd/system` and
+  `/etc/systemd/user`, or from `~/.config/systemd/user`.
+- `install.sh` ends with the command that starts skepd, and, for a user,
+  how to keep it running after logout; as root, how to let users talk
+  to it.
 
 ## [0.1.0] - 2026-11-18
 

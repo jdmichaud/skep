@@ -98,13 +98,17 @@ _skepd.sock_
 
 # SYSTEMD
 
-skepd comes with units for the system and for users. Both are templates
-whose instance is the dongle under _/dev_:
+skepd comes with units for the system and for users, both *skepd.service*,
+which find the dongle as skepd does without *--device*:
 
 ```
-systemctl enable --now skepd@ttyUSB0
-systemctl enable --now "skepd@$(systemd-escape serial/by-id/usb-...)"
+systemctl enable --now skepd
+systemctl --user enable --now skepd
 ```
+
+To name the dongle, or to run a second one, give *--device* with
+*systemctl edit skepd*, as below, or in a copy of the unit under another
+name.
 
 The system unit runs skepd as the *skep* user, which systemd-sysusers
 creates. Its state is in _/var/lib/skep_, for *skep* alone; its socket in
@@ -119,13 +123,13 @@ skepd tells systemd it is ready once its socket accepts clients, and then
 how the network is doing, which *systemctl status* shows.
 
 The units start *skepd* by name, which systemd finds in _/usr/local/bin_ and
-_/usr/bin_. Installed elsewhere, the path is set with *systemctl edit
-skepd@.service*:
+_/usr/bin_. Installed elsewhere, or for a dongle named, *systemctl edit
+skepd* sets the command:
 
 ```
 [Service]
 ExecStart=
-ExecStart=/opt/skep/bin/skepd --device /dev/%I
+ExecStart=/opt/skep/bin/skepd --device /dev/serial/by-id/usb-...
 ```
 
 The release's _install.sh_ installs the units, with the path where it
