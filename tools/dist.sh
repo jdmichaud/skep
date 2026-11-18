@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # tools/dist.sh <dir> - build what a release offers for install.sh: for each Linux architecture,
 # an archive of skepd, skep and their manual pages, as static binaries that run on any
-# distribution; their SHA256SUMS; and install.sh itself. CI runs it for each release.
+# distribution, with skepd's systemd units; their SHA256SUMS; and install.sh itself. CI runs it
+# for each release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=$(realpath -m "${1:?usage: tools/dist.sh <dir>}")
 mkdir -p "$out"
 
-files="bin/skepd bin/skep share/man/man1/skep.1 share/man/man7/skep-protocol.7 share/man/man8/skepd.8"
+files="bin/skepd bin/skep share/man/man1/skep.1 share/man/man7/skep-protocol.7 share/man/man8/skepd.8
+    lib/systemd/system/skepd@.service lib/systemd/user/skepd@.service lib/sysusers.d/skep.conf"
 
 # The architecture as install.sh names it, the Zig target, and the CPU if not the target's
 # default: 32-bit ARM for the Raspberry Pi 1 and Zero's ARMv6, which ARMv7 runs too.

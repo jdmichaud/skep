@@ -88,7 +88,8 @@
   section of `CHANGELOG.md` as its notes, and what `tools/dist.sh`
   builds: for x86_64, aarch64, 32-bit ARM (ARMv6, for the Raspberry Pi 1
   and Zero, which ARMv7 runs too) and riscv64, an archive of `skepd`,
-  `skep` and their manual pages, as static musl binaries;
+  `skep` and their manual pages, as static musl binaries, with skepd's
+  systemd units;
   `SHA256SUMS`; and `install.sh`, which installs them. Asset names carry
   no version, so that `releases/latest/download/` finds them.
 

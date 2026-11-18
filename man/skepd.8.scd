@@ -119,6 +119,12 @@ ExecStart=
 ExecStart=/opt/skep/bin/skepd --device /dev/%I
 ```
 
+The release's _install.sh_ installs the units, with the path where it
+installed skepd: as root, in _/etc/systemd/system_ and _/etc/systemd/user_,
+with the *skep* user; otherwise in _~/.config/systemd/user_. It enables
+none. *skep-uninstall*, which it installs too, stops the services and
+removes all of it, and the network state if asked to.
+
 # SIGNALS
 
 *SIGTERM*, *SIGINT*, *SIGHUP*

@@ -6,7 +6,8 @@ daemon and the `skep` command-line tool.
 ## Install
 
 On Linux (x86_64, aarch64, 32-bit ARM from ARMv6, riscv64), `skepd`,
-`skep` and their manual pages, from the latest release:
+`skep`, their manual pages and, where systemd runs, skepd's units, from
+the latest release:
 
 ```
 curl -fsSL https://github.com/jdmichaud/skep/releases/latest/download/install.sh | sh
@@ -14,5 +15,7 @@ curl -fsSL https://github.com/jdmichaud/skep/releases/latest/download/install.sh
 
 as root into `/usr/local`, otherwise into `~/.local`. The script is
 short: to read it first, download it, then run it with `sh install.sh`.
+`skep-uninstall` removes it all again; skepd(8) tells how to start the
+service.
 
 MIT licensed, see [LICENSE](LICENSE).
