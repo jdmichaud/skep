@@ -13,7 +13,8 @@ publishes the section of each released version as its release notes.
   manual pages and skepd's systemd units, for x86_64, aarch64, 32-bit
   ARM and riscv64, and `install.sh`, which installs them without a
   compiler, the units where systemd runs, and `skep-uninstall`, which
-  removes them all:
+  removes them all. Run as a user, it first says what installing as
+  root would give, and offers to stop for that:
   `curl -fsSL https://github.com/jdmichaud/skep/releases/latest/download/install.sh | sh`.
 - skepd's `read_readings` method reads a device for readings by name,
   as `skep read <device> <reading>...` does, which now asks for it.

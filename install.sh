@@ -11,7 +11,8 @@
 #
 # The units are installed, not enabled: as root, skepd@ as a system service, with the skep user it
 # runs as, and as a user service for every user; otherwise as the user's service. skepd(8) tells
-# how to start them.
+# how to start them. Run as a user, it first says what installing as root would give instead, and
+# asks whether to stop, to run it so; it goes on unless told to stop.
 set -eu
 
 releases=https://github.com/jdmichaud/skep/releases
@@ -29,6 +30,24 @@ case $(uname -m) in
 esac
 if [ "$version" = latest ]; then url=$releases/latest/download; else url=$releases/download/$version; fi
 archive=skep-$arch-linux.tar.gz
+
+if [ -z "$root" ]; then
+    cat <<EOF
+Run as you, install.sh installs skep for you alone: into $prefix, and, where systemd
+runs, skepd as your user service, which runs while you are logged in. To open the dongle,
+you need to be in its group, such as dialout.
+
+Run as root, it installs skep for the whole machine: into /usr/local, and skepd as a system
+service, which starts at boot and runs as its own skep user:
+
+    curl -fsSL $url/install.sh | sudo ${SKEP_VERSION:+SKEP_VERSION=$SKEP_VERSION }sh
+
+EOF
+    printf 'Stop here, to run it as root? [y/N] '
+    { read -r answer < /dev/tty; } 2>/dev/null || answer=
+    echo
+    case $answer in y | Y | yes) exit 0 ;; esac
+fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
