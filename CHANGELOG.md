@@ -7,6 +7,16 @@ publishes the section of each released version as its release notes.
 
 ## [Unreleased]
 
+### Added
+
+- skepd publishes the devices on D-Bus, read-only, for desktop widgets,
+  status bars and scripts: an object per device, with its address, its
+  name and its last readings, and signals as they change
+  (skep-dbus(7)). On the session bus if there is one, on the system bus
+  otherwise, where only the `skep` group and root see them; `install.sh`
+  installs the policy that allows it as root. Without a bus, skepd runs
+  as before.
+
 ## [0.1.1] - 2026-11-18
 
 ### Added

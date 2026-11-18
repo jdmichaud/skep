@@ -6,7 +6,7 @@
 
 [Unit]
 Description=Zigbee network
-Documentation=man:skepd(8) man:skep(1)
+Documentation=man:skepd(8) man:skep(1) man:skep-dbus(7)
 
 [Service]
 Type=notify

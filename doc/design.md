@@ -18,13 +18,15 @@ drivers without changes to the rest of the stack.
 ## Components
 
 ```
-  skep (CLI)    scripts, socat
-       |             |
-       +------+------+
-              |  Unix socket, line-delimited JSON (skep-protocol(7))
-              v
-        skepd (daemon)  <---- serial port ---->  dongle
-              |              (skepd does all I/O)
+  skep (CLI)    scripts, socat         widgets, status bars, scripts
+       |             |                                ^
+       +------+------+                                |
+              |  Unix socket, line-delimited JSON     |  D-Bus, read-only
+              v  (skep-protocol(7))                   |  (skep-dbus(7))
+        skepd (daemon) -------------------------------+
+              |
+              +<---- serial port ---->  dongle
+              |      (skepd does all I/O)
               |  C API, <skep.h>: bytes, time, state, requests, events
               v
         libskep (Zigbee logic, no I/O)
@@ -566,6 +568,44 @@ The API is in [include/skep.h](../include/skep.h).
   reloads the configuration.
 - Serves clients on a Unix stream socket with line-delimited JSON
   requests, responses and events, documented in skep-protocol(7).
+- Publishes the devices on D-Bus, read-only, as skep-dbus(7) says: an
+  object per device, with its address, its name and its last readings,
+  and signals as they change, for desktop widgets, status bars and
+  scripts, which listen on D-Bus rather than speak skep-protocol.
+  - Read-only: what changes the network, from pairing to switching a
+    plug, stays with skep-protocol, whose socket decides who may. Control
+    on D-Bus would need access checks of its own (a group's bus policy,
+    or polkit).
+  - Readings are one property, a dictionary by reading name, as MPRIS
+    publishes a player's metadata: the readings a device has vary, and
+    an interface's properties do not. Each reading is a double in the
+    unit skep-protocol gives it, of the device's first endpoint with it,
+    as `skep get` names them.
+  - The name, `zigbee.Skep1`, and the paths carry the interface's major
+    version, as the D-Bus API design guidelines ask: a change that breaks
+    clients comes as Skep2, next to it. It is not a reversed domain, as
+    the guidelines would also have it: skep has no domain, and zigbee.org
+    is the Connectivity Standards Alliance's. "zigbee" is no domain, so
+    the name claims none; "Skep" says whose interface it is, since its
+    readings and units are skep's.
+    - Not chosen: `io.github.<account>.Skep1`, after the repository's host
+      and owner; `zigbee.Network1`, which would read as a standard there
+      is not; and lowercase `zigbee.skep`, as BlueZ's `org.bluez` is,
+      against the guidelines' CamelCase.
+  - On the session bus when `DBUS_SESSION_BUS_ADDRESS` names one, as for
+    skepd started in a session or by the user unit; on the system bus
+    otherwise, as for the system unit. No option: the variables are how
+    a bus is named.
+  - On the system bus, readings tell who is home: skepd's policy
+    (`dbus/zigbee.Skep1.conf`) lets the `skep` user own the
+    name and only the `skep` group and root call it or get its signals,
+    as for the socket. The system bus delivers signals to every user by
+    default, so the policy withholds them too. Without the policy, the
+    bus refuses the name; `install.sh` installs it as root.
+  - In skepd, which has the devices, readings and names at hand. Not
+    chosen: a bridge, a skep-protocol client like the MQTT one planned,
+    which keeps what parses bus messages away from the network key, at
+    the cost of a process, a unit and a protocol between them.
 - Uses libskep only through `<skep.h>`.
 - Ships a systemd user unit and a system unit, both `skepd.service`,
   which find the dongle as skepd does without `--device`: one dongle is
@@ -685,7 +725,7 @@ except the members of the `skep` group for the system service.
 ## Documentation
 
 - Man pages: skep(1), skepd(8), libskep(3) (plus per-function pages as the
-  API settles), skepd.conf(5) and skep-protocol(7).
+  API settles), skepd.conf(5), skep-protocol(7) and skep-dbus(7).
 - They are written in scdoc, a small markup for man pages, in `man/`, and
   rendered to roff at build time by zzdoc, a Zig port of scdoc
   (github.com/rockorager/zzdoc), so building them needs nothing but Zig.

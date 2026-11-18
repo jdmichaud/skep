@@ -11,6 +11,8 @@ const Names = @This();
 gpa: std.mem.Allocator,
 /// Owned names, by IEEE address.
 map: std.AutoArrayHashMapUnmanaged(u64, []u8) = .empty,
+/// The devices whose names changed, for what publishes them to take.
+changed: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
 
 pub const max_len = 64;
 
@@ -19,6 +21,7 @@ pub fn deinit(n: *Names) void {
     n.gpa.free(name);
   }
   n.map.deinit(n.gpa);
+  n.changed.deinit(n.gpa);
 }
 
 pub fn get(n: *const Names, ieee: u64) ?[]const u8 {
@@ -49,6 +52,7 @@ pub fn valid(name: []const u8) bool {
 pub fn set(n: *Names, ieee: u64, name: ?[]const u8) error{ OutOfMemory }!?[]u8 {
   const copy = if (name) |new| try n.gpa.dupe(u8, new) else null;
   errdefer if (copy) |new| n.gpa.free(new);
+  try n.changed.ensureUnusedCapacity(n.gpa, 1);
   const old = if (n.map.fetchSwapRemove(ieee)) |entry| entry.value else null;
   if (copy) |new| {
     n.map.put(n.gpa, ieee, new) catch |e| {
@@ -58,6 +62,7 @@ pub fn set(n: *Names, ieee: u64, name: ?[]const u8) error{ OutOfMemory }!?[]u8 {
       return e;
     };
   }
+  n.changed.putAssumeCapacity(ieee, {});
   return old;
 }
 

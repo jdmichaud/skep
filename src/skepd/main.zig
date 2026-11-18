@@ -18,6 +18,8 @@ const StateFile = @import("StateFile.zig");
 const libskep = @import("libskep.zig");
 const time = @import("time.zig");
 const Notifier = @import("notify.zig").Notifier;
+const dbus = @import("dbus");
+const Published = @import("Published.zig");
 
 const linux = std.os.linux;
 const posix = std.posix;
@@ -162,6 +164,10 @@ const Daemon = struct {
   notifier: Notifier,
   /// When to tell systemd's watchdog that the loop runs, if it watches.
   watchdog_at: ?u64 = null,
+  /// The devices, on D-Bus.
+  published: Published,
+  /// Which bus they are on, for the log: "session" or "system".
+  bus_kind: []const u8,
 
   fn now(d: *const Daemon) u64 {
     const timestamp = Io.Clock.awake.now(d.io);
@@ -379,6 +385,7 @@ const Daemon = struct {
     d.protocol.now = d.now();
     while (c.skep_next_event(d.ctx)) |event| {
       defer c.skep_event_free(event);
+      d.published.event(event);
       // A client's request ended: its response says how.
       if (d.protocol.event(event)) continue;
       switch (c.skep_event_get_type(event)) {
@@ -517,6 +524,29 @@ const Daemon = struct {
     }
   }
 
+  /// What happened to the bus the devices are published on.
+  fn busNews(d: *Daemon) void {
+    while (d.published.bus.nextNews()) |news| {
+      switch (news) {
+        .published => d.print("published on the {s} bus as {s}", .{
+          d.bus_kind,
+          Published.bus_name,
+        }),
+        .unavailable => |why| d.print("the {s} bus: {s}, trying again later", .{ d.bus_kind, why }),
+        .refused => |refusal| switch (refusal) {
+          .not_allowed => d.print(
+            "the {s} bus: not allowed to own {s}, as skep-dbus(7) tells; asking again every 5 minutes",
+            .{ d.bus_kind, Published.bus_name },
+          ),
+          .taken => d.print(
+            "the {s} bus: {s} is taken, by another skepd maybe; asking again every 5 minutes",
+            .{ d.bus_kind, Published.bus_name },
+          ),
+        },
+      }
+    }
+  }
+
   /// SIGTERM or SIGINT: stop libskep cleanly, or exit if it is not running.
   fn stop(d: *Daemon) void {
     if (d.stopping) return;
@@ -538,6 +568,7 @@ const Daemon = struct {
     d.open();
     while (true) {
       d.handleEvents();
+      d.published.sync(&d.protocol);
       if (d.saving.due(d.now())) {
         d.saveState();
       }
@@ -572,6 +603,9 @@ const Daemon = struct {
       if (d.refresh_at) |t| {
         deadline = if (deadline) |other| @min(other, t) else t;
       }
+      if (d.published.bus.deadline()) |t| {
+        deadline = if (deadline) |other| @min(other, t) else t;
+      }
       var libskep_deadline: u64 = 0;
       if (c.skep_next_deadline(d.ctx, &libskep_deadline) != 0) {
         deadline = if (deadline) |t| @min(t, libskep_deadline) else libskep_deadline;
@@ -588,7 +622,7 @@ const Daemon = struct {
         -1;
       var output: [*c]const u8 = undefined;
       const writing = c.skep_output(d.ctx, &output) > 0;
-      // Signals, the dongle, the listening socket, then the clients.
+      // Signals, the dongle, D-Bus, the listening socket, then the clients.
       fds.clearRetainingCapacity();
       try fds.appendSlice(
         d.gpa,
@@ -599,6 +633,7 @@ const Daemon = struct {
             .events = if (writing) posix.POLL.IN | posix.POLL.OUT else posix.POLL.IN,
             .revents = 0,
           },
+          d.published.bus.pollFd(),
         },
       );
       try server.pollFds(d.gpa, &fds, current);
@@ -617,7 +652,8 @@ const Daemon = struct {
         d.print("{s}: went away", .{ d.dongle() });
         d.lose();
       }
-      server.polled(fds.items[2..], d.now()) catch |e| switch (e) {
+      d.published.bus.polled(fds.items[2].revents, d.now());
+      server.polled(fds.items[3..], d.now()) catch |e| switch (e) {
         error.OutOfMemory => d.print("error: accepting a client: out of memory", .{}),
         error.SystemResources => d.print(
           "error: accepting a client: out of file descriptors or memory; again in a second",
@@ -637,6 +673,8 @@ const Daemon = struct {
           d.open();
         }
       }
+      d.published.bus.advance(d.now());
+      d.busNews();
     }
   }
 };
@@ -787,6 +825,14 @@ pub fn main(init: std.process.Init) !u8 {
   posix.sigprocmask(linux.SIG.BLOCK, &mask, null);
   const signals = try posix.signalfd(-1, &mask, linux.SFD.CLOEXEC);
 
+  // The devices go on the user's session bus, if there is one, as for skepd started by hand or
+  // by the user unit; on the system bus otherwise, as for the system unit.
+  const session_bus = dbus.Bus.sessionAddress(init.environ_map);
+  const published: Published = try .init(
+    init.gpa,
+    session_bus orelse dbus.Bus.systemAddress(init.environ_map),
+  );
+  // Nothing fails from here until the daemon frees it.
   var daemon: Daemon = .{
     .io = io,
     .log = log,
@@ -808,7 +854,10 @@ pub fn main(init: std.process.Init) !u8 {
     .baudrate = options.baudrate orelse baudrate,
     .rtscts = rtscts,
     .notifier = .init(init.environ_map),
+    .published = published,
+    .bus_kind = if (session_bus != null) "session" else "system",
   };
+  defer daemon.published.deinit();
   defer daemon.protocol.deinit();
   defer daemon.notifier.deinit();
   // The dongle found, if any.
@@ -880,6 +929,7 @@ test "values are logged on one line, with what devices say escaped" {
 test {
   _ = @import("find.zig");
   _ = @import("Names.zig");
+  _ = @import("Published.zig");
   _ = @import("Server.zig");
   _ = @import("StateFile.zig");
   _ = @import("values.zig");

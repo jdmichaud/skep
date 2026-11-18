@@ -18,6 +18,8 @@ last: std.AutoHashMapUnmanaged(Source, Last) = .empty,
 queue: std.ArrayList(Read) = .empty,
 /// The reads libskep is making, by request id.
 reading: std.AutoHashMapUnmanaged(u32, Read) = .empty,
+/// The devices whose readings changed, for what publishes them to take.
+changed: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
 
 /// Most reads made at once. libskep makes at most 32 requests at once, the clients' included.
 const max_reads = 4;
@@ -48,6 +50,7 @@ pub const Last = struct {
 };
 
 pub fn deinit(r: *Readings) void {
+  r.changed.deinit(r.gpa);
   r.reading.deinit(r.gpa);
   r.queue.deinit(r.gpa);
   r.last.deinit(r.gpa);
@@ -77,11 +80,9 @@ pub fn remember(
       .attribute = a.id,
     };
     // Out of memory: a value not remembered, which the next report brings again.
-    r.last.put(r.gpa, source, .{
-      .value = a.value,
-      .scaled = reading.value,
-      .time = time,
-    }) catch {};
+    r.last.put(r.gpa, source, .{ .value = a.value, .scaled = reading.value, .time = time }) catch
+      continue;
+    r.changed.put(r.gpa, device, {}) catch {};
   }
 }
 

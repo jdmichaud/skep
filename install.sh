@@ -1,6 +1,7 @@
 #!/bin/sh
 # install.sh - install skep from a release on GitHub: skepd, skep and their manual pages; where
-# systemd runs the machine, skepd's units; and skep-uninstall, which removes all of it.
+# systemd runs the machine, skepd's units and its system bus policy; and skep-uninstall, which
+# removes all of it.
 #
 #   curl -fsSL https://github.com/jdmichaud/skep/releases/latest/download/install.sh | sh
 #
@@ -84,6 +85,7 @@ put 755 bin/skepd "$prefix/bin/skepd"
 put 755 bin/skep "$prefix/bin/skep"
 put 644 share/man/man1/skep.1 "$prefix/share/man/man1/skep.1"
 put 644 share/man/man7/skep-protocol.7 "$prefix/share/man/man7/skep-protocol.7"
+put 644 share/man/man7/skep-dbus.7 "$prefix/share/man/man7/skep-dbus.7"
 put 644 share/man/man8/skepd.8 "$prefix/share/man/man8/skepd.8"
 
 if [ -d /run/systemd/system ]; then
@@ -95,6 +97,12 @@ if [ -d /run/systemd/system ]; then
         put 644 lib/sysusers.d/skep.conf /etc/sysusers.d/skep.conf
         systemd-sysusers /etc/sysusers.d/skep.conf
         systemctl daemon-reload
+        # What lets skepd, as the skep user, publish the devices on the system bus, for the skep
+        # group: read again by the bus now, which dbus-broker does not do by itself.
+        put 644 share/dbus-1/system.d/zigbee.Skep1.conf \
+            /etc/dbus-1/system.d/zigbee.Skep1.conf
+        busctl call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig \
+            > /dev/null 2>&1 || true
     else
         put 644 lib/systemd/user/skepd.service "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/skepd.service"
         systemctl --user daemon-reload || true
@@ -160,6 +168,6 @@ if [ -d /run/systemd/system ] && [ -z "$root" ]; then
     echo "It stops when you log out, unless you let it run:"
     echo "    loginctl enable-linger"
 elif [ -d /run/systemd/system ]; then
-    echo "skep's users must be in the skep group, to talk to skepd:"
+    echo "skep's users must be in the skep group, to talk to skepd and see its devices on D-Bus:"
     echo "    usermod -aG skep <user>"
 fi

@@ -66,6 +66,7 @@ pub fn build(b: *std.Build) !void {
       skep_h,
       serial,
       printable,
+      dbus,
       library,
       skep,
       build_options,
@@ -181,6 +182,7 @@ fn addSkepd(
   skep_h: *std.Build.Module,
   serial: *std.Build.Module,
   printable: *std.Build.Module,
+  dbus: *std.Build.Module,
   library: *std.Build.Step.Compile,
   skep: *std.Build.Module,
   build_options: *std.Build.Step.Options,
@@ -193,6 +195,7 @@ fn addSkepd(
       .{ .name = "skep_h", .module = skep_h },
       .{ .name = "serial", .module = serial },
       .{ .name = "printable", .module = printable },
+      .{ .name = "dbus", .module = dbus },
     },
   });
   module.linkLibrary(library);
@@ -213,6 +216,7 @@ fn addSkepd(
       .{ .name = "skep_h", .module = skep_h },
       .{ .name = "serial", .module = serial },
       .{ .name = "printable", .module = printable },
+      .{ .name = "dbus", .module = dbus },
       .{ .name = "libskep", .module = skep },
       // libskep's own: a file belongs to one module of a binary.
       .{ .name = "build_options", .module = skep.import_table.get("build_options").? },
@@ -224,8 +228,9 @@ fn addSkepd(
 
 /// D-Bus, for skepd to publish on: a module of its own, which knows nothing of skep, behind one
 /// interface, `Bus`, so that another D-Bus library could replace it. `zig build test-dbus` checks,
-/// on a session bus of its own, what clients see of a service published through that interface,
-/// with busctl: it needs dbus-run-session and busctl, so it is not one of the unit tests.
+/// on buses of its own, what clients see of a service published through that interface, with
+/// busctl, gdbus and dbus-send, and what skepd's policy for the system bus lets them: it needs
+/// dbus-daemon and those clients, so it is not one of the unit tests.
 fn addDbus(
   b: *std.Build,
   test_step: *std.Build.Step,
@@ -253,8 +258,17 @@ fn addDbus(
   run.addFileArg(b.path("test/dbus-contract.sh"));
   run.addArtifactArg(harness);
   run.has_side_effects = true;
-  b.step("test-dbus", "Check what D-Bus clients see of a service (needs dbus-run-session, busctl)")
-    .dependOn(&run.step);
+  const policy = b.addSystemCommand(&.{ "sh" });
+  policy.addFileArg(b.path("test/dbus-policy.sh"));
+  policy.addArtifactArg(harness);
+  policy.addFileArg(b.path("dbus/zigbee.Skep1.conf"));
+  policy.has_side_effects = true;
+  const step = b.step(
+    "test-dbus",
+    "Check what D-Bus clients see (needs dbus-daemon, busctl, gdbus)",
+  );
+  step.dependOn(&run.step);
+  step.dependOn(&policy.step);
   return module;
 }
 
@@ -393,7 +407,12 @@ fn addManpages(b: *std.Build) !void {
   const rendered = run.addOutputDirectoryArg2("man", .{});
   // One at a time: with Zig 0.17, installing a directory into a prefix that does not exist yet
   // installs nothing.
-  for ([_][]const u8{ "man1/skep.1", "man7/skep-protocol.7", "man8/skepd.8" }) |page| {
+  for ([_][]const u8{
+    "man1/skep.1",
+    "man7/skep-protocol.7",
+    "man7/skep-dbus.7",
+    "man8/skepd.8",
+  }) |page| {
     const install = b.addInstallFileWithDir(
       rendered.path(b, page),
       .{ .custom = b.fmt("share/man/{s}", .{ std.fs.path.dirname(page).? }) },
@@ -428,14 +447,16 @@ fn addSkep(
   test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = module })).step);
 }
 
-/// The systemd units of skepd, for the system and for users, and the user its system unit runs as:
-/// `zig build` installs them where systemd looks under the prefix, lib/systemd and lib/sysusers.d.
-/// Only when skep is the project being built.
+/// The systemd units of skepd, for the system and for users, the user its system unit runs as, and
+/// what the system bus lets that user do: `zig build` installs them where systemd and D-Bus look
+/// under the prefix, lib/systemd, lib/sysusers.d and share/dbus-1/system.d. Only when skep is the
+/// project being built.
 fn addSystemdFiles(b: *std.Build) void {
   for ([_][2][]const u8{
     .{ "systemd/system/skepd.service", "lib/systemd/system" },
     .{ "systemd/user/skepd.service", "lib/systemd/user" },
     .{ "systemd/sysusers.d/skep.conf", "lib/sysusers.d" },
+    .{ "dbus/zigbee.Skep1.conf", "share/dbus-1/system.d" },
   }) |file| {
     const install = b.addInstallFileWithDir(
       b.path(file[0]),

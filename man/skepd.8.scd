@@ -27,6 +27,12 @@ It remembers the last readings of the devices, such as a temperature, which
 it gives clients. Once the network is up, and when a device is set up, it
 reads the devices for those it has none of.
 
+It publishes the devices, their names and their last readings on D-Bus,
+read-only, for desktop widgets, status bars and scripts, as *skep-dbus*(7)
+says: on the user's session bus if there is one, on the system bus
+otherwise. Without a bus, or one that does not let it own its name, it runs
+as usual, and tries again later.
+
 It finds the dongle itself, unless told with *--device*. When the dongle
 goes away, skepd opens it again every 5 seconds until it is back. It runs in
 the foreground, and logs to standard error.
@@ -134,8 +140,9 @@ ExecStart=/opt/skep/bin/skepd --device /dev/serial/by-id/usb-...
 
 The release's _install.sh_ installs the units, with the path where it
 installed skepd: as root, in _/etc/systemd/system_ and _/etc/systemd/user_,
-with the *skep* user; otherwise in _~/.config/systemd/user_. It enables
-none. *skep-uninstall*, which it installs too, stops the services and
+with the *skep* user and the system bus's policy for it, which lets the
+*skep* group see the devices on D-Bus (see *skep-dbus*(7)); otherwise in
+_~/.config/systemd/user_. It enables none. *skep-uninstall*, which it installs too, stops the services and
 removes all of it, and the network state if asked to.
 
 # SIGNALS
@@ -158,6 +165,11 @@ _JOURNAL_STREAM_
 _NOTIFY_SOCKET_
 	Where systemd listens for skepd's readiness and status.
 
+_DBUS_SESSION_BUS_ADDRESS_, _DBUS_SYSTEM_BUS_ADDRESS_
+	The session bus, which skepd publishes the devices on if this names one,
+	and the system bus, which it publishes them on otherwise:
+	_unix:path=/var/run/dbus/system_bus_socket_ by default.
+
 _WATCHDOG_USEC_, _WATCHDOG_PID_
 	Set by systemd with _WatchdogSec=_: skepd tells it that it is alive twice
 	as often, and systemd restarts it if it stops.
@@ -171,4 +183,5 @@ the command line is wrong.
 
 # SEE ALSO
 
-*skep*(1), *skep-protocol*(7), *systemd.service*(5), *systemd-sysusers*(8)
+*skep*(1), *skep-protocol*(7), *skep-dbus*(7), *systemd.service*(5),
+*systemd-sysusers*(8)

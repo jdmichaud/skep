@@ -580,23 +580,28 @@ pub fn timestamp(p: *Protocol, buffer: *[32]u8) []const u8 {
 
 const testing = std.testing;
 const linux = std.os.linux;
+const Published = @import("Published.zig");
 
-/// libskep with the sim driver, its network up, and skepd's protocol on a socket in /tmp.
-const TestBench = struct {
+/// libskep with the sim driver, its network up, and skepd's protocol on a socket in /tmp; for the
+/// tests of other files too.
+pub const TestBench = struct {
   dir: [64]u8 = undefined,
   dir_len: usize = 0,
   protocol: Protocol,
   client: linux.fd_t,
+  /// What publishes on D-Bus, if the test has it: told of events, and updated, as in skepd.
+  published: ?*Published = null,
 
   /// libskep's insides, which only tests reach: the sim driver and its devices.
-  const libskep_internal = @import("libskep");
+  pub const libskep_internal = @import("libskep");
 
-  fn init(b: *TestBench) !void {
+  pub fn init(b: *TestBench) !void {
     return b.initWith(&.{});
   }
 
   /// With `devices` in the simulated network, which the test keeps, and makes join.
-  fn initWith(b: *TestBench, devices: []libskep_internal.sim.Device) !void {
+  pub fn initWith(b: *TestBench, devices: []libskep_internal.sim.Device) !void {
+    b.published = null;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const dir = try std.fmt.bufPrint(&b.dir, "/tmp/skep-test-{s}", .{ &tmp.sub_path });
@@ -637,11 +642,11 @@ const TestBench = struct {
   }
 
   /// The sim driver, once started.
-  fn sim(b: *TestBench) *libskep_internal.sim.Driver {
+  pub fn sim(b: *TestBench) *libskep_internal.sim.Driver {
     return &internal(b.protocol.ctx).driver.?.sim;
   }
 
-  fn deinit(b: *TestBench) void {
+  pub fn deinit(b: *TestBench) void {
     _ = linux.close(b.client);
     const ctx = b.protocol.ctx;
     testing.allocator.free(b.protocol.names_path);
@@ -659,13 +664,19 @@ const TestBench = struct {
   }
 
   /// skepd's loop, once: libskep, its events, the clients' lines, and what goes back.
-  fn pump(b: *TestBench) void {
+  pub fn pump(b: *TestBench) void {
     const p = &b.protocol;
     for (0..4) |_| {
       _ = c.skep_advance(p.ctx, p.now);
       while (c.skep_next_event(p.ctx)) |e| {
+        if (b.published) |published| {
+          published.event(e);
+        }
         _ = p.event(e);
         c.skep_event_free(e);
+      }
+      if (b.published) |published| {
+        published.sync(p);
       }
       // As skepd's loop does, without waiting.
       var fds: std.ArrayList(linux.pollfd) = .empty;
@@ -680,13 +691,13 @@ const TestBench = struct {
     }
   }
 
-  fn ask(b: *TestBench, line: []const u8) void {
+  pub fn ask(b: *TestBench, line: []const u8) void {
     _ = linux.write(b.client, line.ptr, line.len);
     b.pump();
   }
 
   /// What the client has received since it last looked.
-  fn received(b: *TestBench, buffer: []u8) []const u8 {
+  pub fn received(b: *TestBench, buffer: []u8) []const u8 {
     var len: usize = 0;
     while (len < buffer.len) {
       var poll = [_]linux.pollfd{.{ .fd = b.client, .events = linux.POLL.IN, .revents = 0 }};
