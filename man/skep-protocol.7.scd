@@ -234,6 +234,18 @@ them: "true", "12", "0x0c", "1.5".
 	is left out when the device refused the whole request, with a status
 	other than 0.
 
+*read_readings* {"device": _device_, "readings": [_name_, ...]}
+	Read the device for readings by name (see *READINGS*), all of its readings
+	when "readings" is left out: a *read* for each cluster they are on, ended
+	once all are. "ENOENT" for a name the device has no reading for, with its
+	"readings", their names.
+	Result: {"readings": [_reading_, ...]}, each as the device's "readings"
+	hold them, with the value just read; or, for one that could not be read,
+	without a value, and with the "status" the device answered, or the
+	"error" that ended its read. When every read ended with the same error,
+	such as "ETIMEDOUT" for a device that did not wake up in time, so does
+	the request.
+
 *write* {_target_, "attributes": [{"id": _id_, "type": ..., "value": ...}, ...]}
 	Write attributes.
 	Result: {"status": _ZCL status_, "attributes": [{"id": _id_, "status":
@@ -283,8 +295,9 @@ A _target_ is the members "device", "endpoint" and "cluster", and
 "manufacturer_code" for manufacturer-specific clusters, attributes and
 commands.
 
-Requests to devices (*remove*, *read*, *write*, *configure_reporting*,
-*bind*, *unbind*, *command*, *set*) take a "timeout" too: how long, in seconds,
+Requests to devices (*remove*, *read*, *read_readings*, *write*,
+*configure_reporting*, *bind*, *unbind*, *command*, *set*) take a "timeout"
+too: how long, in seconds,
 fractions allowed, the request may wait, for a sleepy device to wake up
 among others. Without one, it waits as long as it takes.
 

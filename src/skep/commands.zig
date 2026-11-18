@@ -934,7 +934,8 @@ pub fn writeRequest(w: *Io.Writer, call: *const Call) Stringify.Error!void {
   try j.objectField("method");
   try j.write(
     switch (call.form.flow) {
-      .get, .read_readings => "device",
+      .get => "device",
+      .read_readings => "read_readings",
       .request, .watch => call.command.method,
     },
   );
@@ -1010,7 +1011,20 @@ pub fn writeTarget(
 }
 
 fn readParams(j: *Stringify, call: *const Call) Stringify.Error!void {
-  if (call.form.flow == .read_readings) return deviceParams(j, call);
+  if (call.form.flow == .read_readings) {
+    try deviceParams(j, call);
+    try j.objectField("readings");
+    try j.beginArray();
+    for (call.all("reading")) |name| {
+      try j.write(name);
+    }
+    try j.endArray();
+    if (call.global.timeout) |t| {
+      try j.objectField("timeout");
+      try writeSeconds(j, t);
+    }
+    return;
+  }
   try targetParams(j, call);
   try j.objectField("attributes");
   try j.beginArray();
@@ -1360,7 +1374,7 @@ test "command lines become requests" {
   );
   try expectParsed(
     &.{ "read", "plug", "power" },
-    "\"method\":\"device\",\"params\":{\"device\":\"plug\"}",
+    "\"method\":\"read_readings\",\"params\":{\"device\":\"plug\",\"readings\":[\"power\"]}",
   );
   try expectParsed(
     &.{ "command", "lamp", "1", "8", "4", "uint8:127", "uint16:10" },

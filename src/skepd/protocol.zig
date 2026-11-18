@@ -9,6 +9,7 @@ const time = @import("time.zig");
 const Readings = @import("Readings.zig");
 const Server = @import("Server.zig");
 const events = @import("events.zig");
+const grouped = @import("grouped.zig");
 const methods = @import("methods.zig");
 const values = @import("values.zig");
 
@@ -38,6 +39,9 @@ names_path: [:0]const u8,
 pending: std.AutoHashMapUnmanaged(u32, Pending) = .empty,
 /// The clients that watch events, by id.
 watchers: std.AutoArrayHashMapUnmanaged(u32, void) = .empty,
+/// The groups of reads that answer `read_readings` requests, by id, and the next id.
+groups: std.AutoHashMapUnmanaged(u32, grouped.Group) = .empty,
+next_group: u32 = 1,
 /// The error that took the network down, while it is down because of one.
 down_error: ?c_int = null,
 /// When the join window closes, on the monotonic clock, while it is open.
@@ -58,6 +62,7 @@ pub const Method = enum {
   rotate_network_key,
   devices,
   device,
+  read_readings,
   rename,
   setup,
   remove,
@@ -79,6 +84,8 @@ pub const Pending = struct {
   /// For reads: what was read, whose readings skepd remembers.
   endpoint: u8 = 0,
   cluster: u16 = 0,
+  /// For `read_readings`: the group of reads it belongs to.
+  group: u32 = 0,
 };
 
 /// Why the request being handled fails.
@@ -101,6 +108,7 @@ pub fn deinit(p: *Protocol) void {
   p.readings.deinit();
   p.pending.deinit(p.gpa);
   p.watchers.deinit(p.gpa);
+  grouped.deinit(p);
   p.names.deinit();
   p.server.deinit();
 }
@@ -405,7 +413,7 @@ pub fn room(p: *Protocol, client: *const Server.Client) Error!void {
 }
 
 /// How many requests of a client are pending.
-fn pendingOf(p: *const Protocol, client: u32) usize {
+pub fn pendingOf(p: *const Protocol, client: u32) usize {
   var n: usize = 0;
   var it = p.pending.valueIterator();
   while (it.next()) |pending| {
@@ -872,6 +880,93 @@ test "a client done sending still gets its answers" {
   try expectContains(bench.received(&buffer), "{\"id\":1,\"result\":{}}");
   bench.protocol.dropFinished();
   try testing.expectEqual(0, bench.protocol.server.clients.items.len);
+}
+
+test "readings are read by name, a request each, whatever clusters they are on" {
+  const sim = TestBench.libskep_internal.sim;
+  const zcl = TestBench.libskep_internal.zcl;
+  var devices = [_]sim.Device{.{
+    .ieee = 0xc4d7fdba7b600000,
+    .nwk = 0x6442,
+    .model = "3RCB02070Z",
+    .input_clusters = &.{ 0x0000, 0x0003, 0x0006, 0x0008, 0x0300 },
+    .color_temperature_range = .{ 142, 454 },
+    // No hue: the bulb answers that it has none.
+    .attributes = &.{
+      .{ .cluster = 0x0006, .id = 0x0000, .value = .unsigned(zcl.Type.boolean, 1) },
+      .{ .cluster = 0x0008, .id = 0x0000, .value = .unsigned(zcl.Type.uint8, 254) },
+    },
+  }};
+  var bench: TestBench = undefined;
+  try bench.initWith(&devices);
+  defer bench.deinit();
+  var buffer: [16384]u8 = undefined;
+  bench.ask("{\"id\": 1, \"method\": \"permit_join\", \"params\": {\"seconds\": 254}}\n");
+  bench.pump();
+  bench.sim().device(.{ .ieee = 0xc4d7fdba7b600000, .nwk = 0x6442, .kind = .joined });
+  for (0..8) |_| {
+    bench.pump();
+  }
+  _ = bench.received(&buffer);
+
+  bench.ask(
+    "{\"id\": 2, \"method\": \"read_readings\", \"params\": {\"device\": \"c4d7fdba7b600000\", \"readings\": [\"on\", \"level\", \"hue\"]}}\n",
+  );
+  for (0..4) |_| {
+    bench.pump();
+  }
+  const got = bench.received(&buffer);
+  try expectContains(got, "{\"id\":2,\"result\":{\"readings\":[");
+  try expectContains(got, "\"value\":true,\"reading\":\"on\"");
+  try expectContains(got, "\"reading\":\"level\",\"scaled\":100");
+  try expectContains(got, "\"reading\":\"hue\",\"unit\":\"°\",\"status\":134}");
+  // One answer for the three.
+  try testing.expectEqual(1, std.mem.count(u8, got, "\"id\":2"));
+
+  bench.ask(
+    "{\"id\": 3, \"method\": \"read_readings\", \"params\": {\"device\": \"c4d7fdba7b600000\", \"readings\": [\"volume\"]}}\n",
+  );
+  const unknown = bench.received(&buffer);
+  try expectContains(unknown, "\"code\":\"ENOENT\"");
+  try expectContains(unknown, "\"readings\":[\"on\",\"level\",");
+}
+
+test "a read of readings is canceled as one, and fails as one when all its reads do" {
+  const sim = TestBench.libskep_internal.sim;
+  // Sleepy: its reads wait for it to wake up.
+  var devices = [_]sim.Device{.{
+    .ieee = 0xf44250000d350000,
+    .nwk = 0x1bce,
+    .rx_on_when_idle = false,
+  }};
+  var bench: TestBench = undefined;
+  try bench.initWith(&devices);
+  defer bench.deinit();
+  var buffer: [16384]u8 = undefined;
+  bench.ask("{\"id\": 1, \"method\": \"permit_join\", \"params\": {\"seconds\": 254}}\n");
+  bench.pump();
+  bench.sim().device(.{ .ieee = 0xf44250000d350000, .nwk = 0x1bce, .kind = .joined });
+  for (0..8) |_| {
+    bench.pump();
+  }
+  // Asleep by now.
+  bench.protocol.now += 60_000;
+  bench.pump();
+  _ = bench.received(&buffer);
+
+  bench.ask(
+    "{\"id\": 2, \"method\": \"read_readings\", \"params\": {\"device\": \"f44250000d350000\", \"readings\": [\"temperature\", \"humidity\"]}}\n",
+  );
+  bench.pump();
+  try testing.expectEqual(0, bench.received(&buffer).len);
+  // Two reads, one per cluster, both canceled.
+  try testing.expectEqual(2, bench.protocol.pendingOf(bench.protocol.server.clients.items[0].id));
+  bench.ask("{\"id\": 3, \"method\": \"cancel\", \"params\": {\"id\": 2}}\n");
+  bench.pump();
+  const got = bench.received(&buffer);
+  try expectContains(got, "{\"id\":3,\"result\":{}}");
+  try expectContains(got, "{\"id\":2,\"error\":{\"code\":\"ECANCELED\"");
+  try testing.expectEqual(0, bench.protocol.groups.count());
 }
 
 test "the network gets a new key" {

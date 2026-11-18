@@ -7,17 +7,10 @@ const build_options = @import("build_options");
 const commands = @import("commands.zig");
 const output = @import("output.zig");
 
-const Row = output.Row;
-const chosen = output.chosen;
 const field = output.field;
-const integer = output.integer;
 const items = output.items;
-const label = output.label;
-const readingText = output.readingText;
 const showEvent = output.showEvent;
-const showRows = output.showRows;
 const statusOf = output.statusOf;
-const text = output.text;
 const writeError = output.writeError;
 
 const linux = std.os.linux;
@@ -73,17 +66,13 @@ pub fn main(init: std.process.Init) !u8 {
 
   var client: Client = .{ .fd = fd, .arena = arena };
   if (call.form.flow == .watch) return watch(&client, init.gpa, out, err, call.global.json);
-  // The request is all, except for reads of readings, which need the device first: skepd
-  // answers, then closes.
-  const by_reading = call.form.flow == .read_readings;
-  if (!by_reading) {
-    _ = linux.shutdown(fd, linux.SHUT.WR);
-  }
+  // The request is all: skepd answers, then closes.
+  _ = linux.shutdown(fd, linux.SHUT.WR);
   const line = (try client.nextLine()) orelse {
     try err.print("skep {s}: skepd closed the connection without answering\n", .{ call.name });
     return failed;
   };
-  if (call.global.json and !by_reading) {
+  if (call.global.json) {
     try out.print("{s}\n", .{ line });
   }
   const response = output.parse(arena, line) catch {
@@ -98,16 +87,11 @@ pub fn main(init: std.process.Init) !u8 {
     try err.print("skep {s}: skepd answered without a result\n", .{ call.name });
     return failed;
   };
-  if (by_reading) return readReadings(&client, out, err, &call, result);
   if (call.global.json) return statusOf(result);
   const now: i64 = @intCast(@divTrunc(Io.Clock.real.now(io).nanoseconds, std.time.ns_per_ms));
   return output.answer(
     &.{ .out = out, .err = err, .call = &call, .result = result, .now = now, .a = arena },
   );
-}
-
-fn eq(a: []const u8, b: []const u8) bool {
-  return std.mem.eql(u8, a, b);
 }
 
 // Talking to skepd.
@@ -244,123 +228,6 @@ fn watch(
   }
   try err.writeAll("skep watch: skepd closed the connection\n");
   return failed;
-}
-
-/// `read <device> <reading>...`: with the device's readings, which skepd gave, reads them from the
-/// device, one request per cluster, and prints them as `get` does.
-fn readReadings(
-  client: *Client,
-  out: *Io.Writer,
-  err: *Io.Writer,
-  call: *const commands.Call,
-  device: std.json.Value,
-) !u8 {
-  const a = client.arena;
-  const device_name = call.get("device").?;
-  const wanted = try chosen(a, err, call.name, device_name, device, call.all("reading")) orelse
-    return failed;
-  // One request per endpoint and cluster, its id one more than its index.
-  var groups: std.ArrayList(std.json.Value) = .empty;
-  var group_of = try a.alloc(usize, wanted.len);
-  for (wanted, 0..) |r, i| {
-    group_of[i] = for (groups.items, 0..) |g, k| {
-      if (integer(field(g, "endpoint")) == integer(field(r, "endpoint")) and
-        integer(field(g, "cluster")) == integer(field(r, "cluster"))) {
-        break k;
-      }
-    } else blk: {
-      try groups.append(a, r);
-      break :blk groups.items.len - 1;
-    };
-  }
-  var request: Io.Writer.Allocating = .init(a);
-  for (groups.items, 0..) |g, k| {
-    var j: std.json.Stringify = .{ .writer = &request.writer };
-    try j.beginObject();
-    try j.objectField("id");
-    try j.write(k + 2);
-    try j.objectField("method");
-    try j.write("read");
-    try j.objectField("params");
-    try j.beginObject();
-    try commands.writeTarget(
-      &j,
-      device_name,
-      @intCast(integer(field(g, "endpoint")) orelse 0),
-      @intCast(integer(field(g, "cluster")) orelse 0),
-      call.global.timeout,
-    );
-    try j.objectField("attributes");
-    try j.beginArray();
-    for (wanted, group_of) |r, gi| {
-      if (gi == k) {
-        try j.write(integer(field(r, "id")) orelse 0);
-      }
-    }
-    try j.endArray();
-    try j.endObject();
-    try j.endObject();
-    try request.writer.writeByte('\n');
-  }
-  try sendAll(client.fd, request.written());
-  _ = linux.shutdown(client.fd, linux.SHUT.WR);
-
-  // The answers, in whatever order they come.
-  const answers = try a.alloc(?std.json.Value, groups.items.len);
-  @memset(answers, null);
-  var status: u8 = ok;
-  var left = groups.items.len;
-  while (left > 0) {
-    const line = (try client.nextLine()) orelse {
-      try err.print("skep {s}: skepd closed the connection without answering\n", .{ call.name });
-      return failed;
-    };
-    if (call.global.json) {
-      try out.print("{s}\n", .{ line });
-    }
-    const response = output.parse(a, line) catch continue;
-    const id = integer(field(response, "id")) orelse continue;
-    if (id < 2 or id - 2 >= answers.len) continue;
-    const k: usize = @intCast(id - 2);
-    left -= 1;
-    if (field(response, "error")) |e| {
-      try writeError(err, call.name, e);
-      status = failed;
-    } else if (field(response, "result")) |result| {
-      answers[k] = result;
-      if (statusOf(result) != ok) {
-        status = failed;
-      }
-    }
-  }
-  if (call.global.json) return status;
-
-  // As asked, from the attributes of the answers.
-  var rows = try a.alloc(Row, wanted.len);
-  for (wanted, group_of, 0..) |r, k, i| {
-    rows[i] = .{ .label = try label(a, device, r) };
-    const result = answers[k] orelse continue;
-    const id = integer(field(r, "id"));
-    if (integer(field(result, "status"))) |s| {
-      if (s != 0) {
-        rows[i].value = try std.fmt.allocPrint(a, "refused, status 0x{x:0>2}", .{
-          @as(u64, @intCast(s)),
-        });
-        continue;
-      }
-    }
-    const attributes = field(result, "attributes") orelse continue;
-    for (items(attributes)) |attribute| {
-      if (integer(field(attribute, "id")) != id) continue;
-      const s = integer(field(attribute, "status")) orelse 0;
-      rows[i].value = if (s != 0)
-        try std.fmt.allocPrint(a, "status 0x{x:0>2}", .{ @as(u64, @intCast(s)) })
-      else
-        try readingText(a, attribute, .table);
-    }
-  }
-  try showRows(out, rows);
-  return status;
 }
 
 test "a socket asked for is the only one tried" {

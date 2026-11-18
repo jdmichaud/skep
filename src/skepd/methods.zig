@@ -9,6 +9,7 @@ const c = @import("skep_h");
 const Protocol = @import("protocol.zig");
 const Names = @import("Names.zig");
 const describe = @import("describe.zig");
+const grouped = @import("grouped.zig");
 const events = @import("events.zig");
 const Server = @import("Server.zig");
 const libskep = @import("libskep.zig");
@@ -158,6 +159,8 @@ pub fn device(
   try describe.deviceMembers(p, &out.j, a, ieee);
   p.send(client, &out);
 }
+
+pub const read_readings = grouped.start;
 
 pub fn rename(
   p: *Protocol,
@@ -509,15 +512,18 @@ pub fn cancel(
     .integer => |i| i,
     else => return p.fail("EINVAL", "id: not an integer", .{}),
   };
+  // All of libskep's requests that answer it: read_readings makes several. Its response,
+  // ECANCELED, comes with libskep's REQUEST_DONE.
+  var found = false;
   var it = p.pending.iterator();
   while (it.next()) |entry| {
     if (entry.value_ptr.client != client.id or entry.value_ptr.id != canceled) continue;
-    // Its response, ECANCELED, comes with libskep's REQUEST_DONE.
+    found = true;
     const r = c.skep_cancel(p.ctx, entry.key_ptr.*);
     if (r != 0) return p.failErrno(r);
-    return p.empty(client, id);
   }
-  return p.fail("ENOENT", "no request {d} pending", .{ canceled });
+  if (!found) return p.fail("ENOENT", "no request {d} pending", .{ canceled });
+  return p.empty(client, id);
 }
 
 // What set needs.

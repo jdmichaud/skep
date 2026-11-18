@@ -11,6 +11,7 @@ const values = @import("values.zig");
 const Message = Protocol.Message;
 const Stringify = std.json.Stringify;
 const describe = @import("describe.zig");
+const grouped = @import("grouped.zig");
 
 pub fn handle(p: *Protocol, e: *const c.skep_event) bool {
   const t = c.skep_event_get_type(e);
@@ -248,6 +249,10 @@ pub fn wallTime(p: *Protocol) i64 {
 pub fn requestDone(p: *Protocol, e: *const c.skep_event) bool {
   const entry = p.pending.fetchRemove(c.skep_event_get_request(e)) orelse return false;
   const pending = entry.value;
+  if (pending.method == .read_readings) {
+    grouped.readEnded(p, pending, e);
+    return true;
+  }
   // A client that went away.
   const client = p.clientOf(pending.client) orelse return true;
   p.request_id = pending.id;

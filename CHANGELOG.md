@@ -9,6 +9,8 @@ publishes the section of each released version as its release notes.
 
 ### Added
 
+- skepd's `read_readings` method reads a device for readings by name,
+  as `skep read <device> <reading>...` does, which now asks for it.
 - skepd takes ZCL booleans and numbers as strings too, as a command line
   gives them: "true", "12", "0x0c", "1.5".
 - Network key rotation: `skep_rotate_network_key()`, skepd's

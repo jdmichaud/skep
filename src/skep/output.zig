@@ -142,10 +142,46 @@ pub fn get(x: *const Answer) !u8 {
 }
 
 pub fn read(x: *const Answer) !u8 {
+  if (field(x.result, "readings")) |readings| return readRows(x, items(readings));
   for (items(field(x.result, "attributes"))) |attribute| {
     try showAttribute(x.out, attribute);
   }
   return statusOf(x.result);
+}
+
+/// The readings read, one per row: their value, or why they have none.
+fn readRows(x: *const Answer, readings: []const std.json.Value) !u8 {
+  var status: u8 = ok;
+  const rows = try x.a.alloc(Row, readings.len);
+  for (rows, readings) |*row, r| {
+    row.* = .{ .label = try label(x.a, x.result, r) };
+    if (field(r, "error")) |code| {
+      status = failed;
+      row.value = errorWords(text(code));
+    } else if (integer(field(r, "status"))) |s| {
+      status = failed;
+      row.value = try std.fmt.allocPrint(x.a, "refused, status 0x{x:0>2}", .{
+        @as(u64, @intCast(s)),
+      });
+    } else if (float(field(r, "scaled")) != null) {
+      row.value = try readingText(x.a, r, .table);
+    }
+  }
+  try showRows(x.out, rows);
+  return status;
+}
+
+/// What an errno name from skepd means, for a reading that could not be read.
+fn errorWords(code: []const u8) []const u8 {
+  for ([_][2][]const u8{
+    .{ "ETIMEDOUT", "the device did not answer in time" },
+    .{ "EHOSTUNREACH", "the device could not be reached" },
+    .{ "ECANCELED", "canceled" },
+    .{ "ENOMEM", "out of memory" },
+  }) |words| {
+    if (eq(code, words[0])) return words[1];
+  }
+  return code;
 }
 
 /// write and report: the attributes the device refused.
@@ -164,7 +200,7 @@ pub fn refusals(x: *const Answer) !u8 {
 
 /// The readings of a device that `names` ask for, all of them without names: null, after telling
 /// why, for a device whose interview is not done, or a name it has no reading for.
-pub fn chosen(
+fn chosen(
   a: std.mem.Allocator,
   err: *Io.Writer,
   command_name: []const u8,
@@ -379,6 +415,11 @@ pub fn writeError(w: *Io.Writer, command: []const u8, e: std.json.Value) !void {
     }
   }
   try w.print("skep {s}: {s}", .{ command, text(field(e, "message")) });
+  if (field(e, "readings") != null) {
+    for (items(field(e, "readings")), 0..) |name, i| {
+      try w.print("{s}{s}", .{ if (i == 0) "; it has " else ", ", text(name) });
+    }
+  }
   if (field(e, "settable") != null) {
     const names = items(field(e, "settable"));
     if (names.len == 0) {
