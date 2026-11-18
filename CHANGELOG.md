@@ -7,6 +7,8 @@ publishes the section of each released version as its release notes.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-18
+
 ### Added
 
 - skepd finds the dongle without `--device`: the one serial device in
